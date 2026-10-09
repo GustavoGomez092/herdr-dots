@@ -814,3 +814,82 @@ func TestMemoryPassWithoutProjectMakesNoCall(t *testing.T) {
 		t.Fatalf("%d backend calls for a pass with no project", n)
 	}
 }
+
+// Final review Important 1 (M10, §8.2): a model can't silence its own dot by
+// writing a finding. Only sent findings and findings the developer saves
+// suppress.
+func TestModelWrittenFindingNeverSuppresses(t *testing.T) {
+	r := newMemRig(t, memOpts{}, dot("Security", dots.ModeQueue))
+	r.be.set(backend.Result{Verdict: backend.Verdict{Severity: "info"}, Remember: []backend.MemoryOp{
+		{Op: "add", Scope: "dot", Kind: "finding", Text: jwtFirst.Message}}},
+		backend.Result{Verdict: jwtAgain})
+	r.reader("s1").add(transcript.Turn{User: "add login"})
+	r.attach(t, "security")
+	eventually(t, "model finding stored", func() bool {
+		es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "security", Kinds: []memory.Kind{memory.KindFinding}})
+		return len(es) == 1 && es[0].Source == memory.SourceModel && es[0].Evidence.Session == "s1"
+	})
+	r.turnEnds("s1", transcript.Turn{User: "refactor auth"})
+	eventually(t, "the real warning makes a card", func() bool { return len(r.q.Pending(pane)) == 1 })
+	if r.hasFeed(state.OutcomeSuppressed, "") {
+		t.Fatal("a model-written finding suppressed a verdict")
+	}
+}
+
+func TestUserSavedFindingSuppressesRepeat(t *testing.T) {
+	r := newMemRig(t, memOpts{}, dot("Security", dots.ModeQueue))
+	r.be.set(backend.Result{Verdict: jwtFirst}, backend.Result{Verdict: jwtAgain})
+	r.reader("s1").add(transcript.Turn{User: "add login"})
+	r.attach(t, "security")
+	eventually(t, "first card", func() bool { return len(r.q.Pending(pane)) == 1 })
+	if err := r.e.Remember(r.q.Pending(pane)[0].ID, memory.AsFinding, ""); err != nil {
+		t.Fatal(err)
+	}
+	es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "security", Kinds: []memory.Kind{memory.KindFinding}})
+	if len(es) != 1 || es[0].Source != memory.SourceUser || es[0].Evidence.Session != "s1" {
+		t.Fatalf("user-saved finding %+v", es)
+	}
+	r.turnEnds("s1", transcript.Turn{User: "refactor auth"})
+	eventually(t, "suppressed by the saved finding", func() bool { return r.hasFeed(state.OutcomeSuppressed, "similar to d:m1") })
+	if n := len(r.q.Pending(pane)); n != 1 {
+		t.Fatalf("pending %d, want only the first card", n)
+	}
+}
+
+func TestSentFindingSuppressesRepeat(t *testing.T) {
+	r := newMemRig(t, memOpts{}, dot("Security", dots.ModeQueue))
+	r.be.set(backend.Result{Verdict: jwtFirst}, backend.Result{Verdict: jwtAgain})
+	r.reader("s1").add(transcript.Turn{User: "add login"})
+	r.attach(t, "security")
+	eventually(t, "first card", func() bool { return len(r.q.Pending(pane)) == 1 })
+	if err := r.e.SendCards([]string{r.q.Pending(pane)[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "sent finding", func() bool {
+		es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "security", Kinds: []memory.Kind{memory.KindFinding}})
+		return len(es) == 1 && es[0].Source == memory.SourceOutcome
+	})
+	r.turnEnds("s1", transcript.Turn{User: "refactor auth"})
+	eventually(t, "suppressed by the sent finding", func() bool { return r.hasFeed(state.OutcomeSuppressed, "similar to d:m1") })
+	if n := len(r.q.Pending(pane)); n != 0 {
+		t.Fatalf("pending %d, want 0", n)
+	}
+}
+
+func TestSuppressedByIgnoresModelAndImportFindings(t *testing.T) {
+	ev := memory.Evidence{Session: "s1", Turn: 1}
+	for _, src := range []memory.Source{memory.SourceModel, memory.SourceImport} {
+		mr := memRun{cands: []memory.Entry{{ID: "m1", Scope: memory.ScopeDot, Dot: "security", Kind: memory.KindFinding,
+			Text: jwtFirst.Message, Source: src, Evidence: ev}}}
+		if _, ok := suppressedBy(mr, jwtAgain.Message, 2, "s1"); ok {
+			t.Errorf("a %s finding suppressed a verdict", src)
+		}
+	}
+	for _, src := range []memory.Source{memory.SourceOutcome, memory.SourceUser} {
+		mr := memRun{cands: []memory.Entry{{ID: "m1", Scope: memory.ScopeDot, Dot: "security", Kind: memory.KindFinding,
+			Text: jwtFirst.Message, Source: src, Evidence: ev}}}
+		if _, ok := suppressedBy(mr, jwtAgain.Message, 2, "s1"); !ok {
+			t.Errorf("a %s finding must suppress", src)
+		}
+	}
+}

@@ -223,11 +223,16 @@ func (e *Engine) applyMemoryOps(paneID string, d dots.Dot, turn int, mr memRun, 
 
 // suppressedBy returns the ref of a remembered entry the message repeats: an
 // active dismissed entry, or a finding accepted in this session within the
-// last suppressWindow turns.
+// last suppressWindow turns. Only sent findings (Source outcome) and findings
+// the developer saved (Source user) count (spec M10): a model-written finding
+// must never silence its own dot (§8.2).
 func suppressedBy(mr memRun, msg string, turn int, session string) (string, bool) {
 	best, ref := 0.0, ""
 	for _, en := range mr.cands {
 		if en.Kind == memory.KindFinding {
+			if en.Source != memory.SourceOutcome && en.Source != memory.SourceUser {
+				continue
+			}
 			ev := en.Evidence
 			if ev.Session == "" || ev.Session != session || ev.Turn <= 0 || turn < ev.Turn || turn-ev.Turn > suppressWindow {
 				continue
@@ -354,17 +359,19 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	if !ok {
 		return fmt.Errorf("card %s: %w", cardID, queue.ErrNotFound)
 	}
+	ev := memory.Evidence{Pane: c.PaneID, Turn: c.Turn, Card: c.ID}
 	pid := c.Project
-	if pid == "" {
-		if a, ok := e.d.Attachments.Get(c.PaneID); ok {
+	if a, ok := e.d.Attachments.Get(c.PaneID); ok {
+		// The session lets a saved finding suppress repeats (spec M10).
+		ev.Session = a.SessionValue
+		if pid == "" {
 			pid = e.projectOf(&a)
 		}
 	}
 	if pid == "" && as != memory.AsGlobal {
 		return fmt.Errorf("card %s: its project is unknown", cardID)
 	}
-	in := memory.RememberInput{As: as, Dot: c.Dot, Text: c.Body, Reason: reason,
-		Ev: memory.Evidence{Pane: c.PaneID, Turn: c.Turn, Card: c.ID}}
+	in := memory.RememberInput{As: as, Dot: c.Dot, Text: c.Body, Reason: reason, Ev: ev}
 	if _, err := e.d.Memory.Remember(pid, in); err != nil {
 		return err
 	}
