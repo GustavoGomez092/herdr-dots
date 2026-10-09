@@ -1,8 +1,8 @@
 # Herdr Dots
 
-> **Status: scaffold (v0.4.0).** Phases 1 (core loop), 2 (dot memory, VITAL), 3 (council) and 4 (API
-> and Ollama backends, cost) are in. The project is not done and not ready for general use; see the
-> [Roadmap](#roadmap) for what's missing.
+> **Status: scaffold (v0.5.0).** Phases 1 (core loop), 2 (dot memory, VITAL), 3 (council), 4 (API and
+> Ollama backends, cost) and 5 (Dots MCP server) are in. The project is not done and not ready for
+> general use; see the [Roadmap](#roadmap) for what's missing.
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**: specialist agents (security,
 frontend, backend, copywriter, ...) that join a Claude Code or Codex session running in a Herdr
@@ -225,6 +225,78 @@ members past their `max_usd_per_session` sit out, and a pane past its dollar bud
 council. An API `chair_backend` without `chair_model` uses that kind's default (`claude-opus-5-5` for
 `anthropic-api`); `openai-api`, `openrouter` and `ollama` chairs need `chair_model`.
 
+### Dots MCP server: let the main agent ask the dots
+
+Claude Code or Codex can consult your dots themselves while they work ("ask the security dot before you
+write the token handling"). Install the server once:
+
+```bash
+./bin/herdr-dots setup-mcp                 # Claude Code and/or Codex, whichever is installed
+./bin/herdr-dots setup-mcp --client claude # or --client codex
+./bin/herdr-dots setup-mcp --remove        # take it out again
+```
+
+`setup-mcp` prints the exact commands and the config change, asks before applying (`--yes` skips the
+question) and backs up every file it touches (`<file>.bak-herdr-dots-<time>`). For Claude Code it runs
+`claude mcp add --scope user …` (Claude Code edits its own `~/.claude.json`). For Codex it adds one
+marked block to `~/.codex/config.toml` and leaves every other line alone:
+
+```toml
+# >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)
+[mcp_servers.herdr-dots]
+command = "/path/to/herdr-dots/bin/herdr-dots"
+args = ["mcp", "--config-dir", "…", "--state-dir", "…"]
+env_vars = ["HERDR_PANE_ID", "HERDR_SOCKET_PATH"]
+startup_timeout_sec = 20
+tool_timeout_sec = 180
+# <<< herdr-dots MCP server
+```
+
+Restart the agent in its Herdr pane afterwards. If you move or rebuild the plugin somewhere else, run
+`setup-mcp` again. The manage popup's footer shows where it is installed.
+
+The agent sees these tools (as `mcp__herdr-dots__<tool>`):
+
+| Tool | What it does |
+|---|---|
+| `list_dots` | The dots attached to the agent's pane: purpose, mode, status, budget |
+| `ask_dot` | Ask one attached dot a question and wait for its answer (up to the run timeout) |
+| `ask_council` | Ask every attached dot at once and get the merged council digest |
+| `list_queue` | Read the dots' cards waiting for you in this pane |
+| `read_memory` | Read the project's approved dot memory |
+| `propose_memory` | Propose a convention, decision or note; it waits for your approval in the memory screen |
+
+> **Warning: MCP answers bypass the approval queue.** Whatever `ask_dot`, `ask_council` and `list_queue`
+> return goes straight to the main agent, without you approving it first (the queue still gets nothing
+> from these calls). The calls show up in the agent's transcript and as `◆ asked by agent` lines in the
+> Dots pane feed. If you don't want that, remove the tools you don't want from `[mcp] tools`.
+
+What keeps it in check:
+
+- Only dots **attached** to the agent's own pane can be asked; a server only ever serves the pane it was
+  started in. Outside Herdr (or inside a dot's own run) every tool refuses.
+- At most 3 asks per turn and 6 per minute per pane (a council counts as one), on top of the normal call
+  and dollar budgets. Over the limit the agent is told to continue without the dot.
+- A dot that was asked skips its own review of that turn (no double advice); the roster shows `consulted`.
+- Memory the agent writes is always a project proposal you approve, and secret-looking text is refused.
+- Results are capped at about 24,000 characters.
+
+```toml
+[mcp]
+tools = ["list_dots", "ask_dot", "ask_council", "list_queue", "read_memory", "propose_memory"]
+max_asks_per_turn   = 3
+max_asks_per_minute = 6
+```
+
+`ask_dot` waits up to `run_timeout_seconds` + 10 s (130 s by default). Codex stops waiting after
+`tool_timeout_sec` (180 s as installed); a council can take longer with the default 120 s run timeout,
+so raise `tool_timeout_sec` or lower `run_timeout_seconds` if Codex gives up on councils. Like any
+council, an `ask_council` in progress ends (with an error for the agent, and no card) if the pane closes
+or the engine restarts. If `config.toml` can't be parsed when the agent starts the server, only
+`list_dots` is offered until you fix it and restart the agent (the same fail-closed rule that turns
+inject and memory off). The server logs to `mcp.log` in the plugin's state folder; it never prints
+anything but protocol messages.
+
 ## Files
 
 - Dots: `$(herdr plugin config-dir herdr-dots)/dots/<slug>.toml` (hand-editable)
@@ -251,6 +323,9 @@ council. An API `chair_backend` without `chair_model` uses that kind's default (
   The council chair sees the members' answers, the recent turns and the project's approved
   conventions and decisions; it has no repo access and writes no memory.
 - Council cards are never sent without your approval, whatever the members' delivery modes are.
+- With the MCP server installed, the main agent can read dot answers, the queue and approved memory
+  **without your approval** (see "Dots MCP server"); dots still never change files, and agent-written
+  memory is always a proposal.
 - Memory stays on this machine. It leaves it only inside the prompts a dot sends to **its own**
   provider, and a dot on a remote provider receives project memory written by other dots and by you.
 - Dots can't plant shared conventions: model-written project memory waits for your approval, and
@@ -273,7 +348,12 @@ council. An API `chair_backend` without `chair_model` uses that kind's default (
 - The Codex backend's `remember` support follows Codex's documented output format and has not been
   verified live.
 - Draft specs for later phases live in `docs/superpowers/specs/` (roadmap: `2026-10-08-herdr-dots-roadmap.md`), all pending review.
-- No MCP server, no Windows support.
+- No Windows support.
+- The MCP server is verified live with Claude Code; Codex support follows Codex's documented config
+  format and has **not been verified live** (see `docs/superpowers/notes/2026-10-08-phase-5-verification.md`).
+  That includes the `-c mcp_servers.herdr-dots.enabled=false` override codex dot runs get.
+- No MCP resources or prompts, no HTTP transport, no access for agents outside Herdr; MCP on Windows
+  comes with Phase 6.
 - API backends are tested against recorded-style fakes; live runs need your keys (see
   `docs/superpowers/notes/2026-10-08-phase-4-verification.md`). Only Ollama has been run live; the
   Anthropic, OpenAI and OpenRouter paths are not live-verified. OpenAI model ids and prices change
@@ -291,7 +371,7 @@ council. An API `chair_backend` without `chair_model` uses that kind's default (
 | **2** | **Dot memory — VITAL.** Per-project, per-dot memory of conventions, decisions and past findings (in this scaffold since 0.2.0; still being hardened). Without it, dots repeat themselves and can't learn a project. |
 | 3 | Council mode: ask all dots at once, get one merged digest, with optional dot-to-dot cross-review (in this scaffold since 0.3.0) |
 | 4 | API and Ollama backends (Anthropic, OpenAI, OpenRouter, Ollama), key storage, USD cost and dollar budgets (in this scaffold since 0.4.0) |
-| 5 | Dots MCP server so the main agent can consult dots itself |
+| 5 | Dots MCP server so the main agent can consult dots itself: ask a dot, convene a council, read the queue and memory, propose memory (in this scaffold since 0.5.0) |
 | 6–10 | Windows, write-capable dots, proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
 
 See the draft roadmap for Phases 2–10.

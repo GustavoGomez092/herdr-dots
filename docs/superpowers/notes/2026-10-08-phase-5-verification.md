@@ -59,3 +59,40 @@ Built binary, temp config/state dirs, `HERDR_PANE_ID`/`HERDR_SOCKET_PATH` unset.
 ```
 
 `mcp.log`: `started outside a Herdr pane (...) every tool refuses`, `list_dots refused: not inside a Herdr pane`, `stopped: <nil>`.
+
+## End-to-end (Task 11, 2026-10-09)
+
+Version `herdr-dots 0.5.0 (scaffold)`. Run by the implementer agent (the user was away) against the built binary, herdr 0.8.2 in
+the isolated `--session dots-test` (server started with every `CLAUDE*` variable unset), scratch repo `/tmp/dots-test-repo`,
+Claude Code 2.1.295 on haiku. No `herdr plugin link`, no Claude slash commands. The engine was started by hand with
+`HERDR_PLUGIN_CONFIG_DIR`/`HERDR_PLUGIN_STATE_DIR` under a temp dir (as in the Phase 2 and 3 smoke tests); a throwaway IPC client
+attached the dots and read snapshots (deleted, not committed). Dots: `security` (queue) and `copywriter` (observe), both haiku.
+Claude was started in the pane with `claude --model haiku --mcp-config <temp mcp.json> --allowedTools 'mcp__herdr-dots__*'`
+(`--allowedTools` only so tool permission prompts do not block the unattended run). The temp `mcp.json` pointed `--config-dir`
+and `--state-dir` at the temp plugin dirs. Real configs were snapshotted first and compared afterwards.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Installer against throwaway `CLAUDE_CONFIG_DIR`/`CODEX_HOME` | PASS. Preview showed the `claude mcp add --scope user --env 'HERDR_PANE_ID=${HERDR_PANE_ID:-}' --env 'HERDR_SOCKET_PATH=${HERDR_SOCKET_PATH:-}' --transport stdio herdr-dots -- …` command, the expected `mcpServers` entry and the Codex block as a `+` diff; after `y`, `claude mcp get herdr-dots` showed `Status: Connected` with both env values; the Codex file held exactly the managed block; `--remove --yes` left the Codex file at 0 bytes, removed the Claude entry (`claude mcp get` exit 1), and each touched file got a `0600` `.bak-herdr-dots-<time>` backup. "codex is not on PATH: not verified" was printed. |
+| 2a | `list_dots` and `ask_dot` from Claude Code | PASS. Prompt "list the dots, then ask the security dot whether storing the JWT in localStorage is OK": Claude made 2 herdr-dots calls and reported Security's answer (use HttpOnly/Secure cookies). No card was created (`cards: []`). Feed: `security 2 asked warn · cost=$0.0010 tokens=7138/359`; roster status `consulted`. |
+| 2b | Consulted dot skips that turn, reviews the next | PASS. No `pass`/`flagged` line for turn 2; turn 3 ("ok") logged `security 3 pass`. |
+| 2c | Per-turn ask limit | PASS. Five `ask_dot` calls in one turn: the first three answered (feed shows three `asked` lines for turn 4, security calls 3 to 6), the 4th and 5th returned `ask limit reached; continue without the dot (3 per turn)` and ran nothing. The next turn asked again normally. |
+| 2d | `ask_council` and `propose_memory` | PASS. The council digest came back to the agent (Security "Should fix", Copywriter "Consider") with no queue card; feed `council 5 asked warn · 2 of 2 members answered` (the two member runs also logged their usual `flagged`/`learned` lines, with no card, as in Phase 3). `propose_memory` returned `p:m2`; `herdr-dots memory list --all` against the temp state dir showed `p:m2  convention  proposed  Auth errors must be generic…` and the JSON shows `"source": "agent"`, no dot, `"status": "proposed"`. The two other proposals (`p:m1`, `p:m3`) are the dots' own learning. The next turn was reviewed by Security (`pass`) as usual. |
+| 3 | No recursion (`mcp.log`) | PASS. One `serving pane w5:p1 through …/dots.sock` line for the agent start; the only other lines were the two `ask_dot: ask limit reached` refusals. About 10 claude dot runs (asks, reviews, council members) added no `serving pane` line and no refusal line. The codex half (a codex dot run starting no server or logging `refused: not inside a Herdr pane`) was not run: codex is not installed. |
+| 4 | Real configs unchanged | PASS. `~/.claude/settings.json` and `~/.codex/config.toml` byte-identical to the snapshot. `~/.claude.json` differs (Claude Code's own usage data) but its `mcpServers` key is unchanged (compared by hash, contents not printed). |
+
+Deviation from the brief: outside a linked plugin, `setup-mcp` refuses with "the plugin state dir is unknown", so check 1 set
+`HERDR_PLUGIN_ID`, `HERDR_PLUGIN_CONFIG_DIR` and `HERDR_PLUGIN_STATE_DIR` to temp dirs (the brief assumes a shell inside a linked
+plugin's session). Cleanup: engine and `dots-test` server stopped, only processes started here were killed, temp dirs left in the
+system temp folder.
+
+### Not automated or not verified (user gates)
+
+- Codex MCP is **not live-verified** (codex is not installed here): the managed block, `env_vars` forwarding, `tool_timeout_sec`,
+  and `codex mcp list` follow Codex's documented format only.
+- The codex dot-run override `-c mcp_servers.herdr-dots.enabled=false` is **not live-verified**. The server also refuses without
+  `HERDR_PANE_ID` as the second layer.
+- NOT-AUTOMATABLE (needs a human eye or keypress): the `◆ asked by agent` line rendering in the Dots pane, the roster `consulted`
+  label, the manage popup's MCP footer and the memory screen's `P` proposals view. This run verified the underlying snapshot JSON
+  (outcome `asked`, status `consulted`), feed data and memory CLI output instead.
+- Installing into the real Claude Code and Codex configs was not done (left to the developer: `./bin/herdr-dots setup-mcp`).
