@@ -97,3 +97,46 @@ func TestDelete(t *testing.T) {
 		t.Fatal("deleting twice should error")
 	}
 }
+
+func TestSavePurposeRoundTripsEdgeCases(t *testing.T) {
+	cases := []struct {
+		name    string
+		purpose string
+	}{
+		{"backslash-n", `C:\new\table`},
+		{"escaped-n", `use \n in strings`},
+		{"quote", `quote " inside`},
+		{"trailing-quote", `ends with quote"`},
+		{"triple-quotes", `triple """ quotes`},
+		{"tab", "tab\there"},
+		{"leading-newline", "\nleading newline"},
+		{"trailing-newline", "trailing newline\n"},
+		{"newline", "line one.\nline two."},
+	}
+
+	dir := t.TempDir()
+	for _, tc := range cases {
+		d := New(tc.name)
+		d.Purpose = tc.purpose
+
+		// Save and load
+		if err := Save(dir, d, true); err != nil {
+			t.Fatalf("%s: save error: %v", tc.name, err)
+		}
+		got, err := Load(dir, d.Slug)
+		if err != nil {
+			t.Fatalf("%s: load error: %v", tc.name, err)
+		}
+
+		// Check purpose matches exactly
+		if got.Purpose != tc.purpose {
+			t.Errorf("%s: purpose mismatch\n  want: %q\n  got:  %q", tc.name, tc.purpose, got.Purpose)
+		}
+
+		// Check file contains triple quotes
+		raw, _ := os.ReadFile(filepath.Join(dir, d.Slug+".toml"))
+		if !strings.Contains(string(raw), `"""`) {
+			t.Errorf("%s: purpose should be written as multi-line string:\n%s", tc.name, raw)
+		}
+	}
+}

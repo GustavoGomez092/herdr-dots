@@ -7,11 +7,11 @@ import (
 
 func TestSlugify(t *testing.T) {
 	cases := map[string]string{
-		"Security":          "security",
-		"Front End  Dot!":   "front-end-dot",
+		"Security":           "security",
+		"Front End  Dot!":    "front-end-dot",
 		"  --Spec Critic-- ": "spec-critic",
-		"ñandú ✨":           "and",
-		"!!!":               "dot",
+		"ñandú ✨":            "and",
+		"!!!":                "dot",
 	}
 	for in, want := range cases {
 		if got := Slugify(in); got != want {

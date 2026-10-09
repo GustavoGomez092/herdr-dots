@@ -106,47 +106,95 @@ func Save(dir string, d Dot, create bool) error {
 	if d.Trigger.FileGlobs == nil {
 		d.Trigger.FileGlobs = []string{}
 	}
+
+	// Encode a copy of the dot with Purpose omitted (empty string omits due to omitempty tag)
+	dCopy := d
+	purpose := d.Purpose
+	dCopy.Purpose = ""
+
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(d); err != nil {
+	if err := toml.NewEncoder(&buf).Encode(dCopy); err != nil {
 		return err
 	}
-	// Convert escaped newlines in purpose field to multiline string
-	output := convertPurposeToMultiline(buf.String())
+
+	// Manually insert the purpose field as a multiline basic string after top-level keys,
+	// before the first section (line starting with [)
+	output := insertPurpose(buf.String(), purpose)
 	return fsutil.WriteFileAtomic(p, []byte(output), 0o600)
 }
 
-func convertPurposeToMultiline(tomlStr string) string {
-	// Look for: purpose = "...\n..."
-	// Convert to: purpose = """..."""
-	if !strings.Contains(tomlStr, "purpose = ") {
+// multilineBasic escapes a string for use in a TOML multiline basic string (""" ... """).
+// Keeps newlines literal, escapes backslashes, quotes, and control characters.
+func multilineBasic(s string) string {
+	var result strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\':
+			result.WriteString("\\\\")
+		case '"':
+			result.WriteString("\\\"")
+		case '\r':
+			result.WriteString("\\r")
+		case '\t', '\n':
+			// Keep tabs and newlines literal
+			result.WriteRune(r)
+		default:
+			if r < 0x20 || (r >= 0x7F && r <= 0x9F) {
+				// Control characters (except \t and \n) as \uXXXX
+				fmt.Fprintf(&result, "\\u%04x", r)
+			} else {
+				result.WriteRune(r)
+			}
+		}
+	}
+	return result.String()
+}
+
+// insertPurpose inserts the purpose field as a multiline basic string after top-level keys,
+// before the first section.
+func insertPurpose(tomlStr, purpose string) string {
+	if purpose == "" {
 		return tomlStr
 	}
 
 	lines := strings.Split(tomlStr, "\n")
 	var result []string
+	inserted := false
+
+	escaped := multilineBasic(purpose)
 	for _, line := range lines {
-		if strings.HasPrefix(line, "purpose = \"") && strings.HasSuffix(line, "\"") {
-			// Extract the string content (between the quotes)
-			content := strings.TrimPrefix(line, "purpose = \"")
-			content = strings.TrimSuffix(content, "\"")
-
-			// Unescape the \n to actual newlines for multiline format
-			content = strings.ReplaceAll(content, "\\n", "\n")
-
-			// Format as multiline string (close """ on same line as content)
-			contentLines := strings.Split(content, "\n")
+		// Insert before the first section (line starting with [)
+		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "[") {
+			// Add purpose as multiline string (closing """ on same line as content)
 			result = append(result, "purpose = \"\"\"")
+			// Split escaped content by newlines and add them
+			contentLines := strings.Split(escaped, "\n")
 			for i, cl := range contentLines {
 				if i == len(contentLines)-1 {
+					// Last line: append closing quotes
 					result = append(result, cl+"\"\"\"")
 				} else {
 					result = append(result, cl)
 				}
 			}
-		} else {
-			result = append(result, line)
+			inserted = true
+		}
+		result = append(result, line)
+	}
+
+	// If no section was found, append at the end
+	if !inserted {
+		result = append(result, "purpose = \"\"\"")
+		contentLines := strings.Split(escaped, "\n")
+		for i, cl := range contentLines {
+			if i == len(contentLines)-1 {
+				result = append(result, cl+"\"\"\"")
+			} else {
+				result = append(result, cl)
+			}
 		}
 	}
+
 	return strings.Join(result, "\n")
 }
 

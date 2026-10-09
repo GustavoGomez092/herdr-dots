@@ -46,7 +46,7 @@ type Dot struct {
 	Name     string       `toml:"name"`
 	Glyph    string       `toml:"glyph"`
 	Color    string       `toml:"color"`
-	Purpose  string       `toml:"purpose,multiline"`
+	Purpose  string       `toml:"purpose,omitempty"`
 	Backend  BackendSpec  `toml:"backend"`
 	Delivery DeliverySpec `toml:"delivery"`
 	Trigger  TriggerSpec  `toml:"trigger"`
