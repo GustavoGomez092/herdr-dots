@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,8 +55,105 @@ func serveHandler(t *testing.T, h Handler) Client {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go Serve(ctx, ln, h)
+	done := make(chan struct{})
+	go func() { Serve(ctx, ln, h); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("Serve did not return after cancel")
+		}
+	})
 	return Client{Path: path}
+}
+
+// Serve must not return while a connection goroutine (and so a handler's
+// Query) is still running, or the engine's Wait could finish too early.
+func TestServeWaitsForRunningQueriesOnShutdown(t *testing.T) {
+	var finished atomic.Bool
+	started := make(chan struct{})
+	h := newQueryHandler(func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
+		close(started)
+		<-ctx.Done()
+		time.Sleep(150 * time.Millisecond) // wind-down after cancellation
+		finished.Store(true)
+		return nil, ctx.Err()
+	})
+	dir, err := os.MkdirTemp("", "ipcq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "q.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := make(chan struct{})
+	go func() { Serve(ctx, ln, h); close(served) }()
+	go Client{Path: path}.Query(context.Background(), CmdAsk, AskArgs{PaneID: "w1:p1"}, nil)
+	// An idle connection must not keep Serve from returning either.
+	idle, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idle.Close()
+	<-started
+	cancel()
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+	if !finished.Load() {
+		t.Fatal("Serve returned before the running query finished")
+	}
+}
+
+func TestOversizedRequestIsRefused(t *testing.T) {
+	_, c := serve(t)
+	conn, err := net.Dial("unix", c.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	big := `{"id":1,"cmd":"ping","args":"` + strings.Repeat("a", maxRequestBytes+10) + `"}` + "\n"
+	go conn.Write([]byte(big))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if line, err := bufio.NewReader(conn).ReadString('\n'); err == nil {
+		t.Fatalf("expected the connection to be dropped, got %q", line)
+	}
+}
+
+func TestFailureWithoutTextStillReportsAnError(t *testing.T) {
+	dir, err := os.MkdirTemp("", "ipcq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "q.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var req Request
+		_ = json.NewDecoder(conn).Decode(&req)
+		_, _ = conn.Write([]byte(`{"id":1,"ok":false}` + "\n"))
+	}()
+	err = Client{Path: path}.Query(context.Background(), CmdAsk, nil, nil)
+	if err == nil || err.Error() != "query failed" {
+		t.Fatalf("got %v", err)
+	}
 }
 
 func TestQueryRoundTripCarriesData(t *testing.T) {

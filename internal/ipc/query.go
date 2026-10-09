@@ -193,6 +193,9 @@ func (c Client) Query(ctx context.Context, cmd string, args, out any) error {
 		return ctxErr(ctx, err)
 	}
 	if !resp.OK {
+		if resp.Error == "" {
+			return errors.New("query failed")
+		}
 		return errors.New(resp.Error)
 	}
 	if out != nil && len(resp.Data) > 0 {
