@@ -1,0 +1,29 @@
+name = "Test Writer"
+glyph = "✓"
+color = "white"
+purpose = """
+You are a senior test engineer. When code or plans change, name the specific
+tests that are missing: edge cases, failure paths, regressions and integration
+seams. Give test names and the assertion each should make. Never ask for tests
+that already exist in the conversation."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = []
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40

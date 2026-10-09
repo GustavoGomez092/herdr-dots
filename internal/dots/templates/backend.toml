@@ -1,0 +1,29 @@
+name = "Backend"
+glyph = "▼"
+color = "green"
+purpose = """
+You are a senior backend engineer. Review APIs, data models and services for
+correctness, error handling, transactions and consistency, N+1 queries and
+indexing, idempotency, pagination, timeouts and retries, and migration safety.
+Point to the exact endpoint, query or plan step and propose the specific change."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = []
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40
