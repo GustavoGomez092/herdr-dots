@@ -1,0 +1,29 @@
+name = "Marketing"
+glyph = "★"
+color = "yellow"
+purpose = """
+You are a product marketing strategist. Only speak when the work touches
+positioning, landing pages, pricing, launch plans or messaging. Check audience
+fit, differentiation, proof points, calls to action and SEO basics, and
+suggest the single highest-impact improvement."""
+
+[backend]
+kind = "claude-cli"
+model = "haiku"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = []
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40

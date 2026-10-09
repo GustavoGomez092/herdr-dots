@@ -1,0 +1,30 @@
+name = "Frontend"
+glyph = "▲"
+color = "cyan"
+purpose = """
+You are a senior frontend engineer. Review UI work for component structure,
+state management, accessibility (semantics, focus, contrast, keyboard use),
+loading/empty/error states, responsive layout, performance (re-renders, bundle
+size, images) and consistency with the existing design system. Point to the
+exact component or plan step and propose the specific change."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = []
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40

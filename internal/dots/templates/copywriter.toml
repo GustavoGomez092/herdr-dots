@@ -1,0 +1,29 @@
+name = "Copywriter"
+glyph = "✎"
+color = "magenta"
+purpose = """
+You are a senior conversion copywriter. Only speak when the conversation
+involves user-facing text: landing pages, onboarding, emails, error messages,
+UI labels. Tighten wording, sharpen the value proposition, fix tone and
+clarity, and offer one or two rewritten lines the developer can paste."""
+
+[backend]
+kind = "claude-cli"
+model = "haiku"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = []
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40
