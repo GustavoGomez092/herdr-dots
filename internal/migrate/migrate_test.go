@@ -95,6 +95,9 @@ func TestRunUpgradesOldFilesBacksThemUpAndIsIdempotent(t *testing.T) {
 	mid := filepath.Join(state, "widgets", "b.json")
 	cur := filepath.Join(state, "widgets", "c.json")
 	writeFile(t, old, `{"name":"alpha"}`)
+	if err := os.Chmod(old, 0o644); err != nil { // a looser file still comes out private
+		t.Fatal(err)
+	}
 	writeFile(t, mid, `{"version":2,"title":"beta"}`)
 	writeFile(t, cur, `{"version":3,"title":"gamma","tags":["x"]}`)
 	var logs []string
@@ -118,6 +121,7 @@ func TestRunUpgradesOldFilesBacksThemUpAndIsIdempotent(t *testing.T) {
 		t.Fatalf("backup holds %q", b)
 	}
 	platformtest.AssertPrivateFile(t, old+".bak-v1") // 0600, or an owner-only DACL on Windows
+	platformtest.AssertPrivateFile(t, old)           // the migrated file too
 	if b := readFile(t, cur); b != `{"version":3,"title":"gamma","tags":["x"]}` {
 		t.Fatalf("a current file was rewritten: %s", b)
 	}
@@ -190,6 +194,7 @@ func TestMigrationThatForgetsTheVersionFails(t *testing.T) {
 }
 
 func TestCorruptFileIsReportedAndUntouched(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
 	state := t.TempDir()
 	f := filepath.Join(state, "widgets", "a.json")
 	writeFile(t, f, `{"name":`)
@@ -244,11 +249,13 @@ func TestValidateRefusesIncompleteOrUnsafeChains(t *testing.T) {
 	gap := widgetSet(noLock)
 	gap.Migrations = gap.Migrations[1:]
 	unlocked := widgetSet(nil)
+	unlockedConfig := widgetSet(nil) // the config dir is shared by every session too
+	unlockedConfig.Kinds[0].Root = ConfigRoot
 	dup := widgetSet(noLock)
 	dup.Migrations = append(dup.Migrations, dup.Migrations[0])
 	beyond := widgetSet(noLock)
 	beyond.Migrations = append(beyond.Migrations, Migration{Kind: "widget", From: 3, Apply: func(b []byte) ([]byte, error) { return b, nil }})
-	for name, s := range map[string]Set{"gap": gap, "unlocked shared state": unlocked, "duplicate": dup, "beyond current": beyond} {
+	for name, s := range map[string]Set{"gap": gap, "unlocked shared state": unlocked, "unlocked config": unlockedConfig, "duplicate": dup, "beyond current": beyond} {
 		if err := s.Validate(); err == nil {
 			t.Errorf("%s: Validate accepted it", name)
 		}
@@ -273,5 +280,53 @@ func TestBackupNeverOverwritesAnEarlierBackup(t *testing.T) {
 	}
 	if readFile(t, f+".bak-v1") != "older backup" || !bytes.Equal([]byte(readFile(t, f+".bak-v1-2")), []byte(`{"name":"alpha"}`)) {
 		t.Fatal("backups mixed up")
+	}
+}
+
+// A failed migration keeps the file read-only with its own reason, never the
+// "written by a newer herdr-dots" text: nothing newer wrote it.
+func TestFailedMigrationGateSaysWhy(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	state := t.TempDir()
+	f := filepath.Join(state, "widgets", "a.json")
+	writeFile(t, f, `{"name":"alpha"}`)
+	s := widgetSet(noLock)
+	s.Migrations[1].Apply = func([]byte) ([]byte, error) { return nil, errors.New("boom") }
+	if _, err := s.Run(Roots{State: state}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	err := fsutil.WriteFileAtomic(f, []byte(`{}`), 0o600)
+	if err == nil || errors.Is(err, fsutil.ErrNewerVersion) || !errors.Is(err, fsutil.ErrMigrationFailed) {
+		t.Fatalf("write after a failed migration: %v", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "migration of a.json failed") || !strings.Contains(msg, "boom") ||
+		!strings.Contains(msg, "not written") || strings.Contains(msg, "newer") {
+		t.Fatalf("the error must say why: %q", msg)
+	}
+	if readFile(t, f) != `{"name":"alpha"}` {
+		t.Fatal("file changed")
+	}
+}
+
+// A dry run reports the pending migrations of self-guarded kinds (memory,
+// schedule, daily, trust, inbox, mcp-install) too, and writes nothing.
+func TestDryRunReportsPendingSelfGuardedKinds(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	state := t.TempDir()
+	f := filepath.Join(state, "widgets", "a.json")
+	future := filepath.Join(state, "widgets", "z.json")
+	writeFile(t, f, `{"name":"alpha"}`)
+	writeFile(t, future, `{"version":9}`)
+	s := widgetSet(noLock)
+	s.Kinds[0].SelfGuarded = true
+	rep, err := s.Run(Roots{State: state}, Options{DryRun: true})
+	if err != nil || len(rep.Pending) != 1 || rep.Pending[0] != f || len(rep.ReadOnly) != 1 || len(rep.Migrated) != 0 {
+		t.Fatalf("report %+v %v", rep, err)
+	}
+	if readFile(t, f) != `{"name":"alpha"}` || len(rep.Backups) != 0 {
+		t.Fatal("a dry run wrote")
+	}
+	if _, err := os.Stat(f + ".bak-v1"); !os.IsNotExist(err) {
+		t.Fatal("a dry run left a backup")
 	}
 }

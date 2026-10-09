@@ -299,8 +299,8 @@ func (s *Store) quarantineLocked(path string) error {
 	if err != nil {
 		return err
 	}
-	if recs, _ := parse(data); len(recs) > 0 {
-		return nil
+	if recs, skipped := parse(data); len(recs) > 0 || skipped < nonBlankLines(data) {
+		return nil // something is readable, if only records a newer version added
 	}
 	aside := fmt.Sprintf("%s.corrupt-%d", path, s.now().UnixNano())
 	if err := os.Rename(path, aside); err != nil {
@@ -351,7 +351,9 @@ func (s *Store) trimLocked(path string) error {
 }
 
 // parse returns every parseable record in file order and how many lines could
-// not be parsed.
+// not be parsed. A record of a type this version doesn't know (a newer
+// herdr-dots added it) is skipped without counting as unreadable, and trims
+// keep its line.
 func parse(data []byte) ([]Record, int) {
 	var out []Record
 	skipped := 0
@@ -360,13 +362,26 @@ func parse(data []byte) ([]Record, int) {
 			continue
 		}
 		var r Record
-		if err := json.Unmarshal(l, &r); err != nil || (r.T != TypeRun && r.T != TypeResolve) {
+		if err := json.Unmarshal(l, &r); err != nil || r.T == "" {
 			skipped++
+			continue
+		}
+		if r.T != TypeRun && r.T != TypeResolve {
 			continue
 		}
 		out = append(out, r)
 	}
 	return out, skipped
+}
+
+func nonBlankLines(data []byte) int {
+	n := 0
+	for _, l := range bytes.Split(data, []byte("\n")) {
+		if len(bytes.TrimSpace(l)) > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // read returns every parseable record of slug in file order and how many

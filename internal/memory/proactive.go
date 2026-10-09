@@ -218,10 +218,12 @@ func (s *Store) scrubDotProactiveLocked(p, dot string) error {
 	return errors.Join(errs...)
 }
 
-// removeMetaAsidesLocked deletes meta.json.corrupt-* asides that mention the
-// dot's slug. An aside doesn't parse, so it can't be edited safely; it holds
-// only a name, roots and dot stamps, so the whole aside goes. Asides that never
-// name the dot are left alone.
+// removeMetaAsidesLocked deletes meta.json.corrupt-* asides, and the
+// migration backups meta.json.bak-v* and schedule.json.bak-v*, that mention
+// the dot's slug as a key. An aside doesn't parse and a backup is an old
+// format, so neither can be edited safely; they hold only a name, roots, dot
+// stamps and schedule claims, so the whole file goes. Files that never name
+// the dot are left alone.
 func removeMetaAsidesLocked(dir, slug string) error {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -231,11 +233,14 @@ func removeMetaAsidesLocked(dir, slug string) error {
 		return err
 	}
 	var errs []error
-	// The dots_seen key form: "<slug>": (a name or root that merely equals the
-	// slug, or a value, is followed by a comma or brace, not a colon).
+	// The dots_seen (or schedule "last") key form: "<slug>": (a name or root
+	// that merely equals the slug, or a value, is followed by a comma or
+	// brace, not a colon).
 	needle := regexp.MustCompile(`"` + regexp.QuoteMeta(slug) + `"\s*:`)
 	for _, e := range ents {
-		if !strings.HasPrefix(e.Name(), "meta.json.corrupt-") || e.IsDir() {
+		n := e.Name()
+		if e.IsDir() || !(strings.HasPrefix(n, "meta.json.corrupt-") || strings.HasPrefix(n, "meta.json.bak-v") ||
+			strings.HasPrefix(n, "schedule.json.bak-v")) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())

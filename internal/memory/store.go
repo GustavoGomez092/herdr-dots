@@ -1343,11 +1343,12 @@ func (s *Store) DeleteDot(slug string) (DotDeletion, error) {
 	return out, errors.Join(errs...)
 }
 
-// removeDotAsidesLocked deletes dots/<slug>.json.corrupt-* in dir: a dot's
-// corrupt asides hold only that dot's entries, so forgetting the dot forgets
-// them too (P7-R2). A failure is returned, never ignored. Mixed project-level
-// asides (project.json.corrupt-*) can't be edited safely; `memory purge`
-// clears those. The caller holds the project lock.
+// removeDotAsidesLocked deletes dots/<slug>.json.corrupt-* and the
+// migration backups dots/<slug>.json.bak-v* in dir: they hold only that
+// dot's entries, so forgetting the dot forgets them too (P7-R2). A failure is
+// returned, never ignored. Mixed project-level asides and backups
+// (project.json.corrupt-*, project.json.bak-v*) can't be edited safely;
+// `memory purge` clears those. The caller holds the project lock.
 func removeDotAsidesLocked(dir, slug string) error {
 	ents, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -1358,7 +1359,8 @@ func removeDotAsidesLocked(dir, slug string) error {
 	}
 	var errs []error
 	for _, e := range ents {
-		if !strings.HasPrefix(e.Name(), slug+".json.corrupt-") || e.IsDir() {
+		mine := strings.HasPrefix(e.Name(), slug+".json.corrupt-") || strings.HasPrefix(e.Name(), slug+".json.bak-v")
+		if !mine || e.IsDir() {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -1375,7 +1377,7 @@ func (s *Store) scrubDotLedgerLocked(p, dot string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	kept := slices.DeleteFunc(slices.Clone(all), func(o Outcome) bool { return o.Dot == dot })
+	kept := slices.DeleteFunc(slices.Clone(all), func(l ledgerLine) bool { return l.Dot == dot })
 	n := len(all) - len(kept)
 	if n == 0 {
 		return 0, nil
@@ -1451,7 +1453,19 @@ func (s *Store) appendLedgerLocked(p string, o Outcome) error {
 	return errors.Join(werr, f.Close())
 }
 
-func (s *Store) readLedgerLocked(p string) ([]Outcome, error) {
+// ledgerLine is one readable ledger line: the Outcome this version reads
+// from it, and the line exactly as it was written. Rewrites (trim, scrubs)
+// write the kept lines back byte for byte, so fields a newer herdr-dots added
+// survive (Phase 2 VITAL: a rewrite drops only the lines it means to).
+type ledgerLine struct {
+	Outcome
+	raw string
+}
+
+// readLedgerLocked returns the readable lines in file order. A line that
+// doesn't parse (a crash's half-written tail) is left out, and so is dropped
+// by the next rewrite.
+func (s *Store) readLedgerLocked(p string) ([]ledgerLine, error) {
 	data, err := os.ReadFile(s.ledgerPath(p))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -1459,24 +1473,20 @@ func (s *Store) readLedgerLocked(p string) ([]Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Outcome
+	var out []ledgerLine
 	for _, line := range strings.Split(string(data), "\n") {
 		var o Outcome
 		if line != "" && json.Unmarshal([]byte(line), &o) == nil {
-			out = append(out, o)
+			out = append(out, ledgerLine{Outcome: o, raw: line})
 		}
 	}
 	return out, nil
 }
 
-func (s *Store) writeLedgerLocked(p string, outs []Outcome) error {
+func (s *Store) writeLedgerLocked(p string, lines []ledgerLine) error {
 	var b strings.Builder
-	for _, o := range outs {
-		line, err := json.Marshal(o)
-		if err != nil {
-			return err
-		}
-		b.Write(line)
+	for _, l := range lines {
+		b.WriteString(l.raw)
 		b.WriteByte('\n')
 	}
 	return fsutil.WriteFileAtomic(s.ledgerPath(p), []byte(b.String()), 0o600)
@@ -1502,8 +1512,10 @@ func (s *Store) Ledger(p string) ([]Outcome, error) {
 	}
 	var out []Outcome
 	err := s.withReadLock(filepath.Join(s.Dir, p), func() error {
-		var err error
-		out, err = s.readLedgerLocked(p)
+		lines, err := s.readLedgerLocked(p)
+		for _, l := range lines {
+			out = append(out, l.Outcome)
+		}
 		return err
 	})
 	return out, err

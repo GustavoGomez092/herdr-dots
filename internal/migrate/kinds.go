@@ -29,7 +29,8 @@ func Default() Set {
 		// shape. It holds keys, so a parse error's text is never reported.
 		{Name: "credentials", Root: ConfigRoot, Globs: []string{"credentials.toml"}, Format: TOML, Current: 1, Secret: true},
 		{Name: "prices", Root: ConfigRoot, Globs: []string{"prices.toml"}, Format: TOML, Current: 1},
-		{Name: "mcp-install", Root: ConfigRoot, Globs: []string{"mcp-install.json"}, Format: JSON, Current: 1},
+		{Name: "mcp-install", Root: ConfigRoot, Globs: []string{"mcp-install.json"}, Format: JSON, Current: 1,
+			SelfGuarded: true}, // mcpinstall.ErrRecordsVersion; no lock yet, so no migration can be registered
 		{Name: "trust", Root: ConfigRoot, Globs: []string{"trusted.json"}, Format: JSON, Current: 1,
 			Lock: siblingLock, SelfGuarded: true}, // projectdots.ErrNewer
 
@@ -42,7 +43,8 @@ func Default() Set {
 			Format: JSON, Current: 1, Lock: memoryLock, SelfGuarded: true},
 		{Name: "daily", Root: StateRoot, Globs: []string{"daily.json"}, Format: JSON, Current: 1,
 			Lock: siblingLock, SelfGuarded: true}, // state.ErrDailyVersion
-		{Name: "inbox", Root: StateRoot, Globs: []string{"inbox.json"}, Format: JSON, Current: 1, Lock: siblingLock},
+		{Name: "inbox", Root: StateRoot, Globs: []string{"inbox.json"}, Format: JSON, Current: 1,
+			Lock: siblingLock, SelfGuarded: true}, // queue.ErrInboxVersion
 
 		// One session's directory (the engine that runs Run holds its lock).
 		{Name: "attachments", Root: SessionRoot, Globs: []string{"attachments.json"}, Format: JSON, Current: 1},

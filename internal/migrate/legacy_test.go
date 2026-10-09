@@ -201,3 +201,15 @@ func TestEveryPathsFileIsClassified(t *testing.T) {
 		t.Errorf("paths.Paths.%s is neither a migrate kind (KindPaths) nor listed in Unversioned", m.Name)
 	}
 }
+
+// Every JSON kind outside a session directory can be upgraded by another
+// process while this one runs (the config and state dirs are shared by every
+// Herdr session), after Run has checked it. Its own loader must refuse a
+// newer version, so it is never silently downgraded.
+func TestSharedJSONKindsAreSelfGuarded(t *testing.T) {
+	for _, k := range Default().Kinds {
+		if k.Root != SessionRoot && k.Format == JSON && !k.SelfGuarded {
+			t.Errorf("kind %q is shared JSON state: its loader must refuse newer versions (SelfGuarded)", k.Name)
+		}
+	}
+}

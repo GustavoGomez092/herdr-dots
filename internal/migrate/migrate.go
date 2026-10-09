@@ -60,13 +60,19 @@ type Kind struct {
 	Globs   []string // filepath.Glob patterns under Root, slash-separated
 	Format  Format
 	Current int // the newest version this binary reads and writes
-	// Lock returns the lock file that guards file, or "" for none. State-root
-	// files are shared by every session's engine, so a migration can only be
-	// registered for a state-root kind that has a lock.
+	// Lock returns the lock file that guards file, or "" for none. The config
+	// and state dirs are shared by every session's engine (and by the CLI),
+	// so a migration can only be registered for a config- or state-root kind
+	// that has a lock. Session files belong to the one engine that holds
+	// engine.lock, which is the engine that runs Run.
 	Lock func(file string) string
-	// SelfGuarded kinds refuse newer versions in their own loader (memory,
-	// schedule, daily, trust), so a read-only check (Options.DryRun) can skip
-	// them.
+	// SelfGuarded kinds also refuse newer versions in their own loader, under
+	// their lock (memory, schedule, daily, trust, inbox; mcp-install has no
+	// lock yet and re-checks the version just before each write). Run
+	// only sees a file once, at start; a newer process in another session
+	// can upgrade a shared file later, and the loader's own check is what
+	// keeps this process from downgrading it then. Every JSON kind outside a
+	// session dir must be self-guarded (TestSharedJSONKindsAreSelfGuarded).
 	SelfGuarded bool
 	// Secret kinds hold keys (credentials.toml). A TOML or JSON parse error
 	// quotes the offending line, so their errors are never reported or logged.
@@ -98,7 +104,8 @@ func RootsOf(p paths.Paths) Roots {
 
 // Options tune Run.
 type Options struct {
-	// DryRun reads versions only: newer files are still marked read-only,
+	// DryRun reads versions only, for every kind: newer files are still
+	// marked read-only (in this process only),
 	// files that need a migration are reported as Pending, nothing is written.
 	DryRun      bool
 	LockTimeout time.Duration // per locked file; default 2s
@@ -142,6 +149,12 @@ func (r Report) Summary() string {
 // Probe returns a file's schema version: its top-level "version" key, or 1
 // when there is none. A "version" that is not a whole number (a map-shaped
 // file keyed by pane id can't hold one) also means 1.
+//
+// So a file that can't hold a top-level version (attachments.json and
+// usage.json are keyed by pane id, credentials.toml is a table per provider)
+// stays at version 1 for good: a breaking change to its shape must use a new
+// file name, read the old file once and leave it in place, never reuse the
+// name. The same rule holds for the append-only JSONL logs (Appended).
 func Probe(data []byte, f Format) (int, error) {
 	switch f {
 	case JSON:
@@ -204,8 +217,8 @@ func (s Set) Validate() error {
 		if m.From < 1 || m.From >= k.Current || m.Apply == nil {
 			return fmt.Errorf("kind %q: migration from %d is outside 1..%d", m.Kind, m.From, k.Current-1)
 		}
-		if k.Root == StateRoot && k.Lock == nil {
-			return fmt.Errorf("kind %q: shared state needs a lock before it can be migrated", m.Kind)
+		if k.Root != SessionRoot && k.Lock == nil {
+			return fmt.Errorf("kind %q: a shared config or state file needs a lock before it can be migrated", m.Kind)
 		}
 		if steps[m.Kind] == nil {
 			steps[m.Kind] = map[int]bool{}
@@ -239,9 +252,6 @@ func (s Set) Run(r Roots, o Options) (Report, error) {
 		o.Logf = func(string, ...any) {}
 	}
 	for _, k := range s.Kinds {
-		if o.DryRun && k.SelfGuarded {
-			continue
-		}
 		root := map[Root]string{ConfigRoot: r.Config, StateRoot: r.State, SessionRoot: r.Session}[k.Root]
 		if root == "" {
 			continue
@@ -307,7 +317,7 @@ func (s Set) one(k Kind, file string, o Options, rep *Report) {
 	}
 	if err := upgrade(); err != nil {
 		err = quiet(k, err)
-		fsutil.ProtectNewer(file)
+		fsutil.ProtectFailed(file, err.Error())
 		rep.Failed = append(rep.Failed, fmt.Sprintf("%s: %v", file, err))
 		rep.ReadOnly = append(rep.ReadOnly, file)
 		o.Logf("migrate: %s: %v (left as it was, read-only)", file, err)
@@ -343,10 +353,6 @@ func (s Set) upgrade(k Kind, file string, rep *Report) error {
 	if err != nil {
 		return err
 	}
-	st, err := os.Stat(file)
-	if err != nil {
-		return err
-	}
 	v, err := Probe(data, k.Format)
 	if err != nil {
 		return err
@@ -373,7 +379,9 @@ func (s Set) upgrade(k Kind, file string, rep *Report) error {
 	if err := fsutil.WriteFileAtomic(backup, data, 0o600); err != nil {
 		return err
 	}
-	if err := fsutil.WriteFileAtomic(file, out, st.Mode().Perm()); err != nil {
+	// Every herdr-dots file is private (0600 and, on Windows, an owner-only
+	// DACL, which WriteFileAtomic only applies for a private perm).
+	if err := fsutil.WriteFileAtomic(file, out, 0o600); err != nil {
 		_ = os.Remove(backup)
 		return err
 	}
