@@ -327,6 +327,53 @@ func TestInjectCommitReviewAfterADotTurnIsQueued(t *testing.T) {
 	}
 }
 
+// closeSpawns makes every later e.spawn refuse, as after Engine.Wait, while
+// the poll loop already running keeps going.
+func closeSpawns(r *proRig) {
+	r.e.wmu.Lock()
+	r.e.closed = true
+	r.e.wmu.Unlock()
+}
+
+// A research or schedule reservation whose spawn is refused (the engine is
+// shutting down) is released, never left to block the dot.
+func TestRefusedSpawnReleasesTheReservation(t *testing.T) {
+	t.Run("research", func(t *testing.T) {
+		r := idleRig(t, researchDot("Security"))
+		closeSpawns(r)
+		r.clock.Add(11 * time.Minute)
+		a, _ := r.atts.Get(pane)
+		r.e.maybeResearch(a, r.clock.Now()) // the poll loop may get there first: either reserves once
+		r.e.mu.Lock()
+		ran := r.e.idle[pane].ran["security"] == r.e.idle[pane].period
+		r.e.mu.Unlock()
+		if !ran {
+			t.Fatal("research was not reserved: the test did not reach the spawn")
+		}
+		eventually(t, "the reservation released", func() bool {
+			r.e.mu.Lock()
+			inflight := r.e.idle[pane].inflight
+			r.e.mu.Unlock()
+			return queuedJobs(r) == 0 && inflight == 0
+		})
+	})
+	t.Run("schedule", func(t *testing.T) {
+		r := newProRig(t, proOpts{cwd: t.TempDir()}, scheduledDot("Security", "0 11 * * *"))
+		r.attach(t, "security")
+		eventually(t, "roster shows the next slot", func() bool { return r.dotState("security").Next == "scheduled Wed 11:00" })
+		closeSpawns(r)
+		r.clock.Add(time.Hour + 20*time.Second)
+		r.e.scheduleTick()
+		r.e.mu.Lock()
+		next := r.e.plan["security"]
+		r.e.mu.Unlock()
+		if !next.After(at(11, 0)) {
+			t.Fatalf("the slot did not come due: plan %v", next)
+		}
+		eventually(t, "the reservation released", func() bool { return queuedJobs(r) == 0 })
+	})
+}
+
 // The other way round: turn reviews use the same in-flight count, so an ask
 // of another dot in flight over a 1-call budget stops the turn review.
 func TestTurnReviewCountsAnAskInFlight(t *testing.T) {
