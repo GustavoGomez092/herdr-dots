@@ -32,7 +32,9 @@ func (r ApplyResult) Applied() int { return r.Added + r.Updated + r.Forgotten }
 //     research and question with ApplyOptions{Research: true}); never
 //     dismissed, preference or global;
 //   - update/forget: only the dot's own model-written dot entries and its own
-//     still-proposed project entries.
+//     still-proposed project entries; update also needs the entry's kind to be
+//     allowed in this pass, so only a research pass rewrites research and
+//     question entries (forget is allowed in any pass).
 //
 // The error is only for store failures (lock timeout, newer file version);
 // per-op problems go to Rejected.
@@ -108,6 +110,9 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, kinds 
 		})
 		if err != nil {
 			return err
+		}
+		if r == yielded {
+			return fmt.Errorf("%w: the scope is full, so the research entry was archived", ErrDenied)
 		}
 		if r == merged {
 			res.Updated++

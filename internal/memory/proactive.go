@@ -1,13 +1,13 @@
 package memory
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -222,7 +222,9 @@ func removeMetaAsidesLocked(dir, slug string) error {
 		return err
 	}
 	var errs []error
-	needle := []byte(`"` + slug + `"`)
+	// The dots_seen key form: "<slug>": (a name or root that merely equals the
+	// slug, or a value, is followed by a comma or brace, not a colon).
+	needle := regexp.MustCompile(`"` + regexp.QuoteMeta(slug) + `"\s*:`)
 	for _, e := range ents {
 		if !strings.HasPrefix(e.Name(), "meta.json.corrupt-") || e.IsDir() {
 			continue
@@ -233,7 +235,7 @@ func removeMetaAsidesLocked(dir, slug string) error {
 			errs = append(errs, err)
 			continue
 		}
-		if bytes.Contains(data, needle) {
+		if needle.Match(data) {
 			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				errs = append(errs, err)
 			}
