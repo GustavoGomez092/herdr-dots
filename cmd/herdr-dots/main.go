@@ -24,7 +24,7 @@ var commands = map[string]handler{
 		return nil
 	},
 	"engine":     runEngine,
-	"pane":       notYet("pane"),
+	"pane":       runPane,
 	"manage":     notYet("manage"),
 	"summon-ui":  notYet("summon-ui"),
 	"action":     notYet("action"),
