@@ -24,13 +24,14 @@ type SnapshotMsg view.Snapshot
 type errMsg struct{ err error }
 
 type Model struct {
-	target string
-	caller Caller
-	dots   []view.DotState
-	cursor int
-	asking bool
-	input  textinput.Model
-	status string
+	target  string
+	caller  Caller
+	dots    []view.DotState
+	cursor  int
+	asking  bool
+	askSlug string
+	input   textinput.Model
+	status  string
 }
 
 func New(target string, c Caller) Model {
@@ -47,6 +48,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p, _ := view.Snapshot(msg).Pane(m.target)
 		m.dots = p.Dots
 		m.cursor = max(0, min(m.cursor, len(m.dots)-1))
+		if len(m.dots) == 0 && m.asking {
+			m.asking = false
+			m.input.Blur()
+		}
 	case errMsg:
 		m.status = msg.err.Error()
 	case tea.KeyMsg:
@@ -56,13 +61,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.asking = false
 				return m, nil
 			case "enter":
-				d := m.dots[m.cursor]
+				if len(m.dots) == 0 {
+					return m, nil
+				}
 				q := strings.TrimSpace(m.input.Value())
-				c, target := m.caller, m.target
+				c, target, slug := m.caller, m.target, m.askSlug
 				return m, func() tea.Msg {
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
-					if err := c.Call(ctx, ipc.CmdSummon, ipc.SummonArgs{PaneID: target, Slug: d.Slug, Question: q}); err != nil {
+					if err := c.Call(ctx, ipc.CmdSummon, ipc.SummonArgs{PaneID: target, Slug: slug, Question: q}); err != nil {
 						return errMsg{err}
 					}
 					return tea.Quit()
@@ -82,6 +89,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if len(m.dots) > 0 {
 				m.asking = true
+				m.askSlug = m.dots[m.cursor].Slug
 				m.input.Focus()
 				return m, textinput.Blink
 			}
