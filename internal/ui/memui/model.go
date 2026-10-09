@@ -114,7 +114,8 @@ type Model struct {
 	field    int
 	editRef  *memory.Ref // nil: a new entry
 	editPid  string
-	secretOK bool // the developer confirmed a secret warning
+	editSeen string // the text the editor loaded
+	secretOK bool   // the developer confirmed a secret warning
 	loadErr  string
 	status   string
 	width    int
@@ -523,7 +524,7 @@ func (m Model) startEdit(e *memory.Entry) (tea.Model, tea.Cmd) {
 	vals := [3]string{}
 	if e != nil {
 		r := e.Ref()
-		m.editRef, m.editPid = &r, m.pidOf(*e)
+		m.editRef, m.editPid, m.editSeen = &r, m.pidOf(*e), e.Text
 		vals = [3]string{e.Text, string(e.Kind), strings.Join(e.Paths, ", ")}
 	} else {
 		sc, _, _ := m.newTarget()
@@ -578,10 +579,25 @@ func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = modeBrowse
 		if m.editRef != nil {
-			ref, pid := *m.editRef, m.editPid
+			ref, pid, seen := *m.editRef, m.editPid, m.editSeen
 			return m, m.mutateSaying(func(st *memory.Store) (string, error) {
 				status := "saved " + ref.String()
 				_, err := st.Update(pid, ref, func(x *memory.Entry) error {
+					// An import saved with its text unchanged stays someone
+					// else's conclusion (the CLI rule, Task 10): it is an
+					// approval of the text the editor showed, never a rewrite.
+					if x.Source == memory.SourceImport && text == strings.TrimSpace(seen) {
+						if x.Text != seen {
+							return errChanged
+						}
+						x.Kind, x.Paths = kind, paths
+						status = "saved (still imported) " + ref.String()
+						if x.Status == memory.StatusProposed && x.Scope != memory.ScopeProject {
+							x.Status = memory.StatusActive
+							status = "approved (still imported) " + ref.String()
+						}
+						return nil
+					}
 					x.Text, x.Kind, x.Paths, x.Source = text, kind, paths, memory.SourceUser
 					// Only imports propose dot memory (Phase 9); the developer's
 					// own dot memory is active, so editing one approves it.
