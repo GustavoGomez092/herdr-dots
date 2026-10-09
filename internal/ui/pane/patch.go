@@ -390,8 +390,5 @@ const patchHint = "  v view  A apply  ⏎ send to agent  x discard"
 
 // patchText is a patch card's summary, sanitized: it is model text.
 func patchText(c queue.Card) string {
-	if c.Kind != queue.KindPatch {
-		return c.Body
-	}
 	return textutil.SanitizeModelText(c.Body)
 }

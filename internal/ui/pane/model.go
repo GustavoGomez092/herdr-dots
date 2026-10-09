@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
@@ -67,6 +68,7 @@ type Model struct {
 	seen            bool // a snapshot or disconnect has been received
 
 	// Council (council.go).
+	opened   map[string]bool           // cards whose parts were expanded at least once
 	expandID string                    // council card whose member answers are shown
 	opener   func(target string) error // opens the council popup (WithOpener); nil = unavailable
 
@@ -89,7 +91,7 @@ func New(target string, c Caller) Model {
 	ti.Placeholder = "optional question, enter to summon"
 	ri := textinput.New()
 	ri.Placeholder = "optional reason, enter to save"
-	return Model{target: target, caller: c, editor: ta, question: ti, reason: ri}
+	return Model{target: target, caller: c, editor: ta, question: ti, reason: ri, opened: map[string]bool{}}
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -357,15 +359,28 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "suggestions can't be sent: copy the text instead"
 			return m, nil
 		}
+		if c.Kind == queue.KindDigest && !m.opened[c.ID] {
+			m.expand(c.ID) // never send a digest whose parts weren't shown
+			m.status = "digest expanded: ⏎ again to send it"
+			return m, nil
+		}
 		if sendable(c) {
 			return m, m.call(ipc.CmdSend, ipc.SendArgs{IDs: []string{c.ID}})
 		}
 	case "a":
 		var ids []string
+		unseen := 0
 		for _, c := range m.pane().Cards {
 			if sendable(c) && c.Kind != queue.KindPatch { // each patch is its own decision
+				if c.Kind == queue.KindDigest && !m.opened[c.ID] {
+					unseen++ // a digest is sent only after its parts were shown
+					continue
+				}
 				ids = append(ids, c.ID)
 			}
+		}
+		if unseen > 0 {
+			m.status = fmt.Sprintf("skipped %d digest(s) you haven't expanded: space to read, then ⏎ to send", unseen)
 		}
 		if len(ids) > 0 {
 			return m, m.call(ipc.CmdSend, ipc.SendArgs{IDs: ids})
@@ -377,7 +392,7 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "M":
 		if c, ok := m.selectedCard(); ok {
 			m.remembering, m.reasoning, m.rememberID = true, false, c.ID
-			m.rememberCouncil = c.Kind == queue.KindCouncil
+			m.rememberCouncil = hasParts(c) // a council or away digest: project convention only
 		}
 	case "e":
 		if c, ok := m.selectedCard(); ok && sendable(c) {
@@ -414,12 +429,12 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// trunc cuts s to n display cells (not runes), ending in an ellipsis.
 func trunc(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n-1]) + "…"
+	if ansi.StringWidth(s) <= n {
+		return s
 	}
-	return s
+	return ansi.Truncate(s, n, "…")
 }
 
 func rule(title string, w int) string {
@@ -436,6 +451,9 @@ r reset dot+budget    f feed   ? help   q close`
 // "suppressed (d:m17)", and agent asks as "◆ asked by agent · <severity>"
 // (the cost tail of an ask is never shown).
 func feedOutcome(e state.FeedEntry) string {
+	if d, ok := proactiveFeed(e); ok {
+		return d
+	}
 	switch e.Outcome {
 	case state.OutcomeLearned:
 		if e.Detail != "" {
@@ -472,6 +490,7 @@ func (m Model) View() string {
 	if ok {
 		tail = fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget) + paneCost(p.CostUSD, p.BudgetUSD, p.CostUnknown)
 	}
+	tail += todayPart(m.snap)
 	if m.snap.PausedAll {
 		tail += "  ⏸ all paused"
 	}
@@ -488,6 +507,9 @@ func (m Model) View() string {
 	if p.Source == "scrollback" {
 		b.WriteString(style.Dim.Render("(reading scrollback: transcript unavailable)") + "\n")
 	}
+	if l := awayLine(p); l != "" {
+		b.WriteString(style.Dim.Render(trunc(l, max(10, w))) + "\n")
+	}
 	if m.seen && !m.connected {
 		b.WriteString(style.Err.Render(engineDownMsg) + "\n")
 	}
@@ -497,11 +519,8 @@ func (m Model) View() string {
 	top := b.String() // title and banners: always on screen
 	roster := make([]string, 0, len(p.Dots))
 	for i, d := range p.Dots {
-		status := d.Status
-		if d.Learning {
-			status = style.Sym("◌") + " learning" + style.Sym("…")
-		}
-		rest := fmt.Sprintf("%-12s %-8s %s", trunc(d.Name, 12), d.Mode, status) + dotCost(d)
+		status := dotStatus(d) // background runs, learning, proactive hints (proactive.go)
+		rest := fmt.Sprintf("%-12s %-8s %s", trunc(oneLine(d.Name), 12), d.Mode, status) + dotCost(d)
 		line := style.Glyph(d.Glyph, d.Color) + " " + trunc(rest, max(10, w-2))
 		if m.area == areaRoster && i == m.roster {
 			line = style.Selected.Render(line)
@@ -543,7 +562,7 @@ func (m Model) View() string {
 		}
 		label := cardLabel(c)
 		room := max(10, w) - lipgloss.Width(marker+c.Glyph+" "+label+"  ")
-		who := trunc(fmt.Sprintf("%s · turn %d%s", c.DotName, c.Turn, tags), max(1, room))
+		who := trunc(fmt.Sprintf("%s · %s%s", oneLine(c.DotName), cardWhere(c), tags), max(1, room))
 		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", marker, c.Glyph, style.Severity(c.Severity).Render(label), who))
 		text := patchText(c)
 		if !sel {
@@ -562,7 +581,7 @@ func (m Model) View() string {
 			case c.Mode == string(dots.ModeSuggest):
 				b.WriteString(style.Dim.Render("  x dismiss · copy the text to use it") + "\n")
 			default:
-				b.WriteString(style.Dim.Render("  ⏎ send  e edit  x dismiss"+councilHint(c)) + "\n")
+				b.WriteString(style.Dim.Render(trunc("  ⏎ send  e edit  x dismiss"+councilHint(c), max(10, w))) + "\n")
 			}
 		}
 		if i == m.card {
@@ -572,10 +591,10 @@ func (m Model) View() string {
 	if m.showFeed {
 		b.WriteString(rule("FEED", w))
 		for _, e := range p.Feed {
-			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
+			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(oneLine(e.Dot), 10), feedOutcome(e))
 			if e.Detail != "" && e.Outcome == "error" {
 				line += "  " + trunc(e.Detail, max(10, w-24))
-			} else if c := costPart(e.Detail); c != "" && e.Outcome != state.OutcomeAsked {
+			} else if c := costPart(e.Detail); c != "" && e.Outcome != state.OutcomeAsked && !proactiveOutcome(e.Outcome) {
 				line += "  " + c
 			}
 			b.WriteString(trunc(line, max(10, w)) + "\n")

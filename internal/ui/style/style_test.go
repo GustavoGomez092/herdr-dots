@@ -23,7 +23,7 @@ func TestASCIIModeMapsEveryGlyph(t *testing.T) {
 	if !ASCII() {
 		t.Fatal("ASCII() must report the switch")
 	}
-	for in, want := range map[string]string{"◆": "*", "▲": "^", "✎": "~", "⊕": "+", "◌": "o", "★": "*", "▼": "v", "✓": "+", "…": "...", "?": "?", "S": "S", "☂": "*"} {
+	for in, want := range map[string]string{"◆": "*", "▲": "^", "✎": "~", "⊕": "+", "◌": "o", "★": "*", "▼": "v", "✓": "+", "…": "...", "☾": "(", "?": "?", "S": "S", "☂": "*"} {
 		if got := Sym(in); got != want {
 			t.Errorf("Sym(%q) = %q, want %q", in, got, want)
 		}
