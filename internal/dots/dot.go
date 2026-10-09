@@ -53,6 +53,8 @@ type Dot struct {
 	Context  ContextSpec  `toml:"context"`
 	Budget   BudgetSpec   `toml:"budget"`
 	Memory   MemorySpec   `toml:"memory"`
+	Research ResearchSpec `toml:"research"` // Phase 8: idle research
+	Schedule ScheduleSpec `toml:"schedule"` // Phase 8: standing task on a cron schedule
 
 	Capabilities CapabilitySpec `toml:"capabilities"`
 }
@@ -79,6 +81,7 @@ type TriggerSpec struct {
 	OnTurn    bool     `toml:"on_turn"`
 	FileGlobs []string `toml:"file_globs"`
 	Cooldown  int      `toml:"cooldown"`
+	OnCommit  bool     `toml:"on_commit"` // Phase 8: review each new commit in the pane's repo
 }
 
 type ContextSpec struct {
@@ -113,6 +116,8 @@ func New(name string) Dot {
 		Context:  ContextSpec{Turns: 3, RepoRead: true, Verbosity: "normal"},
 		Budget:   BudgetSpec{MaxCallsPerSession: 40},
 		Memory:   DefaultMemory(),
+		Research: DefaultResearch(),
+		Schedule: DefaultSchedule(),
 
 		Capabilities: DefaultCapabilities(),
 	}
@@ -184,6 +189,8 @@ func (d Dot) Validate() error {
 		add("budget max_calls_per_session must be >= 1")
 	}
 	errs = append(errs, d.Memory.validate()...)
+	errs = append(errs, d.Research.validate()...)
+	errs = append(errs, d.Schedule.validate()...)
 	errs = append(errs, d.Capabilities.validate(d.Backend.Kind)...)
 	errs = append(errs, validateAPI(d)...)
 	return errors.Join(errs...)
