@@ -9,13 +9,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/history"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/ui/memui"
+	"herdr-dots/internal/ui/profile"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -34,6 +37,12 @@ type Deps struct {
 
 	Memory  *memory.Store                               // nil: memory off (no M/P, no memory step on delete)
 	Project func(target string) (memory.Project, error) // the target pane's project when the snapshot lacks it; may be nil
+
+	// Phase 9: profiles and sharing.
+	History    *history.Store                                                // nil: no profiles
+	Fetch      func(ctx context.Context, url string) ([]byte, string, error) // dot pack downloads; nil: files only
+	SessionKey string                                                        // this Herdr session (joins history rows to queued cards)
+	ExportDir  string                                                        // default folder for exports; "" = home
 
 	// Phase 4 (all optional).
 	CheckDot  func(ctx context.Context, d dots.Dot) (warn string, err error)    // runs on save instead of Check: key + model; warn = saved unchecked
@@ -82,6 +91,12 @@ const (
 	scrMemory        // the memory browser (memui)
 	scrConfirmMemory // after deleting a dot: also delete its memory?
 	scrProviders     // API keys and the Ollama server (Phase 4)
+	scrProfile       // a dot's profile (Phase 9)
+	scrImportSource  // import: file path or URL prompt
+	scrImportPreview // import: everything the pack would do
+	scrImportRename  // import: a new name after a collision
+	scrExport        // export: memory choice and file
+	scrTrust         // a project dot's trust preview
 )
 
 type Model struct {
@@ -107,6 +122,12 @@ type Model struct {
 	mem       *memui.Model // open memory browser (scrMemory)
 	prov      *providers
 	fetching  bool // a ctrl+space model fetch is in flight
+
+	prof  *profile.Model  // scrProfile (kept while its memory browser or export is open)
+	imp   *importState    // scrImportPreview, scrImportRename
+	exp   *exportState    // scrExport
+	trust *trustState     // scrTrust
+	input textinput.Model // the import, rename and export prompts
 }
 
 func New(target string, d Deps) Model {
@@ -117,7 +138,34 @@ func New(target string, d Deps) Model {
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+// Init asks the engine to reload dots and scan the target pane's repository,
+// so its project dots show up before anything is attached.
+func (m Model) Init() tea.Cmd {
+	if m.target == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := m.call(ipc.CmdReloadDots, ipc.ReloadArgs{PaneID: m.target}); err != nil {
+			return errMsg{err}
+		}
+		return nil
+	}
+}
+
+// library is what this popup lists: your dots, plus the project dots of the
+// target pane's checkout (ruling P9-R13: never another repository's, and
+// never another checkout's copy of the same repository).
+func (m Model) library() []view.LibraryDot {
+	root := m.snap.PaneRoots[m.target]
+	var out []view.LibraryDot
+	for _, d := range m.snap.Library {
+		if d.Origin == dots.OriginProject && (root == "" || d.Root != root) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
 
 func (m Model) call(cmd string, args any) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -135,11 +183,37 @@ func (m Model) reload() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.scr == scrProfile && m.prof != nil {
+		switch msg := msg.(type) {
+		case SnapshotMsg: // the library keeps tracking snapshots below
+		case profile.BackMsg:
+			m.scr, m.prof, m.status = scrLibrary, nil, ""
+			return m, nil
+		case profile.ExportMsg:
+			return m.startExport(msg.Slug)
+		case profile.MemoryMsg:
+			return m, m.openMemory(msg.Slug, msg.Name)
+		case memOpenMsg: // handled below: the memory browser opens over the profile
+		default:
+			if ws, ok := msg.(tea.WindowSizeMsg); ok {
+				m.width, m.height = ws.Width, ws.Height
+			}
+			if _, ok := msg.(tea.KeyMsg); ok {
+				m.status = ""
+			}
+			pm, cmd := m.prof.Update(msg)
+			m.prof = &pm
+			return m, cmd
+		}
+	}
 	if m.scr == scrMemory && m.mem != nil {
 		switch msg.(type) {
 		case SnapshotMsg: // the library keeps tracking snapshots below
 		case memui.BackMsg:
 			m.scr, m.mem = scrLibrary, nil
+			if m.prof != nil {
+				m.scr = scrProfile // opened from the profile: back to it
+			}
 			return m, nil
 		default:
 			if ws, ok := msg.(tea.WindowSizeMsg); ok {
@@ -169,10 +243,85 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, mm.Init()
 	case memDeletedMsg:
 		m.status = fmt.Sprintf("deleted %s and its memory (%s)", msg.name, msg.del)
+	case profileOpenMsg:
+		if msg.err != nil {
+			m.status = style.Clean(msg.err.Error())
+			return m, nil
+		}
+		pm := profile.New(msg.deps)
+		if m.width > 0 || m.height > 0 {
+			pm, _ = pm.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+		}
+		m.prof, m.scr, m.status = &pm, scrProfile, ""
+		return m, pm.Init()
+	case trustOpenMsg:
+		if msg.err != nil {
+			m.status = style.Clean(msg.err.Error())
+			return m, nil
+		}
+		m.trust, m.scr, m.status = msg.st, scrTrust, ""
+		m.trust.pg.fit(len(m.trustLines()), m.bodyHeight())
+		return m, nil
+	case trustDoneMsg:
+		m.scr, m.trust = scrLibrary, nil
+		if msg.trusted {
+			m.status = "trusted " + msg.name + "; any change to its file revokes it"
+		} else {
+			m.status = "untrusted " + msg.name + "; attached copies pause"
+		}
+		return m, nil
+	case importLoadedMsg:
+		if msg.err != nil {
+			m.status = style.Clean(msg.err.Error())
+			return m, nil
+		}
+		m.imp, m.scr, m.status = msg.st, scrImportPreview, ""
+		m.imp.pg.fit(len(m.importLines()), m.bodyHeight())
+		return m, nil
+	case importedMsg:
+		m.scr, m.imp = scrLibrary, nil
+		m.status = fmt.Sprintf("imported %s as %s", style.Clean(msg.name), msg.slug)
+		if n := msg.res.Added + msg.res.Updated; n > 0 || len(msg.res.Rejected) > 0 {
+			m.status += fmt.Sprintf(" %s memory: %d proposals to approve (P), %d skipped", style.Sym("·"), n, len(msg.res.Rejected))
+		}
+		if msg.memErr != nil {
+			m.status += " " + style.Sym("·") + " memory import failed: " + style.Clean(msg.memErr.Error())
+		}
+		return m, m.reload()
+	case exportedMsg:
+		m.scr, m.exp = scrProfile, nil
+		if m.prof == nil {
+			m.scr = scrLibrary
+		}
+		m.status = fmt.Sprintf("exported to %s (%d memory entries)", shortHome(msg.path), msg.entries)
+		if msg.dropped > 0 {
+			m.status += fmt.Sprintf("; %d left out: they looked like secrets", msg.dropped)
+		}
+		return m, nil
+	case exportSecretMsg:
+		if m.exp != nil {
+			m.exp.secrets, m.exp.dropSecrets = msg.where, false
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.trust != nil {
+			m.trust.pg.fit(len(m.trustLines()), m.bodyHeight())
+		}
+		if m.imp != nil {
+			m.imp.pg.fit(len(m.importLines()), m.bodyHeight())
+		}
 	case SnapshotMsg:
 		m.snap = view.Snapshot(msg)
+		if m.trust != nil {
+			// The open preview keeps its bytes and hash; it learns whether
+			// the engine now sees another file, or trusts this one.
+			for _, d := range m.snap.Library {
+				if d.Origin == dots.OriginProject && d.Slug == m.trust.lib.Slug && d.Root == m.trust.lib.Root {
+					m.trust.lib = d
+				}
+			}
+		}
 		m.attached = map[string]bool{}
 		if p, ok := m.snap.Pane(m.target); ok {
 			for _, d := range p.Dots {
@@ -185,7 +334,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.loaded = true
 		}
-		m.cursor = max(0, min(m.cursor, len(m.snap.Library)-1))
+		m.cursor = max(0, min(m.cursor, len(m.library())-1))
 	case errMsg:
 		m.status = msg.err.Error()
 	case formErrMsg:
@@ -238,6 +387,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.keysConfirmMemory(msg)
 		case scrProviders:
 			return m.providersUpdate(msg)
+		case scrImportSource:
+			return m.keysImportSource(msg)
+		case scrImportPreview:
+			return m.keysImportPreview(msg)
+		case scrImportRename:
+			return m.keysImportRename(msg)
+		case scrExport:
+			return m.keysExport(msg)
+		case scrTrust:
+			return m.keysTrust(msg)
 		}
 		return m.keysLibrary(msg)
 	}
@@ -245,8 +404,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) current() (view.LibraryDot, bool) {
-	if m.cursor >= 0 && m.cursor < len(m.snap.Library) {
-		return m.snap.Library[m.cursor], true
+	if lib := m.library(); m.cursor >= 0 && m.cursor < len(lib) {
+		return lib[m.cursor], true
 	}
 	return view.LibraryDot{}, false
 }
@@ -257,7 +416,7 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "q", "ctrl+c":
 		return m, tea.Quit
 	case "j", "down":
-		m.cursor = min(m.cursor+1, max(0, len(m.snap.Library)-1))
+		m.cursor = min(m.cursor+1, max(0, len(m.library())-1))
 	case "k", "up":
 		m.cursor = max(m.cursor-1, 0)
 	case " ":
@@ -266,6 +425,10 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if d, ok := m.current(); ok {
+			if d.Origin == dots.OriginProject && !d.Trusted && !m.selected[d.Slug] {
+				m.status = style.Sym("⚠") + " " + style.Clean(d.Name) + " is an untrusted project dot: press T to review it"
+				return m, nil
+			}
 			m.selected[d.Slug] = !m.selected[d.Slug]
 		}
 	case "enter":
@@ -284,8 +447,35 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "K":
 		m.scr = scrProviders
 		return m, m.loadProviders()
+	case "i":
+		if m.d.History == nil {
+			m.status = "profiles are not available here"
+			return m, nil
+		}
+		if d, ok := m.current(); ok {
+			return m, m.openProfile(d)
+		}
+	case "I":
+		m.scr, m.input = scrImportSource, newPrompt("~/security.dotpack.toml or https://...", "")
+		return m, textinput.Blink
+	case "T":
+		if d, ok := m.current(); ok {
+			if d.Origin != dots.OriginProject {
+				m.status = style.Clean(d.Name) + " is your own dot; only project dots need trust"
+				return m, nil
+			}
+			if m.target == "" {
+				m.status = "focus an agent pane in that repository to trust its dots"
+				return m, nil
+			}
+			return m, m.openTrust(d)
+		}
 	case "e":
 		if d, ok := m.current(); ok {
+			if d.Origin == dots.OriginProject {
+				m.status = "project dots are edited in their repository (" + style.Clean(d.ProjectName) + "): " + projectRel(d)
+				return m, nil
+			}
 			full, err := dots.Load(m.d.DotsDir, d.Slug)
 			if err != nil {
 				m.status = err.Error()
@@ -295,6 +485,10 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "D":
 		if d, ok := m.current(); ok {
+			if d.Origin == dots.OriginProject {
+				m.status = "project dots live in their repository; press T to untrust this one"
+				return m, nil
+			}
 			m.scr, m.delSlug, m.delName = scrConfirm, d.Slug, d.Name
 		}
 	case "M":
@@ -352,8 +546,11 @@ func (m Model) openMemory(dot, name string) tea.Cmd {
 func (m Model) apply() tea.Cmd {
 	var add []string
 	var remove []string
-	for _, d := range m.snap.Library {
+	for _, d := range m.library() {
 		switch {
+		case m.selected[d.Slug] && !m.attached[d.Slug] && d.Origin == dots.OriginProject && !d.Trusted:
+			// Never attach an untrusted project dot (its file may have
+			// changed since it was checked).
 		case m.selected[d.Slug] && !m.attached[d.Slug]:
 			add = append(add, d.Slug)
 		case !m.selected[d.Slug] && m.attached[d.Slug]:
@@ -514,6 +711,30 @@ func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// badge marks where a library dot comes from.
+func badge(d view.LibraryDot) string {
+	sep := " " + style.Sym("·") + " "
+	switch d.Origin {
+	case dots.OriginProject:
+		if !d.Trusted {
+			return "  " + style.Sym("⚠") + " project" + sep + "untrusted"
+		}
+		b := "  project"
+		if len(d.Clamped) > 0 {
+			b += sep + style.Clean(strings.Join(d.Clamped, ", ")) + " off"
+		}
+		if d.TrustedAt != "" {
+			b += sep + "trusted at " + style.Clean(d.TrustedAt)
+		}
+		return b
+	case dots.OriginTemplate:
+		return "  template-derived"
+	case dots.OriginImport:
+		return "  imported"
+	}
+	return ""
+}
+
 func (m Model) View() string {
 	switch m.scr {
 	case scrEditor:
@@ -550,6 +771,26 @@ func (m Model) View() string {
 		}
 	case scrProviders:
 		return m.providersView()
+	case scrProfile:
+		if m.prof != nil {
+			v := m.prof.View()
+			if m.status != "" {
+				v += "\n" + m.cutLine(style.Clean(m.status))
+			}
+			return v
+		}
+	case scrImportSource, scrImportPreview, scrImportRename:
+		if m.scr == scrImportSource || m.imp != nil {
+			return m.importView()
+		}
+	case scrExport:
+		if m.exp != nil {
+			return m.exportView()
+		}
+	case scrTrust:
+		if m.trust != nil {
+			return m.trustView()
+		}
 	}
 	var b strings.Builder
 	head := "DOTS LIBRARY ─ target: " + m.target
@@ -557,15 +798,17 @@ func (m Model) View() string {
 		head = "DOTS LIBRARY ─ no agent pane focused (library only)"
 	}
 	b.WriteString(style.Title.Render(head) + "\n\n")
-	if len(m.snap.Library) == 0 {
-		b.WriteString(style.Dim.Render("No dots yet. Press t to start from a template or n for a new dot.") + "\n")
+	lib := m.library()
+	if len(lib) == 0 {
+		b.WriteString(style.Dim.Render("No dots yet. Press t to start from a template, n for a new dot or I to import one.") + "\n")
 	}
-	for i, d := range m.snap.Library {
+	for i, d := range lib {
 		check := "[ ]"
 		if m.selected[d.Slug] {
 			check = "[x]"
 		}
-		line := fmt.Sprintf("%s %s %-14s %-22s %s", check, style.Glyph(d.Glyph, d.Color), d.Name, d.Backend+"/"+d.Model, d.Mode)
+		line := m.cutLine(fmt.Sprintf("%s %s %-14s %-22s %s%s", check, style.Glyph(style.Clean(d.Glyph), style.Clean(d.Color)), style.Clean(d.Name),
+			style.Clean(d.Backend+"/"+d.Model), style.Clean(d.Mode), badge(d)))
 		if i == m.cursor {
 			line = style.Selected.Render(line)
 		}
@@ -577,15 +820,15 @@ func (m Model) View() string {
 		b.WriteString(style.Err.Render(fmt.Sprintf("⚠ %s:%d: %s", style.Clean(inv.File), inv.Line, style.Clean(inv.Error))) + "\n")
 	}
 	if m.status != "" {
-		b.WriteString("\n" + m.status + "\n")
+		b.WriteString("\n" + strings.Join(m.fitLines([]string{style.Clean(m.status)}), "\n") + "\n")
 	}
 	if m.mcpStatus != "" {
 		b.WriteString("\n" + style.Dim.Render(m.mcpStatus) + "\n")
 	}
-	help := "space toggle · enter apply · n new · t template · e edit · D delete · K providers · esc close"
+	help := "space toggle · enter apply · n new · t template · e edit · D delete · i profile · I import · T trust · K providers · esc close"
 	if m.d.Memory != nil {
 		help += " · M memory · P project memory"
 	}
-	b.WriteString("\n" + style.Dim.Render(help))
+	b.WriteString("\n" + style.Dim.Render(strings.ReplaceAll(help, " · ", " "+style.Sym("·")+" ")))
 	return b.String()
 }

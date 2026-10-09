@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"net/http"
 	"os"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/config"
+	"herdr-dots/internal/dotpack"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/ipc"
@@ -137,8 +139,14 @@ func runManage([]string) error {
 	newDot := func() dots.Dot { return newDotFromConfig(cfg) }
 	set := newBackendSet(p, configLoader(p.ConfigFile()), nil)
 	prices := set.Prices()
+	client := &http.Client{Timeout: 20 * time.Second}
+	home, _ := os.UserHomeDir()
 	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
 		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject,
+		History: historyStoreFor(p), SessionKey: paths.SessionKey(p.SocketPath), ExportDir: home,
+		Fetch: func(ctx context.Context, url string) ([]byte, string, error) {
+			return dotpack.Fetch(ctx, client, url, dotpack.MaxBytes)
+		},
 		MCPStatus: func() string { return mcpinstall.StatusLine(p.ConfigDir) },
 		CheckDot:  set.CheckDot,
 		Models:    set.Models,
