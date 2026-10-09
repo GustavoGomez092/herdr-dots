@@ -176,11 +176,8 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		tools = toolloop.RepoTools(r.Cwd, lim)
 	}
 	system := backend.SystemPrompt(r)
-	switch {
-	case len(tools) > 0:
-		system += "\n" + toolloop.SystemNote + "\n"
-	case wantTools && toolloop.Unavailable(r.Cwd):
-		system += "\n" + toolloop.NoToolsNote + "\n"
+	if note := toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, len(tools) > 0); note != "" {
+		system += "\n" + note + "\n"
 	}
 	cr := chatRequest{
 		Model:     r.Model,

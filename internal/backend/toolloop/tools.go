@@ -65,8 +65,23 @@ const SystemNote = `REPO TOOLS: you may call read_file, grep and list_files to r
 // FinalNudge is sent with the last tool results when the tool budget is spent.
 const FinalNudge = "Tool budget exhausted; answer now with the JSON object only."
 
-// NoToolsNote replaces SystemNote when RepoTools returns no tools.
-const NoToolsNote = "REPO TOOLS: unavailable for this pane (its working directory is too broad to read safely). Answer from the conversation alone."
+// NoToolsNote replaces SystemNote when the dot asked for repo access but
+// gets no tools.
+const NoToolsNote = "REPO TOOLS: unavailable for this pane (its working directory is unknown or too broad to read safely). Answer from the conversation alone."
+
+// Note is the repo-tools note a system prompt carries. want is "the dot asked
+// for repo access on this run" (repo_read on, not a memory pass); tools is
+// whether tools are offered. SystemNote when they are, NoToolsNote when they
+// were wanted but the working directory is unknown or too broad, else "".
+func Note(want bool, cwd string, tools bool) string {
+	switch {
+	case tools:
+		return SystemNote
+	case want && (cwd == "" || Unavailable(cwd)):
+		return NoToolsNote
+	}
+	return ""
+}
 
 // Unavailable reports whether root is too broad for repo tools: "/", the
 // user's home directory, or any ancestor of it. A pane started in $HOME would

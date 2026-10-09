@@ -184,16 +184,9 @@ const minToolRoom = 64
 // errContextFull ends a run whose tool results no longer fit num_ctx.
 var errContextFull = errors.New("ollama: context window full (raise context_window)")
 
-// noteFor is the repo-tools note the system prompt carries: SystemNote when
-// tools are offered, NoToolsNote when the pane's directory is too broad.
+// noteFor is the repo-tools note the system prompt carries (toolloop.Note).
 func noteFor(r backend.Request, tools bool) string {
-	switch {
-	case tools:
-		return toolloop.SystemNote
-	case r.RepoRead && r.Pass != backend.PassMemory && toolloop.Unavailable(r.Cwd):
-		return toolloop.NoToolsNote
-	}
-	return ""
+	return toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, tools)
 }
 
 func toolDefs(tools []toolloop.Tool) []toolDef {
