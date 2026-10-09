@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/ui/style"
@@ -52,20 +53,42 @@ func (m Model) councilKeys(k tea.KeyMsg) (Model, tea.Cmd, bool) {
 		if m.expandID == c.ID {
 			m.expandID = ""
 		} else {
-			m.expand(c.ID)
+			m.expand(c)
 		}
 		return m, nil, true
 	}
 	return m, nil, false
 }
 
-// expand shows a card's parts and remembers that it was seen.
-func (m *Model) expand(id string) {
+// expand shows a card's parts and remembers how many were shown.
+func (m *Model) expand(c queue.Card) {
 	if m.opened == nil {
-		m.opened = map[string]bool{}
+		m.opened = map[string]int{}
 	}
-	m.opened[id] = true
-	m.expandID = id
+	m.opened[c.ID] = len(c.Parts)
+	m.expandID = c.ID
+}
+
+// unseen reports a digest with parts the developer has not been shown: never
+// expanded, or grown since (queue.AppendPart).
+func (m *Model) unseen(c queue.Card) bool {
+	return c.Kind == queue.KindDigest && m.opened[c.ID] < len(c.Parts)
+}
+
+// sendArgs names the cards to send and, for each digest, the part count shown
+// (the engine refuses a digest whose count changed).
+func sendArgs(cards []queue.Card) ipc.SendArgs {
+	a := ipc.SendArgs{}
+	for _, c := range cards {
+		a.IDs = append(a.IDs, c.ID)
+		if c.Kind == queue.KindDigest {
+			if a.Parts == nil {
+				a.Parts = map[string]int{}
+			}
+			a.Parts[c.ID] = len(c.Parts)
+		}
+	}
+	return a
 }
 
 // councilProgress is the roster line while a council runs.

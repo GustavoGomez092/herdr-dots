@@ -86,6 +86,9 @@ type DotArgs struct {
 
 type SendArgs struct {
 	IDs []string `json:"ids"`
+	// Parts is, for each digest in IDs, how many parts the sender showed. The
+	// engine refuses a digest whose count differs or is missing.
+	Parts map[string]int `json:"parts,omitempty"`
 }
 
 type CardArgs struct {

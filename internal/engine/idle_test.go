@@ -327,7 +327,7 @@ func TestDigestOutcomesAreRecordedPerDot(t *testing.T) {
 	if err := r.e.Remember(c.ID, memory.AsFinding, ""); err == nil || !strings.Contains(err.Error(), "digest card can only be remembered as a project convention") {
 		t.Fatalf("remember: %v", err)
 	}
-	if err := r.e.SendCards([]string{c.ID}); err != nil {
+	if err := r.e.SendCardsSeen([]string{c.ID}, map[string]int{c.ID: len(c.Parts)}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "one outcome per part", func() bool {

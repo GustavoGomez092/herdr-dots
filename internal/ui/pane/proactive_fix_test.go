@@ -70,7 +70,7 @@ func TestEnterExpandsAnUnseenDigestBeforeSending(t *testing.T) {
 		t.Fatalf("first enter should expand:\n%s", v)
 	}
 	press(m, "enter")
-	if len(fc.calls) != 1 || fc.calls[0].cmd != ipc.CmdSend || fc.calls[0].args != `{"ids":["7"]}` {
+	if len(fc.calls) != 1 || fc.calls[0].cmd != ipc.CmdSend || fc.calls[0].args != `{"ids":["7"],"parts":{"7":2}}` {
 		t.Fatalf("calls %+v", fc.calls)
 	}
 }

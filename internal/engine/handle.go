@@ -53,7 +53,7 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 		if err := decode(raw, &a); err != nil {
 			return err
 		}
-		return e.SendCards(a.IDs)
+		return e.SendCardsSeen(a.IDs, a.Parts)
 	case ipc.CmdDismiss:
 		var a ipc.CardArgs
 		if err := decode(raw, &a); err != nil {
