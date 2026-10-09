@@ -47,6 +47,8 @@ A stdio MCP server (`herdr-dots mcp`, official Go SDK v1.7+, MCP 2026-07-28 with
 
 ### Phase 6: Windows support
 
+**Status (0.6.0):** implemented. Cross-compiled for Windows and Linux and unit-tested on macOS; Windows-only tests compile but have not run. A real Windows run (CI on `windows-latest` and the Herdr Windows beta) is a user gate. The product is not done.
+
 Native support for the Herdr Windows beta, before the remaining feature phases so they're built cross-platform once. Named pipes (Herdr dial and engine IPC with a per-user ACL), `LockFileEx`, Job Objects for process-tree kills, detached engine start, DACL-based privacy for credentials and memory, PATHEXT and `.cmd` shim handling, system prompts moved off argv (on every OS) to avoid command-line limits, Windows paths for transcripts and client configs, and a three-OS CI matrix.
 
 ### Phase 7: Write-capable dots in sandboxed worktrees
