@@ -375,6 +375,25 @@ func TestNoProjectNoDotShowsWhy(t *testing.T) {
 	}
 }
 
+// Final review minor 12: a project name that sanitizes to nothing falls back
+// to the id, so an empty answer never confirms forget-all.
+func TestForgetAllTargetFallsBackToTheID(t *testing.T) {
+	st, n := seed(t), 0
+	m := New(Deps{Store: st, Project: memory.Project{ID: pid, Name: "\x1b\x07"}, Notify: func() { n++ }})
+	var tm tea.Model = run(m, m.Init())
+	tm = press(tm, "X", "enter")
+	if len(entries(t, st, memory.ScopeProject, "")) != 2 || n != 0 {
+		t.Fatalf("an empty answer forgot all project memory:\n%s", tm.View())
+	}
+	if !strings.Contains(press(tm, "X").View(), `Type "`+pid+`"`) {
+		t.Fatalf("the prompt must ask for the id:\n%s", press(tm, "X").View())
+	}
+	press(tm, "X", pid, "enter")
+	if es := entries(t, st, memory.ScopeProject, ""); len(es) != 0 || n != 1 {
+		t.Fatalf("typing the id confirms: %+v notified %d", es, n)
+	}
+}
+
 // Final review Important 2: approve shows the full proposal first.
 func TestApproveShowsTheFullProposalAndNeedsY(t *testing.T) {
 	st, n := seed(t), 0

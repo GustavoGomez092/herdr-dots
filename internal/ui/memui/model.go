@@ -448,11 +448,12 @@ func (m Model) forgetAllTarget() (memory.Scope, string, string, string) {
 	case viewGlobal:
 		return memory.ScopeGlobal, m.d.Dot, "", clean(m.d.Dot)
 	}
-	name := m.d.Project.Name
+	// A name that cleans to nothing would make an empty answer confirm.
+	name := clean(m.d.Project.Name)
 	if name == "" {
-		name = m.d.Project.ID
+		name = clean(m.d.Project.ID)
 	}
-	return memory.ScopeProject, "", m.d.Project.ID, clean(name)
+	return memory.ScopeProject, "", m.d.Project.ID, name
 }
 
 func (m Model) keysConfirmForgetAll(k tea.KeyMsg) (tea.Model, tea.Cmd) {
