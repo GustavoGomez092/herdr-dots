@@ -57,13 +57,18 @@ func ensureEngine(p paths.Paths) error {
 	if err != nil {
 		return err
 	}
-	logf, err := os.OpenFile(p.EngineLog(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logf, err := openEngineLog(p.EngineLog())
 	if err != nil {
 		return err
 	}
 	defer logf.Close()
 	cmd := exec.Command(exe, "engine")
-	cmd.Env = os.Environ()
+	// Don't inherit the spawner's cwd: dots with an empty attachment cwd would read it.
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		cmd.Dir = home
+	} else {
+		cmd.Dir = "/"
+	}
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // survive the hook/pane that started us
 	if err := cmd.Start(); err != nil {
@@ -86,6 +91,14 @@ func waitForSocket(path string, d time.Duration) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// openEngineLog rotates an oversized log and then opens it for the child's
+// stdout/stderr. Rotation must happen before the open, never while a child
+// holds the file.
+func openEngineLog(path string) (*os.File, error) {
+	rotateLog(path)
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 }
 
 func rotateLog(path string) {
@@ -141,7 +154,6 @@ func serveEngine(p paths.Paths) error {
 		return err
 	}
 	defer lock.Release()
-	rotateLog(p.EngineLog())
 	logger := log.New(os.Stderr, "herdr-dots ", log.LstdFlags)
 
 	cfg, err := config.Load(p.ConfigFile())

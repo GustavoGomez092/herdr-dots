@@ -73,15 +73,30 @@ func toggle(m map[string]string, target string, exists func(string) bool) (close
 	return "", true
 }
 
+// loadDotsPanes reads the main-pane -> Dots-pane map. It always returns a
+// non-nil map; a missing, null or corrupt file yields an empty one so a broken
+// file never blocks toggling.
+func loadDotsPanes(path string) (map[string]string, error) {
+	m := map[string]string{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return m, nil
+		}
+		return nil, err
+	}
+	if json.Unmarshal(data, &m) != nil || m == nil {
+		m = map[string]string{}
+	}
+	return m, nil
+}
+
 func togglePane(ctx context.Context, p paths.Paths, hc herdr.Client, target string) error {
 	if target == "" {
 		return errors.New("focus an agent pane first")
 	}
-	m := map[string]string{}
-	data, err := os.ReadFile(p.DotsPanesFile())
-	if err == nil {
-		_ = json.Unmarshal(data, &m)
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	m, err := loadDotsPanes(p.DotsPanesFile())
+	if err != nil {
 		return err
 	}
 	closeID, open := toggle(m, target, func(id string) bool {

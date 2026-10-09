@@ -57,3 +57,24 @@ func TestRotateLog(t *testing.T) {
 		t.Fatal("big log should rotate")
 	}
 }
+
+func TestOpenEngineLogRotatesBeforeOpening(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "engine.log")
+	old := make([]byte, maxLogBytes+1)
+	old[0] = 'X'
+	os.WriteFile(p, old, 0o600)
+	f, err := openEngineLog(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	bak, err := os.ReadFile(p + ".1")
+	if err != nil || len(bak) != len(old) || bak[0] != 'X' {
+		t.Fatalf("backup should hold old content: err=%v len=%d", err, len(bak))
+	}
+	f.WriteString("fresh")
+	got, _ := os.ReadFile(p)
+	if string(got) != "fresh" {
+		t.Fatalf("engine.log should be the fresh file, got %d bytes", len(got))
+	}
+}
