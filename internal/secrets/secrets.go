@@ -43,8 +43,31 @@ var entropyTokenRe = regexp.MustCompile(`[A-Za-z0-9+/=_\-]{32,}`)
 
 // Scan reports whether text looks like it contains a credential, and
 // which kind. Model-written memory that matches is refused; user-written
-// memory that matches needs a confirmation.
+// memory that matches needs a confirmation. Zero-width and other invisible
+// characters can split a key so no pattern matches ("sk-ant-\u200bapi03-…"),
+// so the text is scanned without them too.
 func Scan(text string) (bool, string) {
+	if found, kind := scan(text); found {
+		return true, kind
+	}
+	if visible := stripInvisible(text); visible != text {
+		return scan(visible)
+	}
+	return false, ""
+}
+
+// stripInvisible removes format characters (zero-width spaces and joiners,
+// word joiners, BOMs, soft hyphens, bidi controls) and combining marks.
+func stripInvisible(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.In(r, unicode.Cf, unicode.Mn, unicode.Me) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func scan(text string) (bool, string) {
 	for _, p := range secretPatterns {
 		if p.re.MatchString(text) {
 			return true, p.kind
