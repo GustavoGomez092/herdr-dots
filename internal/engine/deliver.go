@@ -8,6 +8,7 @@ import (
 	"herdr-dots/internal/delivery"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
+	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/view"
@@ -45,7 +46,11 @@ func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
 		case err != nil:
 			_ = e.d.Queue.Fail(c.ID, err.Error())
 		case gate == delivery.Now:
-			_ = e.d.Queue.SetStatus(c.ID, queue.StatusSent)
+			// Only cards the developer approved are accepted findings; inject
+			// deliveries were never approved.
+			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil && c.Approved {
+				e.spawnOutcome(c, memory.OutcomeSent)
+			}
 		case c.Status == queue.StatusPending:
 			_ = e.d.Queue.SetStatus(c.ID, queue.StatusAuto)
 		}
@@ -98,6 +103,7 @@ func (e *Engine) Dismiss(id string) error {
 	if err := e.d.Queue.SetStatus(id, queue.StatusDismissed); err != nil {
 		return err
 	}
+	e.spawnOutcome(c, memory.OutcomeDismissed)
 	e.reportPending(c.PaneID)
 	e.broadcast()
 	return nil
@@ -106,8 +112,16 @@ func (e *Engine) Dismiss(id string) error {
 func (e *Engine) Edit(id, body string) error {
 	e.dmu.Lock()
 	defer e.dmu.Unlock()
+	before, ok := e.d.Queue.Get(id)
 	if err := e.d.Queue.Edit(id, body); err != nil {
 		return err
+	}
+	if ok {
+		e.mu.Lock()
+		if _, seen := e.origBody[id]; !seen {
+			e.origBody[id] = before.Body // the ledger keeps what the dot said
+		}
+		e.mu.Unlock()
 	}
 	e.broadcast()
 	return nil
@@ -183,6 +197,8 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 		x.ForceScrollback = false
 		for i := range x.Dots {
 			x.Dots[i].LastSeenTurn = 0
+			x.Dots[i].MemorySeenTurn = 0 // turn indexes restart with the session
+			x.Dots[i].MemoryPasses = 0   // a per-session budget, like the call budgets
 			slugs = append(slugs, x.Dots[i].Slug)
 		}
 	})
@@ -206,6 +222,10 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 	if att, ok := e.d.Attachments.Get(a.PaneID); ok {
 		r := e.reader(att)
 		_ = e.d.Attachments.Update(a.PaneID, func(x *state.Attachment) { x.Source = r.Source() })
+	}
+	if e.memEnabled() {
+		cwd := p.WorkDir()
+		e.spawn(func() { e.reresolve(a.PaneID, cwd) }) // runs git: never under the pane lock
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/memory"
 )
 
 func decode(raw json.RawMessage, v any) error {
@@ -83,6 +84,15 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 			return err
 		}
 		return e.SetPaused(a.PaneID, a.Slug, a.Paused)
+	case ipc.CmdRemember:
+		var a ipc.RememberArgs
+		if err := decode(raw, &a); err != nil {
+			return err
+		}
+		return e.Remember(a.CardID, memory.RememberAs(a.As), a.Reason)
+	case ipc.CmdMemoryChanged:
+		e.MemoryChanged()
+		return nil
 	}
 	return fmt.Errorf("unknown command %q", cmd)
 }

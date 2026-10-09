@@ -13,6 +13,7 @@ import (
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
+	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
@@ -35,6 +36,9 @@ type Deps struct {
 	Logf         func(format string, args ...any)
 	PollInterval time.Duration // 0 → 3s
 	MaxFailures  int           // 0 → 3
+
+	Memory         *memory.Store                            // nil = memory off (v1 behavior)
+	ResolveProject func(cwd string) (memory.Project, error) // nil = memory.ResolveProject with git
 }
 
 type key struct{ pane, slug string }
@@ -43,6 +47,8 @@ type runOpts struct {
 	forceQueue bool   // the turn was started by a dot: never auto-inject
 	summon     bool   // manual summon: always a card, bypasses running flags
 	question   string // summon question
+	memoryPass bool   // observe dot's memory-only pass: never a card
+	seenTo     int    // memory pass: MemorySeenTurn once it succeeds
 }
 
 // Engine owns all live state. Lock order: e.mu → store mutexes (stores never
@@ -74,6 +80,12 @@ type Engine struct {
 	cfgChecked time.Time
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
+
+	// Memory state, guarded by mu. Memory I/O never happens under mu.
+	learning map[key]bool            // a memory pass is running
+	memStats map[string]memory.Stats // by project id, for snapshots
+	origBody map[string]string       // card id → body before its first edit
+	memToast bool                    // "memory write failed" already shown
 
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
@@ -115,6 +127,11 @@ func New(d Deps) *Engine {
 	if d.MaxFailures <= 0 {
 		d.MaxFailures = 3
 	}
+	if d.Memory != nil && d.ResolveProject == nil {
+		d.ResolveProject = func(cwd string) (memory.Project, error) {
+			return memory.ResolveProject(context.Background(), cwd, memory.ExecGit)
+		}
+	}
 	e := &Engine{
 		d:        d,
 		ctx:      context.Background(),
@@ -128,6 +145,9 @@ func New(d Deps) *Engine {
 		watchers: map[int]chan view.Snapshot{},
 		paneMu:   map[string]*sync.Mutex{},
 		sem:      make(chan struct{}, max(1, d.Config.MaxParallelRuns)),
+		learning: map[key]bool{},
+		memStats: map[string]memory.Stats{},
+		origBody: map[string]string{},
 	}
 	if e.d.ConfigCheck <= 0 {
 		e.d.ConfigCheck = 3 * time.Second
@@ -184,6 +204,9 @@ func (e *Engine) Start(ctx context.Context) {
 		e.subscribe(a.PaneID)
 	}
 	e.spawn(e.pollLoop)
+	if e.d.Memory != nil {
+		e.spawn(e.memoryLoop)
+	}
 }
 
 func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) error {
@@ -193,6 +216,12 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	}
 	if p.Agent == "" {
 		return fmt.Errorf("pane %s has no coding agent: dots attach to agent panes only", paneID)
+	}
+	// Resolve the memory project before taking the pane lock (it runs git).
+	// With memory_enabled = false nothing runs and nothing is recorded.
+	var pr memory.Project
+	if prev, ok := e.d.Attachments.Get(paneID); e.memEnabled() && (!ok || prev.ProjectID == "") {
+		pr = e.resolve(p.WorkDir())
 	}
 	pl := e.paneLock(paneID)
 	pl.Lock()
@@ -204,6 +233,7 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	if p.AgentSession != nil {
 		base.SessionKind, base.SessionValue = p.AgentSession.Kind, p.AgentSession.Value
 	}
+	base.ProjectID, base.ProjectName = pr.ID, pr.Name
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
 		att = base
@@ -221,13 +251,18 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 			e.mu.Unlock()
 			return fmt.Errorf("unknown dot %q", slug)
 		}
-		// Catch-up: the newest Context.Turns turns count as "new" for this dot.
-		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: max(0, len(turns)-d.Context.Turns)})
+		// Catch-up: the newest Context.Turns turns count as "new" for this dot
+		// (memory passes start counting from the same place).
+		seen := max(0, len(turns)-d.Context.Turns)
+		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: seen, MemorySeenTurn: seen})
 	}
 	// Update-or-create in one store call: runFailed, cooldown or Detach updates
 	// made while the transcript was read are kept, not overwritten.
 	err = e.d.Attachments.Upsert(base, func(x *state.Attachment) {
 		x.Source = r.Source()
+		if x.ProjectID == "" && pr.ID != "" {
+			x.ProjectID, x.ProjectName = pr.ID, pr.Name
+		}
 		for _, da := range add {
 			if x.Find(da.Slug) == nil {
 				x.Dots = append(x.Dots, da)
@@ -238,6 +273,9 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	e.mu.Unlock()
 	if err != nil {
 		return err
+	}
+	if pr.ID != "" {
+		e.spawn(func() { e.seeProject(pr) })
 	}
 	e.subscribe(paneID)
 	e.spawn(func() { e.processPaneIfIdle(paneID) })
@@ -365,6 +403,8 @@ type job struct {
 	dot        dots.Dot
 	turns      []transcript.Turn
 	forceQueue bool
+	memoryPass bool
+	seenTo     int
 }
 
 // processPane reads the transcript and starts a run for every dot whose
@@ -379,7 +419,9 @@ func (e *Engine) processPane(paneID string) {
 		e.notify(d, "budget reached; resets on a new agent session or press r")
 	}
 	for _, j := range jobs {
-		e.spawn(func() { e.runDot(paneID, j.dot, j.turns, runOpts{forceQueue: j.forceQueue}) })
+		e.spawn(func() {
+			e.runDot(paneID, j.dot, j.turns, runOpts{forceQueue: j.forceQueue, memoryPass: j.memoryPass, seenTo: j.seenTo})
+		})
 	}
 	e.broadcast()
 }
@@ -423,6 +465,9 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 			}
 			start := min(da.LastSeenTurn, len(turns))
 			newTurns := turns[start:]
+			if da.MemorySeenTurn > len(turns) {
+				da.MemorySeenTurn = len(turns) // follow a replaced, shorter reader down
+			}
 			if len(newTurns) == 0 {
 				da.LastSeenTurn = len(turns)
 				continue
@@ -447,6 +492,18 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 					e.warned[k] = true
 					budgetHit = append(budgetHit, d)
 				}
+			}
+			if dec.Reason == ReasonObserve && e.memOn(d) {
+				memTurns := turns[da.MemorySeenTurn:]
+				if DecideMemory(MemoryInput{
+					Dot: d, Att: *da, NewTurns: memTurns, PausedAll: e.pausedAll, MemoryEnabled: e.config().MemoryEnabled,
+					DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls, PaneBudget: e.config().SessionBudgetCalls,
+				}) {
+					e.running[k] = true
+					paneCalls++
+					jobs = append(jobs, job{dot: d, turns: tail(memTurns, min(20, 2*d.Context.Turns)), memoryPass: true, seenTo: len(turns)})
+				}
+				continue
 			}
 			if !dec.Run {
 				continue
@@ -493,6 +550,7 @@ func (e *Engine) upgradeFromScrollback(att state.Attachment) state.Attachment {
 		a.Source = nr.Source()
 		for i := range a.Dots {
 			a.Dots[i].LastSeenTurn = seen
+			a.Dots[i].MemorySeenTurn = seen // scrollback turn numbers don't carry over
 		}
 	})
 	if err != nil || !applied {
@@ -524,7 +582,15 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	}
 	defer func() { <-e.sem }()
 
-	e.setStatus(k, view.StatusThinking)
+	if o.memoryPass {
+		if !e.memOn(d) {
+			return // memory was turned off after the pass was scheduled
+		}
+		e.setLearning(k, true)
+		defer e.setLearning(k, false)
+	} else {
+		e.setStatus(k, view.StatusThinking)
+	}
 	att, _ := e.d.Attachments.Get(paneID)
 	turn := 0
 	if len(turns) > 0 {
@@ -535,26 +601,55 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		e.runFailed(k, d, turn, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
-	defer cancel()
-	res, err := be.Run(ctx, backend.Request{
+	mem := e.loadMemory(&att, d, turns) // outside every engine lock
+	req := backend.Request{
 		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
 		Model: d.Backend.Model, Args: d.Backend.Args, RepoRead: d.Context.RepoRead,
 		Cwd: att.Cwd, Turns: turns, Question: o.question, Force: o.summon,
-	})
+		Memory: mem.block, Learn: mem.learn,
+	}
+	if o.memoryPass {
+		req.Pass, req.RepoRead, req.Question, req.Force = backend.PassMemory, false, "", false
+	}
+	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
+	defer cancel()
+	res, err := be.Run(ctx, req)
 	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
 	if err != nil {
 		e.runFailed(k, d, turn, err)
 		return
 	}
+	e.touchMemory(mem)
 	_ = e.d.Attachments.Update(paneID, func(a *state.Attachment) {
 		if da := a.Find(d.Slug); da != nil {
 			da.Failures = 0
-			if res.Verdict.Relevant {
+			switch {
+			case o.memoryPass:
+				da.MemoryPasses++
+				if a.SessionValue == att.SessionValue && o.seenTo > da.MemorySeenTurn {
+					da.MemorySeenTurn = o.seenTo
+				}
+			case res.Verdict.Relevant:
 				da.CooldownLeft = d.Trigger.Cooldown
 			}
 		}
 	})
+	if o.memoryPass {
+		if e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, true) == 0 {
+			e.feed(paneID, d.Slug, turn, state.OutcomePass, "memory pass: nothing new")
+		}
+		return
+	}
+	e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, false)
+	if res.Verdict.Relevant && !o.summon {
+		// Anti-repeat uses the candidates loaded before the run, so the ops
+		// just applied never suppress their own verdict.
+		if ref, ok := suppressedBy(mem, res.Verdict.Message, turn, att.SessionValue); ok {
+			e.feed(paneID, d.Slug, turn, state.OutcomeSuppressed, "similar to "+ref)
+			e.setStatus(k, view.StatusPassed)
+			return
+		}
+	}
 	if !res.Verdict.Relevant {
 		e.feed(paneID, d.Slug, turn, state.OutcomePass, "")
 		e.setStatus(k, view.StatusPassed)
@@ -604,8 +699,9 @@ func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o
 	if mode == dots.ModeInject && (o.forceQueue || !e.config().InjectEnabled) {
 		mode = dots.ModeQueue
 	}
+	att, _ := e.d.Attachments.Get(paneID)
 	c := queue.Card{Dot: d.Slug, DotName: d.Name, Glyph: d.Glyph, PaneID: paneID, Turn: turn,
-		Severity: v.Severity, Body: v.Message, Mode: string(mode)}
+		Severity: v.Severity, Body: v.Message, Mode: string(mode), Project: att.ProjectID}
 	if mode == dots.ModeInject {
 		c.Status = queue.StatusAuto
 	}
@@ -663,8 +759,10 @@ func (e *Engine) Snapshot() view.Snapshot {
 	}
 	seen := map[string]bool{}
 	for _, a := range e.d.Attachments.List() {
+		ms := e.memStats[a.ProjectID]
 		pv := view.Pane{PaneID: a.PaneID, Agent: a.Agent, Source: a.Source,
-			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls}
+			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls,
+			ProjectID: a.ProjectID, ProjectName: a.ProjectName, MemoryEntries: ms.Total(), MemoryProposals: ms.Proposals}
 		for _, da := range a.Dots {
 			d, ok := e.dots[da.Slug]
 			if !ok {
@@ -679,7 +777,8 @@ func (e *Engine) Snapshot() view.Snapshot {
 			}
 			pv.Dots = append(pv.Dots, view.DotState{Slug: da.Slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
 				Mode: string(d.Delivery.Mode), Status: st, Paused: da.Paused,
-				Calls: e.d.Usage.Calls(a.PaneID, da.Slug), Budget: d.Budget.MaxCallsPerSession})
+				Calls: e.d.Usage.Calls(a.PaneID, da.Slug), Budget: d.Budget.MaxCallsPerSession,
+				MemoryEntries: ms.Entries[da.Slug], Learning: e.learning[key{a.PaneID, da.Slug}]})
 		}
 		pv.Cards = e.d.Queue.Visible(a.PaneID)
 		pv.Feed = e.d.Feed.Recent(a.PaneID, 20)
