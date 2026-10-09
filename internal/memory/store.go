@@ -535,11 +535,19 @@ func (s *Store) capFor(sc Scope) int {
 // whole cap, and a new one archives nothing. MaxPendingImports bounds them
 // instead, so a scope exceeds its cap by at most that many. Restored entries
 // (Source import, no From) count like any other.
+//
+// Approved imports (Source import, active; ruling P9-R15) are someone else's
+// conclusions: they go after research and before every other entry, oldest
+// or lowest value first, so they never push out the developer's own outcome
+// entries. When keep is itself an approved import (Update approving one into
+// a full scope) and no research or other approved import can make room, keep
+// is archived instead of a local entry, like research.
 func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) int {
 	if limit <= 0 {
 		return 0
 	}
-	live, active, keepProposed, keepResearch, keepAt := 0, 0, false, false, -1
+	live, active, keepProposed, keepAt := 0, 0, false, -1
+	keepRank := capRankNone // what keep may push out: entries of its rank or lower
 	var proposed, cands []int
 	for i, e := range f.Entries {
 		if e.Status == StatusArchived {
@@ -557,7 +565,9 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		}
 		if e.ID == keep {
 			keepProposed = e.Status == StatusProposed
-			keepResearch = isResearchKind(e.Kind) && !e.Pinned && e.Source != SourceUser
+			if r := capRank(e); r < capRankRest && !e.Pinned && e.Source != SourceUser {
+				keepRank = r
+			}
 			keepAt = i
 			continue
 		}
@@ -575,9 +585,9 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 	}
 	archive := func(i int) { f.Entries[i].Status, f.Entries[i].UpdatedAt = StatusArchived, now }
 	sort.SliceStable(proposed, func(a, b int) bool {
-		ra, rb := isResearchKind(f.Entries[proposed[a]].Kind), isResearchKind(f.Entries[proposed[b]].Kind)
+		ra, rb := capRank(f.Entries[proposed[a]]), capRank(f.Entries[proposed[b]])
 		if ra != rb {
-			return ra
+			return ra < rb
 		}
 		return f.Entries[proposed[a]].CreatedAt.Before(f.Entries[proposed[b]].CreatedAt)
 	})
@@ -586,16 +596,16 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		if live-n <= limit {
 			break
 		}
-		if keepResearch && !isResearchKind(f.Entries[i].Kind) {
-			break // research never pushes out an unreviewed non-research proposal
+		if capRank(f.Entries[i]) > keepRank {
+			break // research or an import never pushes out an unreviewed local proposal
 		}
 		archive(i)
 		n++
 	}
-	// yield archives the incoming research entry when nothing of research
-	// kind is left to make room.
+	// yield archives the incoming research entry or approved import when
+	// nothing of its rank or lower is left to make room.
 	yield := func() int {
-		if keepResearch && live-n > limit {
+		if keepRank != capRankNone && live-n > limit {
 			archive(keepAt)
 			n++
 		}
@@ -606,20 +616,38 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		return yield()
 	}
 	sort.SliceStable(cands, func(a, b int) bool {
-		ra, rb := isResearchKind(f.Entries[cands[a]].Kind), isResearchKind(f.Entries[cands[b]].Kind)
+		ra, rb := capRank(f.Entries[cands[a]]), capRank(f.Entries[cands[b]])
 		if ra != rb {
-			return ra
+			return ra < rb
 		}
 		return capScore(f.Entries[cands[a]], now) < capScore(f.Entries[cands[b]], now)
 	})
 	for _, i := range cands[:min(over, len(cands))] {
-		if keepResearch && !isResearchKind(f.Entries[i].Kind) {
+		if capRank(f.Entries[i]) > keepRank {
 			break
 		}
 		archive(i)
 		n++
 	}
 	return yield()
+}
+
+// Eviction ranks: lower goes first.
+const (
+	capRankResearch = iota // research and questions (Phase 8)
+	capRankImport          // approved imports (P9-R15)
+	capRankRest            // everything else
+	capRankNone            // keep pushes out anything (not a yielding keep)
+)
+
+func capRank(e Entry) int {
+	switch {
+	case isResearchKind(e.Kind):
+		return capRankResearch
+	case e.Source == SourceImport && e.Status == StatusActive:
+		return capRankImport
+	}
+	return capRankRest
 }
 
 func isResearchKind(k Kind) bool { return k == KindResearch || k == KindQuestion }
@@ -677,6 +705,9 @@ func (s *Store) Get(p string, r Ref) (Entry, error) {
 
 // Update applies fn to one entry and saves it. fn may change text, kind,
 // paths, status and pinned; id, scope and (for dot/global scope) dot are kept.
+// The scope's cap is enforced as on Add (enforceCap): an approved import
+// that finds the scope full is archived rather than a local entry, and the
+// returned entry says so.
 func (s *Store) Update(p string, r Ref, fn func(*Entry) error) (Entry, error) {
 	var out Entry
 	err := s.mutate(p, r.Scope, r.Dot, func(f *scopeFile) error {
@@ -697,9 +728,15 @@ func (s *Store) Update(p string, r Ref, fn func(*Entry) error) (Entry, error) {
 		if err != nil {
 			return err
 		}
-		e.UpdatedAt = s.now()
+		now := s.now()
+		e.UpdatedAt = now
 		f.Entries[i] = e
-		out = e
+		// An approval may take the scope over its cap: enforce it here so a
+		// later local add never pays for it (P9-R15).
+		if n := s.enforceCap(f, s.capFor(r.Scope), e.ID, now); n > 0 {
+			s.logf("memory: archived %d %s entries over the cap", n, r.Scope)
+		}
+		out = f.Entries[i]
 		return nil
 	})
 	return out, err
