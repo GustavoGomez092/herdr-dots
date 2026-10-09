@@ -45,6 +45,8 @@ type councilRun struct {
 	skipped  []council.Part // ineligible members: "not heard from"
 	ctx      context.Context
 	cancel   context.CancelFunc
+	result   func(parts []council.Part, body, note string) // ask_council (Phase 5): the digest instead of a card
+	finished chan struct{}                                 // closed when runCouncil ends (ask_council waits on it)
 
 	phase     string
 	round     int
@@ -151,26 +153,40 @@ func callsLeft(budget, used int) int {
 // question in parallel and turns their answers into one council card. It
 // returns the council id at once; the council runs in the background.
 func (e *Engine) Council(ctx context.Context, paneID, question string, slugs []string) (string, error) {
+	run, err := e.startCouncil(ctx, paneID, question, slugs, nil)
+	if err != nil {
+		return "", err
+	}
+	return run.id, nil
+}
+
+// startCouncil plans and starts a council. With result set (ask_council,
+// Phase 5) the merged digest goes to result instead of a queue card; either
+// way run.finished closes when the council ends. nil slugs means every
+// eligible attached dot (ask_council always passes nil: it never relies on an
+// empty list, which CouncilArgs drops on the wire).
+func (e *Engine) startCouncil(ctx context.Context, paneID, question string, slugs []string, result func(parts []council.Part, body, note string)) (*councilRun, error) {
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
-		return "", fmt.Errorf("%w: %s", state.ErrNoAttachment, paneID)
+		return nil, fmt.Errorf("%w: %s", state.ErrNoAttachment, paneID)
 	}
 	if e.councilBusy(paneID) {
-		return "", ErrCouncilRunning
+		return nil, ErrCouncilRunning
 	}
 	pf, members, skipped := e.councilPlan(att, slugs)
 	if !pf.Allowed {
-		return "", errors.New(pf.Refusal)
+		return nil, errors.New(pf.Refusal)
 	}
 	turns, err := e.reader(att).Turns(ctx)
 	if err != nil {
-		return "", fmt.Errorf("read conversation: %w", err)
+		return nil, fmt.Errorf("read conversation: %w", err)
 	}
 	q := []rune(strings.TrimSpace(textutil.SanitizeModelText(question)))
 	if len(q) > maxQuestionChars {
 		q = q[:maxQuestionChars]
 	}
-	run := &councilRun{paneID: paneID, question: string(q), rounds: pf.Rounds, turns: turns, members: members, skipped: skipped}
+	run := &councilRun{paneID: paneID, question: string(q), rounds: pf.Rounds, turns: turns, members: members, skipped: skipped,
+		result: result, finished: make(chan struct{})}
 	if len(turns) > 0 {
 		run.turn = turns[len(turns)-1].Index
 	}
@@ -179,7 +195,7 @@ func (e *Engine) Council(ctx context.Context, paneID, question string, slugs []s
 	if e.councils[paneID] != nil {
 		e.mu.Unlock()
 		run.cancel()
-		return "", ErrCouncilRunning
+		return nil, ErrCouncilRunning
 	}
 	if e.councils == nil {
 		e.councils = map[string]*councilRun{}
@@ -195,11 +211,11 @@ func (e *Engine) Council(ctx context.Context, paneID, question string, slugs []s
 	if _, ok := e.d.Attachments.Get(paneID); !ok {
 		e.abandonCouncil(paneID)
 		e.broadcast()
-		return "", fmt.Errorf("%w: %s", state.ErrNoAttachment, paneID)
+		return nil, fmt.Errorf("%w: %s", state.ErrNoAttachment, paneID)
 	}
 	e.broadcast()
 	e.spawn(func() { e.runCouncil(run) })
-	return run.id, nil
+	return run, nil
 }
 
 func (e *Engine) councilBusy(paneID string) bool {
@@ -212,6 +228,7 @@ func (e *Engine) councilBusy(paneID string) bool {
 // card. Members share one deadline (run timeout × rounds); the chair gets one
 // more run timeout.
 func (e *Engine) runCouncil(run *councilRun) {
+	defer close(run.finished) // runs after endCouncil: the council is forgotten when finished closes
 	defer e.endCouncil(run)
 	mctx, cancel := context.WithTimeout(run.ctx, e.councilMemberWait(run.rounds))
 	defer cancel()
@@ -234,6 +251,10 @@ func (e *Engine) runCouncil(run *councilRun) {
 	e.setCouncilProgress(run, view.CouncilMerging, run.rounds, 0, 0)
 	body, note := e.mergeCouncil(run, all)
 	if e.councilLost(run) {
+		return
+	}
+	if run.result != nil {
+		run.result(all, body, note) // ask_council: the digest goes back to the agent, no card
 		return
 	}
 	e.addCouncilCard(run, all, body, note)
