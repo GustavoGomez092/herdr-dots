@@ -56,13 +56,20 @@ func (p Paths) FeedFile() string        { return filepath.Join(p.SessionDir, "fe
 func (p Paths) UsageFile() string       { return filepath.Join(p.SessionDir, "usage.json") }
 func (p Paths) DotsPanesFile() string   { return filepath.Join(p.SessionDir, "dotspanes.json") }
 
+// HistoryDir holds per-dot history (Phase 9). Like memory it is shared by
+// every named Herdr session, so it is not under SessionDir.
+func (p Paths) HistoryDir() string { return filepath.Join(p.StateDir, "history") }
+
+// TrustFile records which project dot files the developer trusts (Phase 9).
+func (p Paths) TrustFile() string { return filepath.Join(p.ConfigDir, "trusted.json") }
+
 // WorktreesDir holds drafts' transient worktrees (outside every repository);
 // PatchesDir holds drafted patches and their metadata.
 func (p Paths) WorktreesDir() string { return filepath.Join(p.SessionDir, "worktrees") }
 func (p Paths) PatchesDir() string   { return filepath.Join(p.SessionDir, "patches") }
 
 func (p Paths) Ensure() error {
-	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir, p.MemoryDir()} {
+	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir, p.MemoryDir(), p.HistoryDir()} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}

@@ -13,16 +13,16 @@ var redactions = []struct {
 	repl string
 }{
 	// Provider key shapes. sk-ant- and sk-or- come before the generic sk-.
-	{regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_\-]{6,}`), "sk-ant-" + Redacted},
-	{regexp.MustCompile(`\bsk-or-[A-Za-z0-9_\-]{6,}`), "sk-or-" + Redacted},
-	{regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{12,}`), "sk-" + Redacted},
+	{regexp.MustCompile(`(^|[^A-Za-z])sk-ant-[A-Za-z0-9_\-]{6,}`), "${1}sk-ant-" + Redacted},
+	{regexp.MustCompile(`(^|[^A-Za-z])sk-or-[A-Za-z0-9_\-]{6,}`), "${1}sk-or-" + Redacted},
+	{regexp.MustCompile(`(^|[^A-Za-z])sk-[A-Za-z0-9_\-]{12,}`), "${1}sk-" + Redacted},
 	// Shapes internal/memory.ScanSecrets detects (kept in step by a test there).
-	{regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})`), "gh-" + Redacted},
-	{regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), "aws-" + Redacted},
-	{regexp.MustCompile(`\bxox[abprs]-[A-Za-z0-9-]{10,}`), "xox-" + Redacted},
-	{regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`), "stripe-" + Redacted},
-	{regexp.MustCompile(`\bglpat-[A-Za-z0-9_\-]{20,}`), "glpat-" + Redacted},
-	{regexp.MustCompile(`\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`), "${1}" + Redacted + "@"},
+	{regexp.MustCompile(`(^|[^A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})`), "${1}gh-" + Redacted},
+	{regexp.MustCompile(`(^|[^A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}\b`), "${1}aws-" + Redacted},
+	{regexp.MustCompile(`(^|[^A-Za-z0-9])xox[abprs]-[A-Za-z0-9-]{10,}`), "${1}xox-" + Redacted},
+	{regexp.MustCompile(`(^|[^A-Za-z0-9])[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`), "${1}stripe-" + Redacted},
+	{regexp.MustCompile(`(^|[^A-Za-z0-9])glpat-[A-Za-z0-9_\-]{20,}`), "${1}glpat-" + Redacted},
+	{regexp.MustCompile(`(^|[^A-Za-z0-9])([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`), "${1}${2}" + Redacted + "@"},
 	// Authorization: Bearer <token>
 	{regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=\-]{16,}`), "${1}" + Redacted},
 	// api_key=…, "api_key": "…", x-api-key: …, authorization: …
