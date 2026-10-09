@@ -484,7 +484,7 @@ func (m Model) View() string {
 	for i, d := range p.Dots {
 		status := d.Status
 		if d.Learning {
-			status = "◌ learning…"
+			status = style.Sym("◌") + " learning" + style.Sym("…")
 		}
 		rest := fmt.Sprintf("%-12s %-8s %s", trunc(d.Name, 12), d.Mode, status) + dotCost(d)
 		line := style.Glyph(d.Glyph, d.Color) + " " + trunc(rest, max(10, w-2))
