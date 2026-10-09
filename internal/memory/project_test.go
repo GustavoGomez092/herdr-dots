@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -145,6 +146,30 @@ func TestExecGitNeverRunsHooks(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("a repo hook ran through ExecGit")
+	}
+}
+
+// Defence in depth: a repository's config can't make ExecGit run a program
+// (fsmonitor, hooks) or reach a remote (lazy fetch in a partial clone, any
+// transport), whatever the inherited environment says.
+func TestExecGitHardening(t *testing.T) {
+	isolateGit(t)
+	repo := newRepo(t, 1)
+	for k, want := range map[string]string{"core.fsmonitor": "false", "core.hooksPath": os.DevNull, "protocol.allow": "never"} {
+		if v, _ := ExecGit(context.Background(), repo, "config", k); v != want {
+			t.Errorf("%s = %q, want %q", k, v, want)
+		}
+	}
+	out := gitEnv([]string{"PATH=/bin", "GIT_ALLOW_PROTOCOL=file:https", "GIT_NO_LAZY_FETCH=0"})
+	for _, want := range []string{"GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=none"} {
+		if !slices.Contains(out, want) {
+			t.Errorf("missing %s: %v", want, out)
+		}
+	}
+	for _, bad := range []string{"GIT_ALLOW_PROTOCOL=file:https", "GIT_NO_LAZY_FETCH=0"} {
+		if slices.Contains(out, bad) {
+			t.Errorf("inherited %s survived: %v", bad, out)
+		}
 	}
 }
 

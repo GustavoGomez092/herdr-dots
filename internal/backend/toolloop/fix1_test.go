@@ -108,6 +108,30 @@ func TestGitEnvStripsOverrides(t *testing.T) {
 	}
 }
 
+// Defence in depth (Phase 8 final wave): list_files' git run has fsmonitor
+// off, hooks off and every transport refused, and an inherited environment
+// can't re-enable lazy fetching or a protocol.
+func TestGitFilesHardening(t *testing.T) {
+	args := strings.Join(gitFilesArgs("/r/.git", "/r"), "\x00")
+	for _, want := range []string{"-c\x00core.fsmonitor=false", "-c\x00core.hooksPath=" + os.DevNull, "-c\x00protocol.allow=never"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("git args lack %q: %q", want, args)
+		}
+	}
+	env := gitEnv([]string{"PATH=/bin", "GIT_ALLOW_PROTOCOL=file:https", "GIT_NO_LAZY_FETCH=0"})
+	joined := "\n" + strings.Join(env, "\n") + "\n"
+	for _, want := range []string{"\nGIT_NO_LAZY_FETCH=1\n", "\nGIT_ALLOW_PROTOCOL=none\n"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("env lacks %q: %v", strings.TrimSpace(want), env)
+		}
+	}
+	for _, bad := range []string{"GIT_ALLOW_PROTOCOL=file:https", "GIT_NO_LAZY_FETCH=0"} {
+		if strings.Contains(joined, bad) {
+			t.Errorf("inherited %s survived: %v", bad, env)
+		}
+	}
+}
+
 // Important 3.
 func TestDefaultDenyCoversCommonCredentialFiles(t *testing.T) {
 	for _, rel := range []string{"id_dsa", "home/.ssh/config", ".ssh/known_hosts", "u/.gnupg/pubring.kbx", ".aws/config", "u/.config/gh/hosts.yml",

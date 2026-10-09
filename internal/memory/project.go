@@ -29,10 +29,13 @@ type GitRunner func(ctx context.Context, dir string, args ...string) (string, er
 var gitTimeout = 5 * time.Second
 
 // ExecGit runs git with hooks disabled (core.hooksPath is the null device:
-// /dev/null, or NUL on Windows), no terminal prompts, no optional locks and,
+// /dev/null, or NUL on Windows), fsmonitor off, every transport refused
+// (protocol.allow=never, GIT_ALLOW_PROTOCOL=none, GIT_NO_LAZY_FETCH=1: a
+// partial clone never fetches), no terminal prompts, no optional locks and,
 // on Windows, no console window.
 func ExecGit(ctx context.Context, dir string, args ...string) (string, error) {
-	full := append([]string{"-C", dir, "-c", "core.hooksPath=" + platform.DevNull}, args...)
+	full := append([]string{"-C", dir, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + platform.DevNull,
+		"-c", "protocol.allow=never"}, args...)
 	cmd, err := platform.CommandContext(ctx, "git", full)
 	if err != nil {
 		return "", err
@@ -49,7 +52,7 @@ func ExecGit(ctx context.Context, dir string, args ...string) (string, error) {
 // filter: importing internal/backend here would be an import cycle.) Names
 // compare in platform.EnvKey form, so case-insensitively on Windows.
 func gitEnv(env []string) []string {
-	out := make([]string, 0, len(env)+3)
+	out := make([]string, 0, len(env)+5)
 	for _, kv := range env {
 		raw, _, _ := strings.Cut(kv, "=")
 		name := platform.EnvKey(raw)
@@ -59,12 +62,14 @@ func gitEnv(env []string) []string {
 		switch name {
 		case "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION",
 			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
-			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GIT_ALLOW_PROTOCOL", "GIT_NO_LAZY_FETCH":
 			continue
 		}
 		out = append(out, kv)
 	}
-	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
+	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=none")
 }
 
 // ResolveProject identifies the project cwd belongs to: the lowest root commit
