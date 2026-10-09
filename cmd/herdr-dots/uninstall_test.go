@@ -164,17 +164,100 @@ func TestSafeToPurgeRefusesOrdinaryDirectoriesUnderHome(t *testing.T) {
 			t.Errorf("safeToPurge(~/%s) = true", d)
 		}
 	}
-	// A dir holding a plugin marker is fine whatever it is called.
-	for name, mk := range map[string]string{"cfg": ".state-dir", "cfg2": "credentials.toml", "cfg3": filepath.Join("dots", "x.toml"), "st": filepath.Join("memory", "g"), "st2": filepath.Join("0123456789ab", "engine.lock")} {
-		d := filepath.Join(home, "elsewhere", name)
+	// Generic markers alone are not enough, anywhere.
+	for name, mk := range map[string]string{
+		filepath.Join("Library", "Caches"): filepath.Join("0123456789ab", "x"),
+		filepath.Join("code", "notes"):     filepath.Join("memory", "g"),
+		filepath.Join("code", "other"):     filepath.Join("dots", "x.toml"),
+		filepath.Join("code", "cfg"):       "credentials.toml",
+	} {
+		d := filepath.Join(home, name)
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(d, mk)), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(d, mk), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if !safeToPurge(d, home) {
-			t.Errorf("a dir with marker %s must be purgeable", mk)
+		if safeToPurge(d, home) {
+			t.Errorf("~/%s with marker %s must be refused", name, mk)
+		}
+	}
+}
+
+func TestSafeToPurgeRefusesAliasesOfFirstLevelHomeDirs(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home", "me")
+	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "alias")
+	if err := os.Symlink(filepath.Join(home, ".config"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if safeToPurge(link, home) {
+		t.Error("a symlink to ~/.config must be refused")
+	}
+	homeLink := filepath.Join(base, "homelink")
+	if err := os.Symlink(home, homeLink); err != nil {
+		t.Skip(err)
+	}
+	if safeToPurge(homeLink, home) {
+		t.Error("a link to home must be refused")
+	}
+	// On a case-insensitive filesystem ~/.CONFIG is ~/.config.
+	if _, err := os.Stat(filepath.Join(home, ".CONFIG")); err == nil && safeToPurge(filepath.Join(home, ".CONFIG"), home) {
+		t.Error("a case variant of ~/.config must be refused")
+	}
+}
+
+func TestPurgeAcceptsARealPluginLayoutAndRefusesAMismatchedOne(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home", "me")
+	cfg := filepath.Join(home, ".config", "herdr", "plugins", "cfgdir")
+	st := filepath.Join(home, ".local", "state", "stdir")
+	other := filepath.Join(home, ".local", "state", "elsewhere")
+	for _, d := range []string{cfg, st, other} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u := uninstallIO{home: home, keysPath: filepath.Join(home, ".config", "herdr", "config.toml")}
+	p := paths.New(cfg, st, "/tmp/h.sock")
+	if err := purgePreflight(u, p); err == nil {
+		t.Fatal("names that are not herdr-dots and no pointer: refuse")
+	}
+	if err := os.WriteFile(filepath.Join(cfg, ".state-dir"), []byte(st+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := purgePreflight(u, p); err != nil {
+		t.Fatalf("a layout whose .state-dir names the state dir: %v", err)
+	}
+	if err := purgePreflight(u, paths.New(cfg, other, "/tmp/h.sock")); err == nil {
+		t.Fatal("a state dir that the pointer does not name must be refused")
+	}
+}
+
+func TestUninstallPreviewNeverListsAUserLineWhenTheConfigHadNoTrailingNewline(t *testing.T) {
+	r := newUninstallRig(t, "n\n")
+	user := strings.TrimSuffix(herdrConfig, "\n") // setup-keys's leading newline ended this last line
+	if err := os.WriteFile(r.u.keysPath, []byte(user+keys.Block(keys.Defaults())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uninstallExtras(nil, r.u); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Split(strings.TrimPrefix(keys.Block(keys.Defaults()), "\n"), "\n")
+	for _, l := range strings.Split(r.out.String(), "\n") {
+		if !strings.HasPrefix(l, "- ") && l != "-" {
+			continue
+		}
+		body := strings.TrimPrefix(strings.TrimPrefix(l, "-"), " ")
+		found := false
+		for _, w := range want {
+			found = found || w == body
+		}
+		if !found {
+			t.Errorf("preview lists a line that is not ours: %q", l)
 		}
 	}
 }
@@ -306,6 +389,29 @@ func TestRefusedPurgeLeavesMCPAndKeysUntouched(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(r.u.keysPath); !strings.Contains(string(got), "herdr-dots.manage") {
 		t.Fatal("keys touched")
+	}
+}
+
+func TestPurgeRefusesASymlinkedEngineLockAndLeavesItsTarget(t *testing.T) {
+	r := newUninstallRig(t, purgeConfirm+"\n")
+	if err := os.MkdirAll(r.p.SessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("keep me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, r.p.EngineLock()); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := uninstallExtras([]string{"--yes", "--purge"}, r.u); err == nil {
+		t.Fatal("a symlinked engine.lock cannot be checked: refuse")
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "keep me\n" {
+		t.Fatalf("target overwritten: %q", b)
+	}
+	if _, err := os.Stat(r.p.StateDir); err != nil {
+		t.Fatal("nothing may be deleted")
 	}
 }
 

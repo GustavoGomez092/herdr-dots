@@ -22,7 +22,7 @@ func openLockFile(path string) (*os.File, error) {
 	}
 	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		nil, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}

@@ -123,8 +123,7 @@ func tilde(path, home string) string {
 // removedLines lists the lines of before that are missing from after, in
 // order. after is before with whole lines deleted, so a greedy match is exact.
 func removedLines(before, after string) []string {
-	a := strings.SplitAfter(before, "\n")
-	b := strings.SplitAfter(after, "\n")
+	a, b := textLines(before), textLines(after)
 	var gone []string
 	j := 0
 	for _, l := range a {
@@ -132,9 +131,22 @@ func removedLines(before, after string) []string {
 			j++
 			continue
 		}
-		gone = append(gone, strings.TrimRight(l, "\r\n"))
+		gone = append(gone, l)
 	}
 	return gone
+}
+
+// textLines splits s into lines without their line endings. A file that
+// lost its final newline still has the same lines.
+func textLines(s string) []string {
+	parts := strings.SplitAfter(s, "\n")
+	if n := len(parts); n > 0 && parts[n-1] == "" {
+		parts = parts[:n-1]
+	}
+	for i, l := range parts {
+		parts[i] = strings.TrimRight(l, "\r\n")
+	}
+	return parts
 }
 
 func removeKeyBlock(u uninstallIO, in *bufio.Reader, yes bool) error {
@@ -191,7 +203,30 @@ func removeKeyBlock(u uninstallIO, in *bufio.Reader, yes bool) error {
 func purgePreflight(u uninstallIO, p paths.Paths) error {
 	dirs := []string{p.ConfigDir, p.StateDir}
 	for _, d := range dirs {
-		if !safeToPurge(d, u.home) {
+		st, err := os.Lstat(d)
+		if err == nil && st.Mode()&os.ModeSymlink != 0 {
+			target, _ := filepath.EvalSymlinks(d)
+			if target == "" {
+				target, _ = os.Readlink(d)
+			}
+			return fmt.Errorf("%s is a link to %s; remove that yourself", tilde(d, u.home), tilde(target, u.home))
+		}
+	}
+	// The pointer file ties the two directories together: the config dir
+	// names the state dir.
+	pointed := ""
+	if b, err := os.ReadFile(p.StatePointerFile()); err == nil {
+		pointed, _, _ = strings.Cut(strings.TrimSpace(string(b)), "\n")
+		pointed = strings.TrimSpace(pointed)
+	}
+	for i, d := range dirs {
+		ok := filepath.Base(filepath.Clean(d)) == paths.PluginID
+		if i == 0 { // the config dir: its .state-dir names the state dir being purged
+			ok = ok || (pointed != "" && sameDir(pointed, p.StateDir))
+		} else { // the state dir: it is the target of ConfigDir/.state-dir
+			ok = ok || (pointed != "" && sameDir(pointed, d))
+		}
+		if !ok || !homeGuard(d, u.home) {
 			return fmt.Errorf("refusing to delete %q: it is not a plugin directory", tilde(d, u.home))
 		}
 	}
@@ -256,6 +291,7 @@ func purgeDirs(u uninstallIO, in *bufio.Reader, p paths.Paths) error {
 		}
 	}
 	fmt.Fprintln(u.out, "Deleted. Run `herdr plugin uninstall herdr-dots` to remove the plugin itself.")
+	fmt.Fprintln(u.out, "Git repositories that had dot worktrees may still list them in .git/worktrees; run `git worktree prune` in each such repository to clear them.")
 	return nil
 }
 
@@ -346,61 +382,60 @@ func within(parent, child string) bool {
 	return child == parent || strings.HasPrefix(child, parent+string(filepath.Separator))
 }
 
-// safeToPurge accepts only a directory that looks like the plugin's own: not
-// relative, not a filesystem root, not the home directory, anything above
-// it, or any of its first-level directories (~/.config, ~/Documents), and
-// either named like the plugin or holding a plugin marker.
+// safeToPurge accepts a directory only if it is named like the plugin
+// (herdr-dots) and homeGuard allows it. purgePreflight also accepts a
+// differently named pair that the .state-dir pointer ties together.
 func safeToPurge(dir, home string) bool {
+	return filepath.Base(filepath.Clean(dir)) == paths.PluginID && homeGuard(dir, home)
+}
+
+// homeGuard refuses relative paths, filesystem roots, the home directory,
+// anything above it and any first-level directory of it (~/.config,
+// ~/Documents). Paths are compared by identity (os.SameFile), after resolving
+// links, so a symlink or a case variant of those directories is refused too,
+// on any filesystem.
+func homeGuard(dir, home string) bool {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return false
 	}
 	dir = filepath.Clean(dir)
-	if filepath.Dir(dir) == dir {
+	if filepath.Dir(dir) == dir || len(strings.Split(strings.Trim(filepath.ToSlash(dir), "/"), "/")) < 3 {
 		return false
 	}
-	if home != "" {
-		h := filepath.Clean(home)
-		if within(dir, h) || filepath.Dir(dir) == h {
+	if home == "" {
+		return true
+	}
+	h := filepath.Clean(home)
+	cands := []string{dir}
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		cands = append(cands, real)
+	}
+	for _, c := range cands {
+		if within(c, h) || filepath.Dir(c) == h || sameDir(filepath.Dir(c), h) {
 			return false
 		}
+		if st, err := os.Stat(c); err == nil {
+			// dir is the home directory or one of its ancestors
+			for a := h; ; a = filepath.Dir(a) {
+				if ast, err := os.Stat(a); err == nil && os.SameFile(st, ast) {
+					return false
+				}
+				if filepath.Dir(a) == a {
+					break
+				}
+			}
+		}
 	}
-	if len(strings.Split(strings.Trim(filepath.ToSlash(dir), "/"), "/")) < 3 {
-		return false
-	}
-	return filepath.Base(dir) == paths.PluginID || hasPluginMarker(dir)
+	return true
 }
 
-// hasPluginMarker reports whether dir holds something only the plugin's
-// config dir (.state-dir, credentials.toml, dots/) or state dir (memory/, a
-// session dir) holds.
-func hasPluginMarker(dir string) bool {
-	for _, f := range []string{paths.StatePointer, "credentials.toml"} {
-		if st, err := os.Stat(filepath.Join(dir, f)); err == nil && st.Mode().IsRegular() {
-			return true
-		}
+// sameDir reports whether a and b are the same directory: equal paths, or
+// the same file once links and letter case are resolved by the filesystem.
+func sameDir(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
 	}
-	for _, d := range []string{"dots", "memory"} {
-		if st, err := os.Stat(filepath.Join(dir, d)); err == nil && st.IsDir() {
-			return true
-		}
-	}
-	ents, _ := os.ReadDir(dir)
-	for _, e := range ents {
-		if e.IsDir() && uninstallSessionRe.MatchString(e.Name()) {
-			return true
-		}
-	}
-	return false
-}
-
-// runningEngines lists session directories whose engine holds its lock.
-func runningEngines(stateDir string) []string {
-	ents, _ := os.ReadDir(stateDir)
-	var busy []string
-	for _, e := range ents {
-		if e.IsDir() && uninstallSessionRe.MatchString(e.Name()) && lockfile.Held(filepath.Join(stateDir, e.Name(), "engine.lock")) {
-			busy = append(busy, e.Name())
-		}
-	}
-	return busy
+	sa, err1 := os.Stat(a)
+	sb, err2 := os.Stat(b)
+	return err1 == nil && err2 == nil && os.SameFile(sa, sb)
 }
