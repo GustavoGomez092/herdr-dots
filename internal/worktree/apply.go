@@ -111,6 +111,8 @@ func unmergedAmong(ctx context.Context, g Git, repo string, env, want []string) 
 // from patchstore.Diff; it is written to a private file here and never
 // re-read from the patch store. The paths Apply works on come from
 // `git apply --numstat -z` on those same bytes, never from a separate list.
+// From those bytes alone it refuses (ErrEscape) a rename or copy, a gitlink,
+// and any block that would create or change a symlink.
 //
 // g must be the plain Git (Apply writes into the user's repository with the
 // user's own filters; an LFS smudge filter is not skipped) and repo must be
@@ -140,7 +142,11 @@ func Apply(ctx context.Context, g Git, repo string, diff []byte) (conflicts []st
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	if modes, renames, err := diffHeaders(diff); err != nil {
+	// From the bytes alone: no rename or copy, no gitlink, and no symlink
+	// created or changed (diffHeaders refuses those itself).
+	if modes, renames, err := diffHeaders(diff); errors.Is(err, ErrEscape) {
+		return nil, err
+	} else if err != nil {
 		return nil, fmt.Errorf("invalid patch: %w", err)
 	} else if renames {
 		return nil, fmt.Errorf("%w: the diff holds a rename or copy", ErrEscape)

@@ -14,7 +14,7 @@ const (
 	FlagBinary           = "binary"            // a binary file changed
 	FlagMode             = "mode"              // a file mode changed (e.g. made executable)
 	FlagExecutable       = "executable"        // a file became executable (new or chmod +x)
-	FlagSymlink          = "symlink"           // a symlink was added or changed (target inside the repo)
+	FlagSymlink          = "symlink"           // a symlink was deleted or replaced by a file (Validate refuses creating or changing one)
 	FlagSymlinkKept      = "symlink-kept"      // the dot edited an escaping symlink's stand-in; the edit was dropped
 	FlagSubmoduleSkipped = "submodule-skipped" // the repo has submodules; they were not snapshotted
 )
@@ -117,7 +117,7 @@ func Capture(ctx context.Context, _ Git, co Checkout, s Snapshot) (Patch, error)
 		} else {
 			add, del = add+c.Added, del+c.Deleted
 		}
-		if c.NewMode == "120000" {
+		if c.OldMode == symlinkMode || c.NewMode == symlinkMode {
 			flags[FlagSymlink] = true
 		}
 		if c.Status == "M" && c.OldMode != c.NewMode {

@@ -30,15 +30,17 @@ var shaRe = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
 // has a ".." or "." element, a backslash, a control character or a name
 // Windows reserves (ErrEscape), any ".git" path element in any spelling git
 // itself guards against (ErrGitDir), a path on the deny-list (ErrDenied), a
-// submodule change (ErrEscape), a symlink whose target, read from the
-// patch's own blob, points outside the repository (ErrEscape), or a diff
-// whose header paths (as `git apply --numstat -z` reads them) are not
-// exactly the paths in p.Changes (ErrEscape). Binary files, new executables
-// and mode changes pass; Capture flags them for the card.
+// submodule change (ErrEscape), any symlink creation or change, in Changes
+// or in the diff bytes (ErrEscape: a new symlink, a file turned into one, a
+// retarget; deleting a symlink or replacing it with a regular file passes),
+// or a diff whose header paths (as `git apply --numstat -z` reads them) are
+// not exactly the paths in p.Changes (ErrEscape). Binary files, new
+// executables and mode changes pass; Capture flags them for the card.
 //
-// g runs only `git apply --numstat` on a private copy of p.Diff; co is the
-// draft the patch came from.
-func Validate(ctx context.Context, g Git, co Checkout, p Patch, caps Caps) error {
+// g runs only `git apply` (--numstat, --summary) on a private copy of
+// p.Diff. The Checkout (the draft the patch came from) is unused since
+// symlink targets are no longer read, and kept so callers need not change.
+func Validate(ctx context.Context, g Git, _ Checkout, p Patch, caps Caps) error {
 	if len(p.Changes) == 0 || len(p.Diff) == 0 {
 		return ErrEmptyPatch
 	}
@@ -61,22 +63,12 @@ func Validate(ctx context.Context, g Git, co Checkout, p Patch, caps Caps) error
 		if c.OldMode == "160000" || c.NewMode == "160000" {
 			return fmt.Errorf("%w: %s is a submodule", ErrEscape, c.Path)
 		}
-		if c.NewMode != "120000" {
-			continue
-		}
-		if !shaRe.MatchString(c.NewSHA) {
-			return fmt.Errorf("%w: symlink %s has no blob", ErrEscape, c.Path)
-		}
-		out, err := co.GitOutput(ctx, "cat-file", "blob", c.NewSHA)
-		if err != nil {
-			return fmt.Errorf("%w: can't read symlink %s: %v", ErrEscape, c.Path, err)
-		}
-		if target := string(out); Escapes(c.Path, target) {
-			return fmt.Errorf("%w: symlink %s points to %s", ErrEscape, c.Path, target)
+		if c.NewMode == symlinkMode {
+			return errSymlink(c.Path)
 		}
 	}
-	// What the diff bytes themselves say (modes, renames) must be what
-	// Changes say: Apply sees only the bytes.
+	// What the diff bytes themselves say (modes, renames, symlinks) must be
+	// what Changes say: Apply sees only the bytes.
 	if err := checkDiffAgainstChanges(p.Diff, p.Changes); err != nil {
 		return err
 	}

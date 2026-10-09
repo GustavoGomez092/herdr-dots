@@ -130,7 +130,7 @@ func TestValidateRejectsGitDirsEscapesAndSubmodules(t *testing.T) {
 	}
 }
 
-func TestANewSymlinkPointingOutsideIsRejected(t *testing.T) {
+func TestANewSymlinkIsRejectedWhereverItPoints(t *testing.T) {
 	g := isoGit(t)
 	var evil, fine string
 	_, co, p, _ := draftT(t, g, newRepo(t), func(dir string) {
@@ -151,8 +151,10 @@ func TestANewSymlinkPointingOutsideIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Validate(context.Background(), g, co, p2, Caps{Deny: noDeny}); err != nil {
-		t.Fatalf("an in-repo symlink is allowed: %v", err)
+	// P7-R6: an in-repo target is refused too (chained links escape a
+	// lexical check), by name.
+	if err := Validate(context.Background(), g, co, p2, Caps{Deny: noDeny}); !errors.Is(err, ErrEscape) || !strings.Contains(err.Error(), "fine") {
+		t.Fatalf("err %v, want ErrEscape naming fine", err)
 	}
 }
 
