@@ -39,6 +39,28 @@ func TestMemoryEditAppliesExactlyOneUpdate(t *testing.T) {
 	}
 }
 
+// A dot pack's proposal can be edited from the CLI like any other entry. It
+// stays labelled imported (and proposed) until the developer approves it.
+func TestMemoryEditOfAnImportedDotProposal(t *testing.T) {
+	c, out, _ := newMemCLI(t)
+	if _, err := c.store.ImportPack(testPID, "shared", []memory.Entry{{Scope: memory.ScopeDot, Kind: memory.KindNote, Text: "Use zod for validation"}}); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "editor.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsed -i.bak 's/zod/valibot/' \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.editor = script
+	mustRun(t, c, "edit", "--scope", "dot", "--dot", "shared")
+	if !strings.Contains(out.String(), "applied: 0 added, 1 updated, 0 forgotten") {
+		t.Fatalf("%s", out)
+	}
+	es, _ := c.store.List(testPID, memory.Filter{Scope: memory.ScopeDot, Dot: "shared"})
+	if len(es) != 1 || es[0].Text != "Use valibot for validation" || es[0].Source != memory.SourceImport || es[0].Status != memory.StatusProposed {
+		t.Fatalf("%+v", es)
+	}
+}
+
 func TestMemoryEditMarksUserSource(t *testing.T) {
 	c, _, _ := newMemCLI(t)
 	if _, err := c.store.Add(testPID, memory.Entry{Scope: memory.ScopeDot, Dot: "security", Kind: memory.KindNote, Text: "Use zod for validation", Source: memory.SourceModel, Status: memory.StatusActive}); err != nil {

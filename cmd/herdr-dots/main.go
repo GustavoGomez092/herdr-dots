@@ -27,6 +27,7 @@ var commands = map[string]handler{
 	"setup-keys": runSetupKeys,
 	"setup-mcp":  runSetupMCP,
 	"memory":     runMemory,
+	"dots":       runDots,
 	"diff-ui":    runDiffUI,
 	"keys":       runKeys,
 	"mcp":        runMCP,
