@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -22,6 +23,7 @@ import (
 	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/pricing"
+	"herdr-dots/internal/textutil"
 )
 
 const (
@@ -193,6 +195,13 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		if refusal != "" {
 			return reply, backend.Refused(clip(refusal, 80))
 		}
+		if resp.Status == responses.ResponseStatusFailed || resp.Error.Message != "" || resp.Error.Code != "" {
+			code := string(resp.Error.Code)
+			if code == "" {
+				code = "unspecified"
+			}
+			return reply, fmt.Errorf("openai run failed (%s): %s", providerText(code, key), providerText(resp.Error.Message, key))
+		}
 		if resp.Status == responses.ResponseStatusIncomplete && len(reply.Calls) == 0 {
 			return reply, fmt.Errorf("reply incomplete (%s): raise [backend] max_tokens", resp.IncompleteDetails.Reason)
 		}
@@ -254,10 +263,25 @@ func mapErr(err error, key, model string) error {
 		case code >= 500:
 			return fmt.Errorf("provider overloaded (openai %d, after retries)", code)
 		default:
-			return fmt.Errorf("openai rejected the request (%d): %s", code, clip(credentials.Redact(apierr.Error(), key), 300))
+			// apierr.Error() is only the status line: add the provider's
+			// message and param so a 4xx says what was wrong.
+			detail := providerText(apierr.Message, key)
+			if detail == "" {
+				detail = providerText(apierr.Error(), key)
+			}
+			if p := providerText(apierr.Param, key); p != "" {
+				detail += " (param " + clip(p, 80) + ")"
+			}
+			return fmt.Errorf("openai rejected the request (%d): %s", code, detail)
 		}
 	}
 	return errors.New(clip(credentials.Redact(err.Error(), key), 300))
+}
+
+// providerText is provider-written text made safe for errors: the key
+// redacted, control characters stripped, one line, at most 300 runes.
+func providerText(s, key string) string {
+	return clip(strings.Join(strings.Fields(textutil.SanitizeModelText(credentials.Redact(s, key))), " "), 300)
 }
 
 func clip(s string, n int) string {
