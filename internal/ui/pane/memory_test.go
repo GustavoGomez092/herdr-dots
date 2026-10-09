@@ -29,7 +29,10 @@ func memReady(fc *fakeCaller) tea.Model {
 }
 
 func TestHeaderShowsProjectAndMemoryCounts(t *testing.T) {
-	v := memReady(&fakeCaller{}).View()
+	m := New("w1:p1", &fakeCaller{})
+	m.width = 100 // the header is cut to the width, so give it room
+	mm, _ := m.Update(SnapshotMsg(memSnap()))
+	v := mm.(Model).View()
 	if !strings.Contains(v, "DOTS → claude (w1:p1) · herdr-dots · mem 42 (2 proposals)") || !strings.Contains(v, "budget 3/120") {
 		t.Fatalf("header:\n%s", v)
 	}

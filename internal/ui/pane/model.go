@@ -442,20 +442,30 @@ func (m Model) View() string {
 	if agent == "" {
 		agent = "agent"
 	}
-	title := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
+	lead := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
+	project, tail := "", ""
 	if ok && p.ProjectName != "" {
-		title += fmt.Sprintf(" · %s · mem %d", p.ProjectName, p.MemoryEntries)
+		project = fmt.Sprintf(" · %s · mem %d", p.ProjectName, p.MemoryEntries)
 		if p.MemoryProposals > 0 {
-			title += fmt.Sprintf(" (%d proposals)", p.MemoryProposals)
+			project += fmt.Sprintf(" (%d proposals)", p.MemoryProposals)
 		}
 	}
 	if ok {
-		title += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
+		tail = fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget) + paneCost(p.CostUSD, p.BudgetUSD, p.CostUnknown)
 	}
 	if m.snap.PausedAll {
-		title += "  ⏸ all paused"
+		tail += "  ⏸ all paused"
 	}
-	b.WriteString(style.Title.Render(title) + "\n")
+	// The project segment gives way first, so the budget and cost tail
+	// survives a narrow pane; one final cut keeps the header on one line.
+	if room := w - len([]rune(lead)) - len([]rune(tail)); room < len([]rune(project)) {
+		if room <= 0 {
+			project = ""
+		} else {
+			project = trunc(project, room)
+		}
+	}
+	b.WriteString(style.Title.Render(trunc(lead+project+tail, max(10, w))) + "\n")
 	if p.Source == "scrollback" {
 		b.WriteString(style.Dim.Render("(reading scrollback: transcript unavailable)") + "\n")
 	}
@@ -472,7 +482,8 @@ func (m Model) View() string {
 		if d.Learning {
 			status = "◌ learning…"
 		}
-		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, status)
+		rest := fmt.Sprintf("%-12s %-8s %s", trunc(d.Name, 12), d.Mode, status) + dotCost(d)
+		line := style.Glyph(d.Glyph, d.Color) + " " + trunc(rest, max(10, w-2))
 		if m.area == areaRoster && i == m.roster {
 			line = style.Selected.Render(line)
 		}
@@ -534,8 +545,10 @@ func (m Model) View() string {
 			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
 			if e.Detail != "" && e.Outcome == "error" {
 				line += "  " + trunc(e.Detail, max(10, w-24))
+			} else if c := costPart(e.Detail); c != "" {
+				line += "  " + c
 			}
-			b.WriteString(line + "\n")
+			b.WriteString(trunc(line, max(10, w)) + "\n")
 		}
 	}
 	if m.showHelp {
@@ -638,4 +651,51 @@ func window(text string, n, selStart, selEnd int) string {
 	}
 	off = min(off, len(lines)-n)
 	return strings.Join(lines[off:off+n], "")
+}
+
+// paneCost is the header dollar part: "  $0.42/2.00" with a budget, "  $0.42"
+// without one, "" before any priced run. A "?" right after the total means
+// some run had no price, so the total is a lower bound.
+func paneCost(cost, budget float64, unknown bool) string {
+	if budget <= 0 && cost <= 0 && !unknown {
+		return ""
+	}
+	s := "  " + usd(cost)
+	if unknown {
+		s += "?"
+	}
+	if budget > 0 {
+		s += fmt.Sprintf("/%.2f", budget)
+	}
+	return s
+}
+
+// usd formats a dollar amount; a spend under half a cent shows as "<$0.01"
+// so it doesn't look like nothing.
+func usd(v float64) string {
+	if v > 0 && v < 0.005 {
+		return "<$0.01"
+	}
+	return fmt.Sprintf("$%.2f", v)
+}
+
+// dotCost is a roster line session cost: " $0.12", " $0.12?" when some runs
+// had no price, "" when nothing was spent or priced.
+func dotCost(d view.DotState) string {
+	if d.CostUSD == 0 && !d.CostUnknown {
+		return ""
+	}
+	s := " " + usd(d.CostUSD)
+	if d.CostUnknown {
+		s += "?"
+	}
+	return s
+}
+
+// costPart is the "cost=..." tail of a pass/flagged feed detail.
+func costPart(detail string) string {
+	if i := strings.LastIndex(detail, "cost="); i >= 0 {
+		return detail[i:]
+	}
+	return ""
 }
