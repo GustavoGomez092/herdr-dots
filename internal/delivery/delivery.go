@@ -47,7 +47,8 @@ func CanDeliver(p herdr.PaneInfo, requireUnfocused bool) Gate {
 }
 
 // Format puts each dot's header once, in first-seen order, followed by all of
-// that dot's messages.
+// that dot's messages. A message line that looks like a dot header gets
+// transcript.NeutralMarker in front, so only the real headers are parsed.
 func Format(cards []queue.Card) string {
 	var order []string
 	groups := map[string][]queue.Card{}
@@ -62,7 +63,7 @@ func Format(cards []queue.Card) string {
 		g := groups[slug]
 		bodies := make([]string, len(g))
 		for i, c := range g {
-			bodies[i] = strings.TrimSpace(c.Body)
+			bodies[i] = transcript.NeutraliseDotPrefixes(strings.TrimSpace(c.Body))
 		}
 		parts = append(parts, transcript.DotPrefix(g[0].Glyph, g[0].DotName)+" "+strings.Join(bodies, "\n\n"))
 	}
