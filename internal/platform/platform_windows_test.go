@@ -163,6 +163,26 @@ func TestDetachHelper(t *testing.T) {
 	_ = p.Release()
 }
 
+// A .cmd shim command carries its whole command line in SysProcAttr.CmdLine,
+// which StartDetached would replace: it is refused before anything starts.
+func TestStartDetachedRefusesAShimCommand(t *testing.T) {
+	echoShim(t)
+	cmd, err := Command("echo-args", []string{"x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CmdLine == "" {
+		t.Fatal("test setup: want a shim command")
+	}
+	if p, err := StartDetached(cmd); err == nil {
+		_ = p.Kill()
+		t.Fatal("a shim command was started detached")
+	}
+	if cmd.Process != nil {
+		t.Fatal("the shim started")
+	}
+}
+
 func TestStartDetachedSurvivesItsParent(t *testing.T) {
 	helper := exec.Command(os.Args[0], "-test.run=^TestDetachHelper$", "-test.count=1", "-test.v")
 	helper.Env = append(os.Environ(), "PLATFORM_DETACH_HELPER=1")

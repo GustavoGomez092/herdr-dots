@@ -112,25 +112,34 @@ const detachFlags = windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW
 // it survives the hook or pane that launched it and its own console children
 // never open windows. It first asks to break away from any job the caller is
 // in; a job that forbids breakaway makes CreateProcess fail with access
-// denied, and the start is retried inside the job.
+// denied, and the start is retried inside the job; that is noted once on
+// cmd.Stderr (the engine log), since an engine inside a kill-on-close job
+// dies with the job.
+//
+// A command with SysProcAttr.CmdLine set (a .cmd/.bat shim from Command) is
+// refused: its command line would be replaced.
 func StartDetached(cmd *exec.Cmd) (*os.Process, error) {
+	if cmd.SysProcAttr != nil && cmd.SysProcAttr.CmdLine != "" {
+		return nil, errors.New("start detached: a .cmd/.bat shim can't be started detached; run its program directly")
+	}
 	cmd.Env = ChildEnv(cmd.Env)
 	again := exec.Command(cmd.Path, cmd.Args[1:]...)
 	again.Dir, again.Env = cmd.Dir, cmd.Env
 	again.Stdin, again.Stdout, again.Stderr = cmd.Stdin, cmd.Stdout, cmd.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detachFlags | windows.CREATE_BREAKAWAY_FROM_JOB, HideWindow: true}
-	err := cmd.Start()
-	if err == nil {
-		return cmd.Process, nil
-	}
-	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+	started := cmd
+	err := startDetachedRetry(func(breakaway bool) error {
+		if breakaway {
+			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detachFlags | windows.CREATE_BREAKAWAY_FROM_JOB, HideWindow: true}
+			return cmd.Start()
+		}
+		started = again
+		again.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detachFlags, HideWindow: true}
+		return again.Start()
+	}, func(err error) bool { return errors.Is(err, windows.ERROR_ACCESS_DENIED) }, cmd.Stderr, &noBreakawayNoted)
+	if err != nil {
 		return nil, err
 	}
-	again.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detachFlags, HideWindow: true}
-	if err := again.Start(); err != nil {
-		return nil, err
-	}
-	return again.Process, nil
+	return started.Process, nil
 }
 
 // Tree is a started child process together with everything it spawns: they
