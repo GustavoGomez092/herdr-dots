@@ -17,6 +17,7 @@ import (
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/paths"
+	"herdr-dots/internal/textutil"
 )
 
 const memUsage = `usage: herdr-dots memory <command> [flags]
@@ -26,7 +27,8 @@ const memUsage = `usage: herdr-dots memory <command> [flags]
   edit   [--project P] [--dot SLUG] [--scope S] [--yes]  edit as TOML in $EDITOR
   forget REF [--dot SLUG] [--project P] [--scrub]
   forget-all --scope S [--dot SLUG] [--project P] [--yes]
-  pin|unpin|approve REF [--dot SLUG] [--project P]
+  pin|unpin REF [--dot SLUG] [--project P]
+  approve REF [--dot SLUG] [--project P] [--yes]    show the full text, then confirm
   export [--project P] [--dot SLUG] [--scope S]     TOML on stdout
   import FILE [--project P] [--yes]
   purge  --project P [--yes]                        delete a project's whole memory
@@ -87,8 +89,10 @@ func (c *memCLI) run(args []string) error {
 		return c.forget(rest)
 	case "forget-all":
 		return c.forgetAll(rest)
-	case "pin", "unpin", "approve":
+	case "pin", "unpin":
 		return c.mark(cmd, rest)
+	case "approve":
+		return c.approve(rest)
 	case "export":
 		return c.export(rest)
 	case "import":
@@ -448,19 +452,75 @@ func (c *memCLI) mark(verb string, args []string) error {
 			e.Pinned = true
 		case "unpin":
 			e.Pinned = false
-		case "approve":
-			if e.Status != memory.StatusProposed {
-				return fmt.Errorf("%s is not a proposal", ref)
-			}
-			e.Status = memory.StatusActive
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	past := map[string]string{"pin": "pinned", "unpin": "unpinned", "approve": "approved"}[verb]
+	past := map[string]string{"pin": "pinned", "unpin": "unpinned"}[verb]
 	fmt.Fprintf(c.out, "%s %s\n", past, ref)
+	return nil
+}
+
+// errApproveChanged refuses an approve when the stored text is no longer the
+// text that was shown.
+var errApproveChanged = errors.New("this proposal changed since it was shown; nothing approved, review it again")
+
+// approve shows the proposal's full text, kind, paths and proposing dot, asks
+// to confirm (--yes without a terminal), and approves only the text it showed.
+func (c *memCLI) approve(args []string) error {
+	f := c.flags("approve")
+	pos, err := f.parse(args)
+	if err != nil {
+		return err
+	}
+	ref, pid, err := c.ref(f, pos, "approve")
+	if err != nil {
+		return err
+	}
+	e, err := c.store.Get(pid, ref)
+	if err != nil {
+		return err
+	}
+	if e.Status != memory.StatusProposed {
+		return fmt.Errorf("%s is not a proposal", ref)
+	}
+	by := e.Dot
+	if by == "" {
+		by = "the developer"
+	}
+	paths := strings.Join(e.Paths, ", ")
+	if paths == "" {
+		paths = "(none)"
+	}
+	fmt.Fprintf(c.out, "Proposal %s\n  proposed by: %s\n  kind:        %s\n  paths:       %s\n  text:\n%s\n",
+		ref, textutil.SanitizeModelText(by), e.Kind, textutil.SanitizeModelText(paths), textutil.SanitizeModelText(e.Text))
+	if !f.yes {
+		if !c.interactive {
+			return errors.New("approve: refusing without --yes (not a terminal)")
+		}
+		fmt.Fprint(c.out, "Approve this proposal? [y/N]: ")
+		line, _ := bufio.NewReader(c.in).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+			return errors.New("approve: not confirmed (nothing changed)")
+		}
+	}
+	seen := e.Text
+	_, err = c.store.Update(pid, ref, func(x *memory.Entry) error {
+		if x.Text != seen {
+			return errApproveChanged
+		}
+		if x.Status != memory.StatusProposed {
+			return fmt.Errorf("%s is not a proposal", ref)
+		}
+		x.Status = memory.StatusActive
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "approved %s\n", ref)
 	return nil
 }
 
