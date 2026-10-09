@@ -89,3 +89,22 @@ Assumption holds: piped path verified; popup no-echo not live-verified (user gat
 | V6 | piped `keys set`/`list` verified with a dummy key in a temp dir; popup no-echo is a user gate |
 
 No assumption was contradicted, so there are no GATE lines.
+
+## Results
+
+Final state of the assumptions (no key existed on the verification machine; every live provider run is a user gate).
+
+| Check | Assumption holds | Live evidence |
+|---|---|---|
+| V1 Anthropic SDK names and request shape | yes for SDK names (compiled against anthropic-sdk-go v1.79.1); live acceptance of `fallbacks` + `output_config` not live-verified | not live-verified: no key |
+| V2 OpenAI ids and prices | yes for prices (re-read 2026-10-08, no differences); live model ids not live-verified | not live-verified: no key |
+| V3 OpenRouter `response_format` and `usage.cost` | not live-verified, design unaffected (docs agree; retry without `response_format` covers a 400). BYOK keys may report `usage.cost` 0 (documented in the README) | not live-verified: no key |
+| V4 Ollama `num_ctx`, `format` and `tools` | yes: `format` together with `tools` suppresses tool calls, so the design never combines them; `num_ctx` accepted | verified live: Ollama 0.22.1, `qwen2.5:7b-instruct` |
+| V5 structured output and tools together (Anthropic) | not live-verified, design unaffected | not live-verified: no key |
+| V6 key entry | piped `keys set`/`list` verified with a dummy key (stored in a 0600 file, listed as its last 4 characters only); no-echo terminal read and Herdr popup check not verified | user gate: run `herdr-dots keys set openai` in a `--session dots-test` popup and confirm nothing is echoed |
+
+User gates before relying on the API backends: one live run each for `anthropic-api`, `openai-api` and `openrouter` (needs your key), and the V6 popup check.
+
+SDK names the compiler made us change: none. The names listed under V1 compiled as planned.
+
+No assumption was contradicted, so there are no GATE lines.

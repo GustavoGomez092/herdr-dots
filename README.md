@@ -1,7 +1,8 @@
 # Herdr Dots
 
-> **Status: scaffold (v0.3.0).** Phases 1 (core loop), 2 (dot memory, VITAL) and 3 (council mode) are
-> in. The project is not done and not ready for general use; see the [Roadmap](#roadmap) for what's missing.
+> **Status: scaffold (v0.4.0).** Phases 1 (core loop), 2 (dot memory, VITAL), 3 (council) and 4 (API
+> and Ollama backends, cost) are in. The project is not done and not ready for general use; see the
+> [Roadmap](#roadmap) for what's missing.
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**: specialist agents (security,
 frontend, backend, copywriter, ...) that join a Claude Code or Codex session running in a Herdr
@@ -161,6 +162,69 @@ merge         = "chair" # chair | plain
 `rounds = 2` roughly doubles the cost. One council runs per pane at a time. A council in progress is
 lost if the engine restarts (calls already made still count against the budgets).
 
+### Backends and keys
+
+Each dot picks its backend in the editor (`prefix+d`, then `e` or `n`) or in its TOML file:
+
+| Kind | Talks to | Key | Cost shown |
+|---|---|---|---|
+| `claude-cli` | your `claude` login | none | from Claude Code (`total_cost_usd`) |
+| `codex-cli` | your `codex` login | none | `?` (tokens only) |
+| `anthropic-api` | Anthropic Messages API | `ANTHROPIC_API_KEY` or `keys set anthropic` | price table |
+| `openai-api` | OpenAI Responses API | `OPENAI_API_KEY` or `keys set openai` | price table |
+| `openrouter` | OpenRouter | `OPENROUTER_API_KEY` or `keys set openrouter` | reported by OpenRouter |
+| `ollama` | a local Ollama server | none | $0 |
+
+```toml
+[backend]
+kind       = "anthropic-api"
+model      = "claude-opus-5-5"   # the default; set effort = "low" or pick a cheaper model to spend less
+effort     = "low"               # low | medium | high | xhigh | max (anthropic-api, openai-api)
+max_tokens = 4096
+fallbacks  = "default"           # default | off: on a safety refusal Anthropic retries on another model
+
+[budget]
+max_calls_per_session = 40
+max_usd_per_session   = 0.50     # 0 = off
+```
+
+`openai-api`, `openrouter` and `ollama` need a model (there is no OpenAI default; ids and prices change
+often). Ollama dots take `base_url` and `context_window` (default 16384, always sent as `num_ctx`;
+long prompts are shrunk to fit and the engine log says so).
+
+**Keys.** `herdr-dots keys set <anthropic|openai|openrouter>` reads the key from stdin without echo
+and stores it in `$(herdr plugin config-dir herdr-dots)/credentials.toml` (mode 0600, refused if group-
+or world-readable). Environment variables win over the file; `[providers.<name>] api_key_env` in
+`config.toml` renames the variable. `keys list` shows where each key comes from and its last 4
+characters; `keys test` checks them; `keys remove` deletes one. The manage popup's `K` screen does the
+same, with a masked entry field. Keys never go in dot files or `config.toml`, never appear on the
+command line, and are scrubbed from errors, logs and the feed. Keys sit in a file on disk: keep it out
+of dotfile repos. OS keychain storage is planned.
+
+**Repo access.** With "Read repo" on, API dots can call `read_file`, `grep` and `list_files`, jailed
+to the pane's working directory (symlinks can't escape it), honoring `.gitignore`, at most 8 calls per
+run. These tools are read-only and are switched off when the pane's directory is your home directory
+or `/` (the dot is told it has no repo tools). File names must match the names on disk exactly: a
+case variant of a file name is "no such file". Secret files are always denied (`.env*`, `*.pem`,
+`*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `.git/**`, `**/secrets/**`, `.netrc`, `*.kdbx`);
+`tool_deny_globs` in `config.toml` adds more.
+
+**Cost.** Every run records tokens (including cached input) and a dollar cost: Anthropic and OpenAI
+from an embedded price table dated 2026-10-08 (override entries in `prices.toml` next to
+`config.toml`), OpenRouter from its own `usage.cost`, Ollama a known $0. OpenRouter keys that bring
+your own provider key (BYOK) may report a cost of 0, so treat those figures as a lower bound. Models
+without a price show `?` and never count toward dollar budgets (the editor warns). The Dots pane
+header shows `$spent/budget`, the roster shows each dot's session cost, and the feed shows each run's
+cost. When Anthropic's refusal fallback answers, the run is priced at the fallback model's rates and
+the feed shows `model=…`; a declined first attempt isn't priced, so such a run's cost can be
+slightly low.
+
+**Councils.** Members and the chair can be API dots; their runs are priced like any other (the chair
+counts against the pane). With `session_budget_usd` set, the council popup shows `$spent of $budget`,
+members past their `max_usd_per_session` sit out, and a pane past its dollar budget can't start a
+council. An API `chair_backend` without `chair_model` uses that kind's default (`claude-opus-5-5` for
+`anthropic-api`); `openai-api`, `openrouter` and `ollama` chairs need `chair_model`.
+
 ## Files
 
 - Dots: `$(herdr plugin config-dir herdr-dots)/dots/<slug>.toml` (hand-editable)
@@ -170,15 +234,19 @@ lost if the engine restarts (calls already made still count against the budgets)
 
 ## Privacy and safety
 
-- Dots send recent conversation turns to **their own** configured provider (Anthropic for
-  `claude-cli`, OpenAI for `codex-cli`).
+- Dots send recent conversation turns, their memory block and (with repo access) the files they read to
+  **their own** provider: Anthropic for `claude-cli` and `anthropic-api`, OpenAI for `codex-cli` and
+  `openai-api`, OpenRouter and the model vendor it routes to for `openrouter`. `ollama` stays on your
+  machine unless its `base_url` points elsewhere.
+- OpenAI requests use `store: false`; nothing is kept on OpenAI's side between tool turns.
 - Dots are read-only: claude dots get only `Read,Grep,Glob`; codex dots run with `--sandbox read-only`.
 - Hooks are disabled for dot runs, and Herdr variables are stripped, so dots never affect your panes.
 - Queue mode (you approve) is the default. Inject mode is opt-in per dot and can be turned off for
   all dots with `inject_enabled = false` in `config.toml`.
 - Changes to `config.toml` apply within a few seconds, without a restart (except `max_parallel_runs`, the `memory_*` limits and turning `memory_enabled` back on);
   if the file can't be parsed, the last good settings stay and inject is turned off until it is fixed.
-- Per-dot and per-session call budgets cap cost.
+- Per-dot and per-session call budgets and dollar budgets (`max_usd_per_session`, `session_budget_usd`)
+  cap cost. Runs already in flight can overshoot a dollar budget slightly.
 - Council members in round 2 see the other dots' answers, framed as opinions, never as instructions.
   The council chair sees the members' answers, the recent turns and the project's approved
   conventions and decisions; it has no repo access and writes no memory.
@@ -205,7 +273,13 @@ lost if the engine restarts (calls already made still count against the budgets)
 - The Codex backend's `remember` support follows Codex's documented output format and has not been
   verified live.
 - Draft specs for later phases live in `docs/superpowers/specs/` (roadmap: `2026-10-08-herdr-dots-roadmap.md`), all pending review.
-- No API/Ollama backends, no MCP server, no Windows support.
+- No MCP server, no Windows support.
+- API backends are tested against recorded-style fakes; live runs need your keys (see
+  `docs/superpowers/notes/2026-10-08-phase-4-verification.md`). Only Ollama has been run live; the
+  Anthropic, OpenAI and OpenRouter paths are not live-verified. OpenAI model ids and prices change
+  often: check `prices.toml` against the pricing page.
+- No streaming for API dots; no OS keychain; no Bedrock/Vertex/Foundry providers (Gemini and others
+  are reachable through OpenRouter).
 - A council in progress doesn't survive an engine restart.
 - Long council deliveries were verified live with Claude Code only; Codex is untested.
 
@@ -216,7 +290,7 @@ lost if the engine restarts (calls already made still count against the budgets)
 | 1 | Core loop (in this scaffold) |
 | **2** | **Dot memory — VITAL.** Per-project, per-dot memory of conventions, decisions and past findings (in this scaffold since 0.2.0; still being hardened). Without it, dots repeat themselves and can't learn a project. |
 | 3 | Council mode: ask all dots at once, get one merged digest, with optional dot-to-dot cross-review (in this scaffold since 0.3.0) |
-| 4 | API and Ollama backends behind the same backend interface |
+| 4 | API and Ollama backends (Anthropic, OpenAI, OpenRouter, Ollama), key storage, USD cost and dollar budgets (in this scaffold since 0.4.0) |
 | 5 | Dots MCP server so the main agent can consult dots itself |
 | 6–10 | Windows, write-capable dots, proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
 
