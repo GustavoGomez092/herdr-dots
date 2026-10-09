@@ -419,15 +419,21 @@ const bgRunMaxUSD = 0.50
 
 // bgRunCap is a background run's dollar cap: the daily budget left (the
 // day backgroundGate just read), at most bgRunMaxUSD, rounded to a
-// millionth of a dollar. It may be zero or less; the caller passes only a
-// positive cap.
+// millionth of a dollar. Budget left that rounds to nothing still yields
+// 1e-6, so a run the gate admitted never starts without a cap. It is zero
+// or less only when nothing is left; the caller passes only a positive cap.
 func (e *Engine) bgRunCap() float64 {
 	budget := dailyBudget(e.config().DailyBudgetUSD)
 	now := e.now()
 	e.mu.Lock()
 	spent := e.todayLocked(now).CostUSD
 	e.mu.Unlock()
-	return math.Round(min(budget-spent, bgRunMaxUSD)*1e6) / 1e6
+	left := min(budget-spent, bgRunMaxUSD)
+	c := math.Round(left*1e6) / 1e6
+	if left > 0 && c <= 0 {
+		return 1e-6
+	}
+	return c
 }
 
 // bgFeed writes a job's feed line with the pane check in the same e.mu
@@ -515,7 +521,7 @@ func (e *Engine) chargeBackground(j bgJob, d state.Delta) {
 }
 
 // inFlightLocked counts the pane's runs that may still charge it: turn
-// reviews and memory passes (e.running), MCP asks, live drafts and the
+// reviews and memory passes (e.running, until their charge lands: e.paid), MCP asks, live drafts and the
 // running background job (bgBusy; a job still waiting for bgSem has not
 // started and re-checks the budgets itself), except the background run keyed
 // except. Every session-budget check (turn reviews, asks, drafts, research,
@@ -524,7 +530,7 @@ func (e *Engine) chargeBackground(j bgJob, d state.Delta) {
 func (e *Engine) inFlightLocked(paneID string, except key) int {
 	n := 0
 	for k := range e.running {
-		if k.pane == paneID {
+		if k.pane == paneID && !e.paid[k] { // a paid run is in Usage already
 			n++
 		}
 	}

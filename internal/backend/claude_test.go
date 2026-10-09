@@ -159,9 +159,21 @@ func TestClaudeMaxBudgetFlag(t *testing.T) {
 	if v, _ := argAfter(c.BuildCmd(r).Args, "--max-budget-usd"); v != "0.5" {
 		t.Fatalf("--max-budget-usd = %q, want 0.5", v)
 	}
-	r.Args = []string{"--max-budget-usd", "99"} // the dot's own args can't raise the cap
-	if args := c.BuildCmd(r).Args; args[len(args)-2] != "--max-budget-usd" || args[len(args)-1] != "0.5" {
-		t.Fatalf("the engine's cap must come last: %v", args[len(args)-4:])
+	r.Args = []string{"--max-budget-usd", "99", "--max-budget-usd=77", "--model", "x"} // the dot's own caps are stripped
+	args := c.BuildCmd(r).Args
+	if countArg(args, "--max-budget-usd") != 1 || slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--max-budget-usd=") }) || slices.Contains(args, "99") || slices.Contains(args, "77") {
+		t.Fatalf("the dot's --max-budget-usd must be removed: %v", args)
+	}
+	if v, _ := argAfter(args, "--max-budget-usd"); v != "0.5" {
+		t.Fatalf("--max-budget-usd = %q, want 0.5", v)
+	}
+	// A dangling value flag at the end of the dot's args would take whatever
+	// follows as its value, so the cap pair goes before the dot's args.
+	r.Args = []string{"--model"}
+	args = c.BuildCmd(r).Args
+	i := slices.Index(args, "--max-budget-usd")
+	if i < 0 || i+1 >= len(args) || args[i+1] != "0.5" || args[len(args)-1] != "--model" || i+2 > len(args)-1 {
+		t.Fatalf("the cap pair must stay intact and precede the dot's args: %v", args)
 	}
 	r.Args = nil
 	for _, v := range []float64{0, -0.2} {
@@ -195,4 +207,14 @@ func TestClaudeCheckMissingBinary(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("Check = %v", err)
 	}
+}
+
+func countArg(args []string, a string) int {
+	n := 0
+	for _, x := range args {
+		if x == a {
+			n++
+		}
+	}
+	return n
 }

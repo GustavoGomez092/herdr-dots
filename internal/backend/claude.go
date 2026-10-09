@@ -185,12 +185,17 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	}
 	// Denied args (dots.Validate rejects them too) are dropped so they can never
 	// override the flags above.
-	args = append(args, dots.SafeArgs(c.Kind(), r.Args)...)
+	dotArgs := dots.SafeArgs(c.Kind(), r.Args)
 	if r.MaxBudgetUSD > 0 {
-		// A background run's dollar cap (P8-R15), after the dot's own args so
-		// a --max-budget-usd there can't raise it (the last value wins).
+		// A background run's dollar cap (P8-R15). The dot's own caps are
+		// stripped so they can't raise it, and the cap goes before the dot's
+		// args: commander gives a value-taking flag the next argument even
+		// when it starts with "-", so a dangling "--model" at the end of the
+		// dot's args would otherwise swallow the cap.
+		dotArgs = stripBudgetArgs(dotArgs)
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(r.MaxBudgetUSD, 'f', -1, 64))
 	}
+	args = append(args, dotArgs...)
 	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: CleanEnv(c.environ()), Stdin: UserPrompt(r), Cleanup: cleanup}
 }
 
@@ -251,4 +256,20 @@ func parseClaude(out []byte, pass string) (Result, error) {
 	}
 	res.Raw = o.Result
 	return finishResult(res, o.Result, pass)
+}
+
+// stripBudgetArgs drops every --max-budget-usd from args, in both the
+// "--max-budget-usd X" and "--max-budget-usd=X" forms.
+func stripBudgetArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--max-budget-usd":
+			i++ // its value, whatever it looks like
+		case strings.HasPrefix(args[i], "--max-budget-usd="):
+		default:
+			out = append(out, args[i])
+		}
+	}
+	return out
 }

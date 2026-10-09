@@ -100,6 +100,9 @@ func (e *Engine) councilPlan(att state.Attachment, slugs []string) (council.Pref
 	pausedAll := e.pausedAll
 	known := map[string]dots.Dot{}
 	asked := map[string]bool{}
+	// Reviews, asks, drafts and background runs in flight count as calls
+	// already made (the shared inFlightLocked).
+	inFlight := e.inFlightLocked(att.PaneID, key{})
 	for _, da := range att.Dots {
 		if d, ok := e.dots[da.Slug]; ok {
 			known[da.Slug] = d
@@ -119,7 +122,7 @@ func (e *Engine) councilPlan(att state.Attachment, slugs []string) (council.Pref
 	}
 	in := council.PlanInput{
 		Candidates: cands, Rounds: cc.Rounds, MaxMembers: cc.MaxMembers,
-		PaneLeft: callsLeft(cfg.SessionBudgetCalls, e.d.Usage.PaneCalls(att.PaneID)), Chair: cc.Merge == config.MergeChair,
+		PaneLeft: callsLeft(cfg.SessionBudgetCalls, e.d.Usage.PaneCalls(att.PaneID)+inFlight), Chair: cc.Merge == config.MergeChair,
 		PaneCostUSD: e.d.Usage.PaneCost(att.PaneID), PaneBudgetUSD: cfg.SessionBudgetUSD,
 	}
 	if _, _, err := chairSpec(cfg); err != nil {
