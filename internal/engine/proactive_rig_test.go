@@ -120,6 +120,7 @@ type proOpts struct {
 	cwd        string        // the pane's cwd; "" = "/repo"
 	shared     string        // memory, daily.json and inbox.json under this dir (two engines); "" = private
 	prepare    func(*memory.Store)
+	hook       func(point string) // Engine.testHook, set before Start (no race with engine goroutines)
 }
 
 // proStart is a Wednesday morning, local time.
@@ -227,6 +228,7 @@ func newProRig(t *testing.T, o proOpts, ds ...dots.Dot) *proRig {
 		o.deps(&deps)
 	}
 	r.e = New(deps)
+	r.e.testHook = o.hook
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(r.e.Wait)
 	t.Cleanup(cancel)

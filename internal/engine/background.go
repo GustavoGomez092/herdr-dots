@@ -235,18 +235,20 @@ func outcomeFor(kind string) string {
 // generation, session budgets), the backend, usage and daily accounting,
 // memory ops, anti-repeat, then j.deliver for a relevant verdict. It never
 // asks for write tools: the request is a review or a research pass.
+//
+// A job is queued (bgQueued, for dedupe) from entry to exit, and running
+// (bgBusy: in flight for the budgets, and the roster's label) only while it
+// holds bgSem. With one running job per engine, bgBusy has at most one entry,
+// always the running job's.
 func (e *Engine) runBackground(j bgJob) {
 	k := key{j.paneID, j.dot.Slug}
 	e.mu.Lock()
-	e.bgBusy[k] = j.kind
-	e.bgRefs[k]++
+	e.bgQueued[k]++
 	e.mu.Unlock()
-	e.broadcast()
 	defer func() {
 		e.mu.Lock()
-		if e.bgRefs[k]--; e.bgRefs[k] <= 0 { // another job on the same pane and dot keeps it busy
-			delete(e.bgRefs, k)
-			delete(e.bgBusy, k)
+		if e.bgQueued[k]--; e.bgQueued[k] <= 0 {
+			delete(e.bgQueued, k)
 		}
 		e.mu.Unlock()
 		if j.done != nil {
@@ -259,7 +261,16 @@ func (e *Engine) runBackground(j bgJob) {
 	case <-e.ctx.Done():
 		return
 	}
-	defer func() { <-e.bgSem }()
+	e.mu.Lock()
+	e.bgBusy[k] = j.kind
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.bgBusy, k) // before the slot is released: the next job may share the key
+		e.mu.Unlock()
+		<-e.bgSem
+	}()
+	e.broadcast()
 	select {
 	case e.sem <- struct{}{}:
 	case <-e.ctx.Done():
@@ -330,19 +341,46 @@ func (e *Engine) runBackground(j bgJob) {
 	}
 	e.touchMemory(mem)
 	e.applyMemoryOps(j.paneID, j.dot, j.turn, mem, res.Remember, att, false, memory.ApplyOptions{Research: j.kind == state.RunResearch})
+	e.hook("bg-before-feed")
+	// The memory I/O took time: the feed line re-checks the pane (bgFeed).
 	v, detail := res.Verdict, costDetail(j.dot, res)
 	if !v.Relevant {
-		e.feed(j.paneID, j.dot.Slug, j.turn, outcomeFor(j.kind), withCost(j.label+": nothing new", detail))
+		e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": nothing new", detail))
 		return
 	}
 	if ref, ok := suppressedBy(mem, v.Message, j.turn, j.session); ok {
-		e.feed(j.paneID, j.dot.Slug, j.turn, state.OutcomeSuppressed, "similar to "+ref)
+		e.bgFeed(&j, state.OutcomeSuppressed, "similar to "+ref)
 		return
 	}
-	e.feed(j.paneID, j.dot.Slug, j.turn, outcomeFor(j.kind), withCost(j.label+": "+firstLine(v.Message), detail))
+	if !e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": "+firstLine(v.Message), detail)) {
+		return
+	}
 	if j.deliver != nil {
 		j.deliver(j, v)
 	}
+}
+
+// bgFeed writes a job's feed line with the pane check in the same e.mu
+// section (e.mu -> stores), so a pane closed or reused meanwhile gets no
+// line. As in keepPane, a scheduled job whose pane is gone carries on
+// without it (the line goes to no pane, the result to the inbox); any other
+// job ends. It reports whether the job continues.
+func (e *Engine) bgFeed(j *bgJob, outcome, detail string) bool {
+	e.mu.Lock()
+	if e.bgPaneGoneLocked(*j) {
+		if j.kind != state.RunScheduled {
+			e.mu.Unlock()
+			e.d.Logf("dot %s: %s ended after pane %s closed; dropped", j.dot.Slug, j.label, j.paneID)
+			return false
+		}
+		j.paneID, j.session, j.turn, j.paused = "", "", 0, false
+	}
+	err := e.d.Feed.Append(state.FeedEntry{Time: time.Now(), PaneID: j.paneID, Dot: j.dot.Slug, Turn: j.turn, Outcome: outcome, Detail: detail})
+	e.mu.Unlock()
+	if err != nil {
+		e.d.Logf("feed: %v", err)
+	}
+	return true
 }
 
 // bgPaneGoneLocked reports whether a job's pane closed, or its id now names
@@ -392,7 +430,8 @@ func (e *Engine) chargeBackground(j bgJob, d state.Delta) {
 }
 
 // inFlightLocked counts the pane's runs that may still charge it: MCP asks,
-// live drafts and background runs (one per pane and dot), except the
+// live drafts and the running background job (bgBusy; a job still waiting
+// for bgSem has not started and re-checks the budgets itself), except the
 // background run keyed except. Phase 7's ask and draft budget checks count
 // them too (ruling P8-R2). Caller holds e.mu.
 func (e *Engine) inFlightLocked(paneID string, except key) int {
@@ -437,7 +476,7 @@ func (e *Engine) bgOverBudgetLocked(j bgJob) bool {
 func (e *Engine) bgFailed(j bgJob, err error) {
 	msg := textutil.SanitizeModelText(redactErr(err).Error())
 	e.d.Logf("dot %s: %s failed: %s", j.dot.Slug, j.label, msg)
-	e.feed(j.paneID, j.dot.Slug, j.turn, state.OutcomeError, j.label+": "+msg)
+	e.bgFeed(&j, state.OutcomeError, j.label+": "+msg)
 }
 
 // deliverScheduled puts a scheduled result on the pane the job ran for, or,
@@ -491,14 +530,53 @@ func (e *Engine) deliverScheduled(j bgJob, v backend.Verdict) {
 	e.notify(j.dot, fmt.Sprintf("%s (scheduled) has a finding for %s", j.dot.Name, name))
 }
 
-// claimInbox moves a project's waiting inbox cards into paneID's queue.
+// claimInbox moves a project's waiting inbox cards into paneID's queue. The
+// claim (inbox I/O) runs unlocked, so the pane is checked under e.mu before
+// and after it: if it closed, was reused (its generation changed) or moved to
+// another project meanwhile, the cards this claim added are orphaned, never
+// left pending on a dead or reused pane id. dropPane orphans in its own e.mu
+// section, so a pane closing after the re-check orphans them there.
 func (e *Engine) claimInbox(paneID, projectID string) {
 	if e.d.Inbox == nil || projectID == "" {
 		return
 	}
+	e.mu.Lock()
+	gen := e.gens[paneID]
+	a, ok := e.d.Attachments.Get(paneID)
+	e.mu.Unlock()
+	if !ok || a.ProjectID != projectID {
+		return
+	}
+	before := map[string]bool{} // cards already claimed onto the pane
+	for _, c := range e.d.Queue.All() {
+		if c.PaneID == paneID && c.SourceID != "" {
+			before[c.ID] = true
+		}
+	}
+	e.hook("inbox-before-claim")
 	n, err := e.d.Queue.Claim(e.d.Inbox, projectID, paneID)
 	if err != nil {
 		e.d.Logf("inbox claim for %s: %v", paneID, err)
+	}
+	if n == 0 {
+		return
+	}
+	stale := 0
+	e.mu.Lock()
+	if cur, ok := e.d.Attachments.Get(paneID); !ok || cur.ProjectID != projectID || e.gens[paneID] != gen {
+		for _, c := range e.d.Queue.All() {
+			if c.PaneID == paneID && c.SourceID != "" && !before[c.ID] && c.Status == queue.StatusPending {
+				if e.d.Queue.SetStatus(c.ID, queue.StatusOrphaned) == nil {
+					stale++
+				}
+			}
+		}
+	}
+	e.mu.Unlock()
+	if stale > 0 {
+		e.d.Logf("pane %s closed during an inbox claim: %d card(s) orphaned", paneID, stale)
+		e.broadcast()
+		return
 	}
 	if n > 0 {
 		e.d.Logf("pane %s: %d inbox card(s) for project %s", paneID, n, projectID)

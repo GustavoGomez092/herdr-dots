@@ -136,8 +136,8 @@ type Engine struct {
 
 	// Proactive state (Phase 8), guarded by mu. Daily, inbox, memory and git
 	// I/O never happen under mu.
-	bgBusy   map[key]string    // background run in flight -> its kind
-	bgRefs   map[key]int       // background runs in flight per key (bgBusy is dropped at 0)
+	bgBusy   map[key]string    // the running background job (it holds bgSem) -> its kind
+	bgQueued map[key]int       // background jobs queued or running per key, for dedupe
 	bgSem    chan struct{}     // one background run at a time per engine
 	today    state.Day         // last daily.json read (snapshot and roster hints)
 	todayAt  time.Time         // when today was read
@@ -207,7 +207,7 @@ func New(d Deps) *Engine {
 		memStats: map[string]memory.Stats{},
 		origBody: map[string]string{},
 		bgBusy:   map[key]string{},
-		bgRefs:   map[key]int{},
+		bgQueued: map[key]int{},
 		bgSem:    make(chan struct{}, 1),
 		toasted:  map[string]string{},
 		drafts:   map[string]*draftRun{},
