@@ -195,7 +195,7 @@ func TestTrimKeepsTheNewestLinesAndTheirResolutions(t *testing.T) {
 
 func TestAppendRefusesBadRecordsAndCleansExcerpts(t *testing.T) {
 	s := hstore(t)
-	s.Redact = func(x string) string { return strings.ReplaceAll(x, "sk-SECRET", "[redacted]") }
+	s.Redact = func(x string) string { return strings.ReplaceAll(x, "sk-SECRET", "[redacted]") } // extra scrubber
 	if err := s.Append(Record{T: "other", Dot: "security"}); err == nil {
 		t.Fatal("unknown type accepted")
 	}
@@ -287,8 +287,8 @@ func TestFilesArePrivate(t *testing.T) {
 	platformtest.AssertPrivateFile(t, filepath.Join(s.Dir, "security.jsonl"))
 }
 
-// A file with nothing readable in it is moved aside, never blocking the dot.
-func TestWhollyCorruptFileIsMovedAsideAndHistoryContinues(t *testing.T) {
+// A file with nothing readable is quarantined by a writer, never by a reader.
+func TestWhollyCorruptFileIsQuarantinedByAppendNotByReaders(t *testing.T) {
 	s := hstore(t)
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -298,14 +298,117 @@ func TestWhollyCorruptFileIsMovedAsideAndHistoryContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := s.Stats("security", hNow, time.Hour)
-	if err != nil || st.TotalRuns() != 0 {
+	if err != nil || st.TotalRuns() != 0 || st.Skipped != 2 {
 		t.Fatalf("stats %+v %v", st, err)
 	}
-	if _, err := os.Stat(path + ".corrupt"); err != nil {
-		t.Fatalf("corrupt file not moved aside: %v", err)
+	s.Query("security", time.Time{}, 0)
+	s.Profile("security", hNow, 5)
+	s.CostShare("security", hNow, time.Hour)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("a reader moved the file: %v", err)
 	}
 	mustAppend(t, s, runRec("security", KindReview, state.OutcomePass, "", time.Minute))
-	if got, _ := s.Query("security", time.Time{}, 0); len(got) != 1 {
-		t.Fatalf("after recovery: %+v", got)
+	aside, _ := filepath.Glob(path + ".corrupt-*")
+	if len(aside) != 1 {
+		t.Fatalf("corrupt file not moved aside: %v", aside)
 	}
+	st, _ = s.Stats("security", hNow, time.Hour)
+	if st.TotalRuns() != 1 || st.Skipped != 0 {
+		t.Fatalf("after recovery: %+v", st)
+	}
+}
+
+func TestTrimQuarantinesAWhollyCorruptFile(t *testing.T) {
+	s := hstore(t)
+	os.MkdirAll(s.Dir, 0o700)
+	path := filepath.Join(s.Dir, "security.jsonl")
+	os.WriteFile(path, []byte("nope\n"), 0o600)
+	if err := s.Trim("security"); err != nil {
+		t.Fatal(err)
+	}
+	if aside, _ := filepath.Glob(path + ".corrupt-*"); len(aside) != 1 {
+		t.Fatalf("aside %v", aside)
+	}
+}
+
+// A crash can leave a half-written last line with no newline; the next
+// record must start on its own line.
+func TestAppendAfterHalfWrittenLastLine(t *testing.T) {
+	s := hstore(t)
+	mustAppend(t, s, runRec("security", KindReview, state.OutcomeFlagged, "s/1", time.Hour))
+	path := filepath.Join(s.Dir, "security.jsonl")
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"t":"run","dot":"secur`)
+	f.Close()
+	mustAppend(t, s, runRec("security", KindReview, state.OutcomePass, "", time.Minute))
+	st, err := s.Stats("security", hNow, 24*time.Hour)
+	if err != nil || st.TotalRuns() != 2 || st.Skipped != 1 {
+		t.Fatalf("stats %+v %v", st, err)
+	}
+	if got, _ := s.Query("security", time.Time{}, 0); got[0].Outcome != state.OutcomePass {
+		t.Fatalf("new record unreadable: %+v", got)
+	}
+}
+
+// Keys never reach the file, in any free-text field, whatever Redact is wired.
+func TestSecretsNeverReachTheFileInAnyField(t *testing.T) {
+	key := "sk-ant-api03-abcdefghijklmnop"
+	for name, redact := range map[string]func(string) string{
+		"nil": nil, "noop": func(x string) string { return x },
+	} {
+		s := hstore(t)
+		s.Redact = redact
+		r := runRec("security", KindReview, state.OutcomeFlagged, CardKey("s", key), time.Minute)
+		r.Excerpt, r.Project, r.Pane = "a "+key, "/p/"+key, "w:"+key
+		mustAppend(t, s, r)
+		mustAppend(t, s, Record{T: TypeResolve, Dot: "security", Card: CardKey("s", key), Resolution: ResSent})
+		data, _ := os.ReadFile(filepath.Join(s.Dir, "security.jsonl"))
+		if strings.Contains(string(data), "abcdefghijklmnop") {
+			t.Fatalf("%s: key stored: %s", name, data)
+		}
+	}
+}
+
+func TestAppendRefusesUnknownEnumValues(t *testing.T) {
+	s := hstore(t)
+	for _, r := range []Record{
+		{T: TypeRun, Dot: "security", Kind: "sk-ant-api03-abcdefghijklmnop"},
+		{T: TypeRun, Dot: "security", Outcome: "bogus"},
+		{T: TypeRun, Dot: "security", Severity: "sk-ant-api03-abcdefghijklmnop"},
+		{T: TypeResolve, Dot: "security", Resolution: "bogus"},
+	} {
+		if err := s.Append(r); err == nil {
+			t.Fatalf("accepted %+v", r)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, "security.jsonl")); err == nil {
+		t.Fatal("a refused record wrote a file")
+	}
+	for _, out := range []string{"flagged", "pass", "error", "budget", "learned", "suppressed", "council", "research", "scheduled", "commit", "drafted", "applied", "asked", "dropped"} {
+		if err := s.Append(Record{T: TypeRun, Dot: "security", Outcome: out, Severity: "warn"}); err != nil {
+			t.Fatalf("outcome %q refused: %v", out, err)
+		}
+	}
+}
+
+func TestCostTotalsPerDot(t *testing.T) {
+	s := hstore(t)
+	a := runRec("security", KindReview, state.OutcomePass, "", time.Hour)
+	a.CostUSD = 3
+	b := runRec("frontend", KindReview, state.OutcomePass, "", time.Hour)
+	b.CostUSD = 1
+	old := runRec("frontend", KindReview, state.OutcomePass, "", 40*24*time.Hour)
+	old.CostUSD = 9
+	mustAppend(t, s, a, b, old)
+	got, err := s.CostTotals(hNow, 30*24*time.Hour)
+	if err != nil || got["security"] != 3 || got["frontend"] != 1 || len(got) != 2 {
+		t.Fatalf("totals %v %v", got, err)
+	}
+}
+
+func TestLockFileAndDirArePrivate(t *testing.T) {
+	s := hstore(t)
+	mustAppend(t, s, runRec("security", KindReview, state.OutcomePass, "", time.Minute))
+	platformtest.AssertPrivateFile(t, filepath.Join(s.Dir, "security.lock"))
+	platformtest.AssertPrivateDir(t, s.Dir)
 }

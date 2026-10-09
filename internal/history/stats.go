@@ -151,28 +151,46 @@ func statsFrom(runs, resolves []Record, skipped int, now time.Time, window time.
 	return st
 }
 
-// CostShare returns slug's share of every dot's cost in the window and the
-// total. Unreadable files are skipped; their error is returned joined.
-func (s *Store) CostShare(slug string, now time.Time, window time.Duration) (share, total float64, err error) {
+// CostTotals sums each dot's run costs over [now-window, now], reading every
+// history file without the resolve join. Unreadable files are skipped; their
+// errors are returned joined.
+//
+// CostTotals, CostShare, Stats and Profile read whole files: call them from a
+// command or a background load, never from a UI View or Update. A screen should
+// cache the result.
+func (s *Store) CostTotals(now time.Time, window time.Duration) (map[string]float64, error) {
 	slugs, err := s.Slugs()
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
-	var mine float64
+	out := map[string]float64{}
 	var errs []error
-	for _, other := range slugs {
-		st, err := s.Stats(other, now, window)
+	for _, slug := range slugs {
+		recs, _, err := s.read(slug)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		total += st.CostUSD
-		if other == slug {
-			mine = st.CostUSD
+		sum := 0.0
+		for _, r := range recs {
+			if r.T == TypeRun && inWindow(r.At, now, window) {
+				sum += r.CostUSD
+			}
 		}
+		out[slug] = sum
+	}
+	return out, errors.Join(errs...)
+}
+
+// CostShare returns slug's share of every dot's cost in the window and the
+// total (see CostTotals for the cost of calling it).
+func (s *Store) CostShare(slug string, now time.Time, window time.Duration) (share, total float64, err error) {
+	totals, err := s.CostTotals(now, window)
+	for _, v := range totals {
+		total += v
 	}
 	if total > 0 {
-		share = mine / total
+		share = totals[slug] / total
 	}
-	return share, total, errors.Join(errs...)
+	return share, total, err
 }

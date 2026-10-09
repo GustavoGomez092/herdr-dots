@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/lockfile"
+	"herdr-dots/internal/state"
 	"herdr-dots/internal/textutil"
 )
 
@@ -105,7 +107,7 @@ func CardKey(session, id string) string {
 }
 
 // Store reads and writes history files under Dir. The zero limits mean the
-// defaults. Safe for concurrent use; separate processes are serialized by a
+// defaults. Safe for concurrent use; goroutines and processes are serialized by a
 // per-file lock (<slug>.lock).
 type Store struct {
 	Dir         string
@@ -113,7 +115,7 @@ type Store struct {
 	TrimTo      int
 	TrimEvery   int                 // appends (per process and file) between size checks
 	LockTimeout time.Duration       // 0 → 2s
-	Redact      func(string) string // scrubs key-shaped text from excerpts; nil = credentials.Redact
+	Redact      func(string) string // extra scrubber run after credentials.Redact (which always runs); nil = none
 	Now         func() time.Time    // nil = time.Now
 
 	mu      sync.Mutex
@@ -145,7 +147,9 @@ func (s *Store) limits() (maxLines, trimTo, every int) {
 
 func (s *Store) path(slug string) string { return filepath.Join(s.Dir, slug+".jsonl") }
 
-// withLock runs fn holding this process's mutex and the file's lock.
+// withLock runs fn holding the file's lock. The OS lock excludes other
+// processes and other goroutines alike (each call opens its own descriptor),
+// so s.mu is not held while waiting for it.
 func (s *Store) withLock(slug string, fn func(path string) error) error {
 	if !ValidSlug(slug) {
 		return fmt.Errorf("%w: dot %q", ErrInvalid, slug)
@@ -153,8 +157,6 @@ func (s *Store) withLock(slug string, fn func(path string) error) error {
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	timeout := s.LockTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Second
@@ -170,46 +172,98 @@ func (s *Store) withLock(slug string, fn func(path string) error) error {
 	return fn(s.path(slug))
 }
 
-// Excerpt cleans model text for history: control and bidi characters
-// stripped, keys redacted (credentials.Redact unless the store overrides it:
-// history never holds a key), whitespace flattened, at most ExcerptRunes
-// runes.
-func (s *Store) excerpt(text string) string {
+// clean makes model or caller text safe to store: control and bidi characters
+// stripped, keys redacted, whitespace flattened, at most max runes.
+// credentials.Redact always runs, so history never holds a key whatever the
+// caller wired; Store.Redact, when set, is an additional scrubber applied
+// after it.
+func (s *Store) clean(text string, max int) string {
 	text = textutil.SanitizeModelText(text)
+	text = credentials.Redact(text)
 	if s.Redact != nil {
 		text = s.Redact(text)
-	} else {
-		text = credentials.Redact(text)
 	}
 	text = strings.Join(strings.Fields(text), " ")
-	if r := []rune(text); len(r) > ExcerptRunes {
-		text = string(r[:ExcerptRunes-1]) + "…"
+	if r := []rune(text); len(r) > max {
+		text = string(r[:max-1]) + "…"
 	}
 	return text
+}
+
+var (
+	allowedKinds = []string{"", KindReview, KindSummon, KindCouncil, KindAsk, KindResearch, KindScheduled, KindCommit, KindDraft, KindMemory}
+	allowedRes   = []string{"", ResSent, ResEdited, ResDismissed, ResApplied, ResDiscarded, ResInjected, ResOrphaned}
+	allowedSev   = []string{"", "info", "warn", "critical", "pass"}
+	allowedOut   = []string{"", state.OutcomeFlagged, state.OutcomePass, state.OutcomeError, state.OutcomeBudget,
+		state.OutcomeLearned, state.OutcomeSuppressed, state.OutcomeCouncil, state.OutcomeResearch,
+		state.OutcomeScheduled, state.OutcomeCommit, state.OutcomeDrafted, state.OutcomeApplied,
+		state.OutcomeAsked, "dropped"}
+)
+
+// validate refuses unknown enum values and cleans every free-text field.
+func (s *Store) validate(r *Record) error {
+	if r.T != TypeRun && r.T != TypeResolve {
+		return fmt.Errorf("%w: type %q", ErrInvalid, r.T)
+	}
+	for _, c := range []struct {
+		name, v string
+		ok      []string
+	}{{"kind", r.Kind, allowedKinds}, {"outcome", r.Outcome, allowedOut}, {"resolution", r.Resolution, allowedRes}, {"severity", r.Severity, allowedSev}} {
+		if !slices.Contains(c.ok, c.v) {
+			return fmt.Errorf("%w: %s %q", ErrInvalid, c.name, c.v)
+		}
+	}
+	r.Excerpt = s.clean(r.Excerpt, ExcerptRunes)
+	r.Project = s.clean(r.Project, 300)
+	r.Pane = s.clean(r.Pane, 300)
+	r.Card = s.clean(r.Card, 300)
+	return nil
 }
 
 // Append writes one record. At defaults to now. It trims the file when a
 // size check (every TrimEvery appends, and on the first append of each file in
 // this process) finds it over MaxLines.
 func (s *Store) Append(r Record) error {
-	if r.T != TypeRun && r.T != TypeResolve {
-		return fmt.Errorf("%w: type %q", ErrInvalid, r.T)
+	if err := s.validate(&r); err != nil {
+		return err
 	}
 	if r.At.IsZero() {
 		r.At = s.now()
 	}
 	r.At = r.At.UTC()
-	r.Excerpt = s.excerpt(r.Excerpt)
 	line, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
 	return s.withLock(r.Dot, func(path string) error {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		s.mu.Lock()
+		if s.appends == nil {
+			s.appends = map[string]int{}
+		}
+		s.appends[r.Dot]++
+		n := s.appends[r.Dot]
+		s.mu.Unlock()
+		_, _, every := s.limits()
+		check := n == 1 || n%every == 0
+		if check {
+			if err := s.quarantineLocked(path); err != nil {
+				return err
+			}
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 		if err != nil {
 			return err
 		}
-		_, werr := f.Write(append(line, '\n'))
+		buf := append(line, '\n')
+		// A crash can leave a half-written last line; start on a fresh line so
+		// the new record is not glued to it.
+		if st, err := f.Stat(); err == nil && st.Size() > 0 {
+			var last [1]byte
+			if _, err := f.ReadAt(last[:], st.Size()-1); err == nil && last[0] != '\n' {
+				buf = append([]byte{'\n'}, buf...)
+			}
+		}
+		_, werr := f.Write(buf)
 		cerr := f.Close()
 		if werr != nil {
 			return werr
@@ -217,12 +271,7 @@ func (s *Store) Append(r Record) error {
 		if cerr != nil {
 			return cerr
 		}
-		if s.appends == nil {
-			s.appends = map[string]int{}
-		}
-		s.appends[r.Dot]++
-		_, _, every := s.limits()
-		if n := s.appends[r.Dot]; n == 1 || n%every == 0 {
+		if check {
 			return s.trimLocked(path)
 		}
 		return nil
@@ -231,7 +280,33 @@ func (s *Store) Append(r Record) error {
 
 // Trim cuts slug's file to TrimTo lines when it is over MaxLines.
 func (s *Store) Trim(slug string) error {
-	return s.withLock(slug, s.trimLocked)
+	return s.withLock(slug, func(path string) error {
+		if err := s.quarantineLocked(path); err != nil {
+			return err
+		}
+		return s.trimLocked(path)
+	})
+}
+
+// quarantineLocked moves a file with no readable record at all aside to
+// <file>.corrupt-<time>, so a damaged file never blocks the dot. Only writers
+// (Append, Trim) do this; readers never change the file.
+func (s *Store) quarantineLocked(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && len(bytes.TrimSpace(data)) == 0) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if recs, _ := parse(data); len(recs) > 0 {
+		return nil
+	}
+	aside := fmt.Sprintf("%s.corrupt-%d", path, s.now().UnixNano())
+	if err := os.Rename(path, aside); err != nil {
+		return os.Remove(path)
+	}
+	return nil
 }
 
 func (s *Store) trimLocked(path string) error {
@@ -275,43 +350,42 @@ func (s *Store) trimLocked(path string) error {
 	return fsutil.WriteFileAtomic(path, out.Bytes(), 0o600)
 }
 
-// read returns every parseable record of slug in file order and how many
-// lines could not be parsed. A missing file is empty.
-func (s *Store) read(slug string) ([]Record, int, error) {
+// parse returns every parseable record in file order and how many lines could
+// not be parsed.
+func parse(data []byte) ([]Record, int) {
 	var out []Record
 	skipped := 0
+	for _, l := range bytes.Split(data, []byte("\n")) {
+		if len(bytes.TrimSpace(l)) == 0 {
+			continue
+		}
+		var r Record
+		if err := json.Unmarshal(l, &r); err != nil || (r.T != TypeRun && r.T != TypeResolve) {
+			skipped++
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, skipped
+}
+
+// read returns every parseable record of slug in file order and how many
+// lines could not be parsed. A missing file is empty. It never modifies the
+// file; the bytes are read under the lock and parsed outside it.
+func (s *Store) read(slug string) ([]Record, int, error) {
+	var data []byte
 	err := s.withLock(slug, func(path string) error {
-		data, err := os.ReadFile(path)
+		var err error
+		data, err = os.ReadFile(path)
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
-		if err != nil {
-			return err
-		}
-		for _, l := range bytes.Split(data, []byte("\n")) {
-			if len(bytes.TrimSpace(l)) == 0 {
-				continue
-			}
-			var r Record
-			if err := json.Unmarshal(l, &r); err != nil || (r.T != TypeRun && r.T != TypeResolve) {
-				skipped++
-				continue
-			}
-			out = append(out, r)
-		}
-		if len(out) == 0 && skipped > 0 {
-			// Nothing in the file is readable: move it aside so the dot starts
-			// fresh and the damaged file stays for inspection.
-			skipped = 0
-			if err := os.Rename(path, path+".corrupt"); err != nil {
-				_ = os.Remove(path)
-			}
-		}
-		return nil
+		return err
 	})
 	if err != nil {
 		return nil, 0, err
 	}
+	out, skipped := parse(data)
 	return out, skipped, nil
 }
 
