@@ -195,25 +195,48 @@ func (c *SocketClient) Subscribe(ctx context.Context, paneID string) (<-chan Sta
 	if err != nil {
 		return nil, err
 	}
-	sub := map[string]any{"subscriptions": []map[string]any{{"type": "pane.agent_status_changed", "pane_id": paneID}}}
-	if err := json.NewEncoder(conn).Encode(request{ID: "herdr-dots-sub", Method: "events.subscribe", Params: sub}); err != nil {
+	// done is closed when the reader goroutine exits, so the ctx watcher never
+	// outlives the connection. The watcher also covers the ack wait below.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
+	fail := func(err error) (<-chan StatusEvent, error) {
+		close(done)
 		conn.Close()
 		return nil, err
+	}
+	timeout := c.Timeout
+	if timeout == 0 {
+		timeout = 10 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
+	sub := map[string]any{"subscriptions": []map[string]any{{"type": "pane.agent_status_changed", "pane_id": paneID}}}
+	if err := json.NewEncoder(conn).Encode(request{ID: "herdr-dots-sub", Method: "events.subscribe", Params: sub}); err != nil {
+		return fail(err)
 	}
 	dec := json.NewDecoder(bufio.NewReader(conn))
 	var first response
 	if err := dec.Decode(&first); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("events.subscribe: %w", err)
+		return fail(fmt.Errorf("events.subscribe: %w", err))
 	}
 	if first.Error != nil {
-		conn.Close()
-		return nil, first.Error
+		return fail(first.Error)
 	}
+	_ = conn.SetDeadline(time.Time{}) // streaming has no deadline
 	ch := make(chan StatusEvent, 16)
-	go func() { <-ctx.Done(); conn.Close() }()
 	go func() {
 		defer close(ch)
+		defer close(done)
+		defer conn.Close()
 		for {
 			var env struct {
 				Event string `json:"event"`

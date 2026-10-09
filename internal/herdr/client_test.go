@@ -1,7 +1,11 @@
 package herdr_test
 
 import (
+	"bufio"
 	"context"
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -138,5 +142,90 @@ func TestNewFromEnv(t *testing.T) {
 	c, err := herdr.NewFromEnv()
 	if err != nil || c.Path != "/x.sock" || c.PluginID != "herdr-dots" {
 		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+// rawListener returns a unix socket path whose connections are handed to h.
+func rawListener(t *testing.T, h func(net.Conn)) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "hdt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "h.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close(); os.RemoveAll(dir) })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go h(c)
+		}
+	}()
+	return path
+}
+
+func TestSubscribeAckTimeout(t *testing.T) {
+	path := rawListener(t, func(c net.Conn) {
+		defer c.Close()
+		_, _ = bufio.NewReader(c).ReadBytes('\n')
+		time.Sleep(3 * time.Second) // never replies
+	})
+	c := &herdr.SocketClient{Path: path, Timeout: 100 * time.Millisecond}
+	start := time.Now()
+	if _, err := c.Subscribe(context.Background(), "w1:p1"); err == nil {
+		t.Fatal("want error when ack never arrives")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("ack wait not bounded: %v", time.Since(start))
+	}
+}
+
+func TestSubscribeAckCancel(t *testing.T) {
+	path := rawListener(t, func(c net.Conn) {
+		defer c.Close()
+		_, _ = bufio.NewReader(c).ReadBytes('\n')
+		time.Sleep(3 * time.Second)
+	})
+	c := &herdr.SocketClient{Path: path, Timeout: 30 * time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := c.Subscribe(ctx, "w1:p1"); done <- err }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want error after cancel")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Subscribe did not return after ctx cancel")
+	}
+}
+
+func TestSubscribeChannelClosesWhenServerDrops(t *testing.T) {
+	path := rawListener(t, func(c net.Conn) {
+		_, _ = bufio.NewReader(c).ReadBytes('\n')
+		_, _ = c.Write([]byte(`{"id":"x","result":{"type":"subscription_started"}}` + "\n"))
+		time.Sleep(50 * time.Millisecond)
+		c.Close()
+	})
+	c := &herdr.SocketClient{Path: path}
+	ch, err := c.Subscribe(context.Background(), "w1:p1") // ctx stays live
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case _, open := <-ch:
+		if open {
+			t.Fatal("unexpected event")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("channel not closed after server dropped connection")
 	}
 }
