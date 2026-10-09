@@ -246,6 +246,13 @@ func serveEngine(p paths.Paths) error {
 	}
 	defer lock.Release()
 	logger := log.New(os.Stderr, "herdr-dots ", log.LstdFlags)
+	// Before any store opens a file. A set that can't run fails closed: the
+	// engine would not know which files a newer version wrote.
+	migrated, err := startupMigrations(p, logger.Printf)
+	if err != nil {
+		logger.Printf("engine not started: %v", err)
+		return err
+	}
 
 	cfg, err := config.Load(p.ConfigFile())
 	if err != nil {
@@ -269,6 +276,11 @@ func serveEngine(p paths.Paths) error {
 	}
 	defer ln.Close() // also removes the unix socket file
 
+	if msg := readOnlyNotice(migrated); msg != "" {
+		// After Listen and off the start path, bounded: a slow Herdr socket
+		// can't delay the endpoint ensureEngine waits for.
+		go notifyReadOnly(ctx, hc, msg, readOnlyToastTimeout, logger.Printf)
+	}
 	e.Start(ctx)
 	go watchHerdr(ctx, cancel, hc, logger)
 	logger.Printf("engine started: session dir %s, endpoint %s", p.SessionDir, endpoint)

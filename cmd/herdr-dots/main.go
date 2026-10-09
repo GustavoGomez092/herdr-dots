@@ -54,6 +54,9 @@ func dispatch(args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown command %q (%v)", args[0], usage())
 	}
+	if err := protectNewerFiles(args[0]); err != nil {
+		return err
+	}
 	return h(args[1:])
 }
 

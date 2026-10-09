@@ -138,6 +138,8 @@ type Engine struct {
 	origBody map[string]string       // card id → body before its first edit
 	memToast bool                    // "memory write failed" already shown
 
+	inboxNewer atomic.Bool // the "newer inbox.json" claim refusal was logged (once per process)
+
 	// Project dots (Phase 9), guarded by mu. Their I/O never happens under mu.
 	userDots  map[string]dots.Dot      // CONFIG_DIR/dots
 	userBad   []dots.LoadError         // invalid user dot files
