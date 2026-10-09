@@ -56,7 +56,7 @@ func TestDailyRollsOverAtLocalMidnight(t *testing.T) {
 	loc := time.FixedZone("UTC-5", -5*3600)
 	late := time.Date(2026, 10, 21, 23, 59, 0, 0, loc)
 	_ = d.Add("security", RunResearch, 1.00, late)
-	if day, _ := d.Today(late); day.CostUSD != 1.00 {
+	if day, _ := d.Today(late); math.Abs(day.CostUSD-1.00) > 1e-9 {
 		t.Fatalf("before midnight: %+v", day)
 	}
 	early := time.Date(2026, 10, 22, 0, 1, 0, 0, loc)
@@ -65,35 +65,107 @@ func TestDailyRollsOverAtLocalMidnight(t *testing.T) {
 		t.Fatalf("after midnight: %+v %v", day, err)
 	}
 	_ = d.Add("security", RunResearch, 0.05, early)
-	if day, _ := d.Today(early); day.Count("security", RunResearch) != 1 || day.CostUSD != 0.05 {
+	if day, _ := d.Today(early); day.Count("security", RunResearch) != 1 || math.Abs(day.CostUSD-0.05) > 1e-9 {
 		t.Fatalf("new day: %+v", day)
 	}
 }
 
-// A corrupt daily file must never reset the cap to zero: that would make the
-// budget unlimited. Today and Add both fail closed with ErrDailyCorrupt, the
-// file is left in place for inspection, and the failure is logged.
-func TestDailyCorruptFileFailsClosed(t *testing.T) {
+// A corrupt daily file must never reset the cap to zero. It is moved aside
+// and the rest of that local day is blocked (budget reached); the next local
+// day starts clean. The failure is logged once.
+func TestDailyCorruptFileBlocksTheDay(t *testing.T) {
 	d, p := dailyAt(t)
-	bad := []byte("{not json")
-	_ = os.WriteFile(p, bad, 0o600)
+	_ = os.WriteFile(p, []byte("{not json"), 0o600)
 	var logged int
 	d.Logf = func(string, ...any) { logged++ }
-	now := time.Now()
-	if _, err := d.Today(now); !errors.Is(err, ErrDailyCorrupt) {
-		t.Fatalf("Today err %v, want ErrDailyCorrupt", err)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	day, err := d.Today(now)
+	if err != nil || !day.Blocked || day.Date != "2026-10-21" {
+		t.Fatalf("day %+v err %v", day, err)
 	}
-	if err := d.Add("x", RunResearch, 0.5, now); !errors.Is(err, ErrDailyCorrupt) {
-		t.Fatalf("Add err %v, want ErrDailyCorrupt", err)
+	if m, _ := filepath.Glob(p + ".corrupt-*"); len(m) != 1 {
+		t.Fatalf("moved aside: %v", m)
 	}
-	if logged == 0 {
-		t.Fatal("corrupt file was not logged")
+	if err := d.Add("x", RunResearch, 0.5, now); err != nil {
+		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(p); !bytes.Equal(got, bad) {
-		t.Fatalf("corrupt file was modified: %q", got)
+	if day, _ = d.Today(now); !day.Blocked || day.Count("x", RunResearch) != 1 {
+		t.Fatalf("Add must keep the day blocked: %+v", day)
 	}
-	if m, _ := filepath.Glob(p + ".corrupt-*"); len(m) != 0 {
-		t.Fatalf("file must not be moved aside (that would reset the cap): %v", m)
+	_, _ = d.Today(now)
+	if logged != 1 {
+		t.Fatalf("logged %d times, want exactly 1", logged)
+	}
+	platformtest.AssertPrivateFile(t, p)
+	next, err := d.Today(now.AddDate(0, 0, 1))
+	if err != nil || next.Blocked || next.Total() != 0 {
+		t.Fatalf("next day: %+v %v", next, err)
+	}
+}
+
+// A clock stepping backwards must neither restart nor overwrite a later day.
+func TestDailyClockBackwardsKeepsLaterDay(t *testing.T) {
+	d, p := dailyAt(t)
+	loc := time.FixedZone("UTC-5", -5*3600)
+	day2 := time.Date(2026, 10, 22, 0, 30, 0, 0, loc)
+	day1 := time.Date(2026, 10, 21, 23, 50, 0, 0, loc)
+	_ = d.Add("security", RunResearch, 0.40, day2)
+	if err := d.Add("security", RunResearch, 0.10, day1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Today(day1)
+	if err != nil || got.Date != "2026-10-22" || got.Count("security", RunResearch) != 2 || math.Abs(got.CostUSD-0.50) > 1e-9 {
+		t.Fatalf("backwards: %+v %v", got, err)
+	}
+	got, _ = d.Today(day2.Add(time.Hour))
+	if got.Date != "2026-10-22" || got.Count("security", RunResearch) != 2 || math.Abs(got.CostUSD-0.50) > 1e-9 {
+		t.Fatalf("forward again: %+v", got)
+	}
+	if raw, _ := os.ReadFile(p); !strings.Contains(string(raw), `"day": "2026-10-22"`) {
+		t.Fatalf("later date overwritten: %s", raw)
+	}
+}
+
+func TestDailyRollsOverOnDSTDay(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no tzdata")
+	}
+	d, _ := dailyAt(t)
+	// 2026-11-01 is a 25-hour day in New York (clocks fall back at 02:00).
+	before := time.Date(2026, 11, 1, 0, 30, 0, 0, loc)
+	late := time.Date(2026, 11, 1, 23, 30, 0, 0, loc)
+	next := time.Date(2026, 11, 2, 0, 30, 0, 0, loc)
+	_ = d.Add("security", RunResearch, 1, before)
+	if day, _ := d.Today(late); day.Date != "2026-11-01" || day.Total() != 1 {
+		t.Fatalf("same DST day: %+v", day)
+	}
+	if day, _ := d.Today(next); day.Date != "2026-11-02" || day.Total() != 0 || day.CostUSD != 0 {
+		t.Fatalf("next day: %+v", day)
+	}
+}
+
+func TestDailyCostIsExactInMicrodollars(t *testing.T) {
+	d, _ := dailyAt(t)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	for i := 0; i < 1000; i++ {
+		if err := d.Add("security", RunResearch, 0.001, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if day, _ := d.Today(now); day.CostUSD != 1.0 {
+		t.Fatalf("cost %v, want exactly 1.0", day.CostUSD)
+	}
+}
+
+func TestDailyLoadsOldFloatOnlyFile(t *testing.T) {
+	d, p := dailyAt(t)
+	_ = os.WriteFile(p, []byte(`{"version":1,"day":"2026-10-21","runs":{"a":{"research":2}},"cost_usd":0.37}`), 0o600)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	_ = d.Add("a", RunResearch, 0.03, now)
+	day, err := d.Today(now)
+	if err != nil || day.Count("a", RunResearch) != 3 || day.CostUSD != 0.40 {
+		t.Fatalf("%+v %v", day, err)
 	}
 }
 
@@ -150,7 +222,10 @@ func TestDailyXProcChild(t *testing.T) {
 		t.Skip("helper process for TestDailyCrossProcessAddsLoseNothing")
 	}
 	n, _ := strconv.Atoi(os.Getenv("DAILY_XPROC_N"))
-	d, _ := OpenDaily(p)
+	d, err := OpenDaily(p)
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Timeout = 60 * time.Second
 	for i := 0; i < n; i++ {
 		if err := d.Add("security", RunResearch, 0.01, time.Date(2026, 10, 21, 12, 0, 0, 0, time.Local)); err != nil {
