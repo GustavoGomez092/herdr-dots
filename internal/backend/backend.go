@@ -29,7 +29,9 @@ type Request struct {
 	Force     bool   // summoned: must answer
 	Memory    string // pre-rendered memory block (memory.Render); "" = none
 	Learn     bool   // the dot may return memory ops in its reply
-	Pass      string // PassReview, PassMemory or PassWrite
+	Pass      string // PassReview, PassMemory, PassWrite or PassResearch
+	Web       bool   // research only: add web search/fetch where the backend has them (WebSupported)
+	Trigger   string // what started a review: TriggerTurn, TriggerScheduled or TriggerCommit
 	// Write gives the run file-editing tools confined to Cwd (an isolated
 	// worktree). Backends honor it only together with Pass == PassWrite, so
 	// one stray field can never make a review write.
@@ -44,11 +46,21 @@ type Request struct {
 }
 
 // Pass values: a normal review, an observe dot's memory-only pass, or a
-// draft run that edits an isolated copy of the repository (Phase 7).
+// draft run that edits an isolated copy of the repository (Phase 7), or an
+// idle research pass (Phase 8: read-only, like a review).
 const (
-	PassReview = ""
-	PassMemory = "memory"
-	PassWrite  = "write"
+	PassReview   = ""
+	PassMemory   = "memory"
+	PassWrite    = "write"
+	PassResearch = "research"
+)
+
+// Trigger values for a review (Phase 8). They only change how the user
+// prompt labels Question.
+const (
+	TriggerTurn      = ""          // a finished turn, a summon or a council
+	TriggerScheduled = "scheduled" // a [schedule] slot: Question is the standing task
+	TriggerCommit    = "commit"    // a new commit: Question is the commit message, stat and patch
 )
 
 // WriteMode reports whether r is a draft run allowed to edit files.

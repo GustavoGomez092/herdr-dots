@@ -115,6 +115,13 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 		args = append(args, "--restricted")
 		args = append(args, "--tools", ClaudeWriteTools, "--allowedTools", ClaudeWriteAllowed,
 			"--permission-mode", "acceptEdits", "--disallowedTools", ClaudeWriteDenied)
+	case r.Web && r.Pass == PassResearch:
+		// Idle research with web tools (Phase 8): still no Bash, Edit or Write.
+		list := "WebSearch,WebFetch"
+		if r.RepoRead {
+			list = "Read,Grep,Glob," + list
+		}
+		args = append(args, "--tools", list, "--allowedTools", list)
 	case r.RepoRead:
 		args = append(args, "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob")
 	default:
@@ -128,6 +135,9 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 
 func (c ClaudeCLI) Run(ctx context.Context, r Request) (Result, error) {
 	if err := checkArgs(c.Kind(), r.Args); err != nil {
+		return Result{}, err
+	}
+	if err := checkResearchNotWrite(r); err != nil {
 		return Result{}, err
 	}
 	cmd := c.BuildCmd(r)
