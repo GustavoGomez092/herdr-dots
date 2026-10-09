@@ -361,8 +361,9 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		// The developer may reword anything. A model or outcome add may only
 		// reshape an entry of its own source and dot that is not an approved
 		// project convention; otherwise it just bumps uses.
+		// The main agent never rewrites anything, not even its own proposal.
 		rewrite := e.Source == SourceUser ||
-			(x.Source != SourceUser && x.Source == e.Source && x.Dot == e.Dot && !(x.Scope == ScopeProject && x.Status != StatusProposed))
+			(e.Source != SourceAgent && x.Source != SourceUser && x.Source == e.Source && x.Dot == e.Dot && !(x.Scope == ScopeProject && x.Status != StatusProposed))
 		if rewrite {
 			x.Paths = cleanPaths(append(x.Paths, e.Paths...))
 			if bestScore < 1 {

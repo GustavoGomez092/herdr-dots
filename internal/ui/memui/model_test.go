@@ -116,6 +116,22 @@ func TestTabCyclesScopes(t *testing.T) {
 	}
 }
 
+func TestAgentProposalsAreLabelledAgent(t *testing.T) {
+	st := memory.Open(filepath.Join(t.TempDir(), "memory"), memory.DefaultLimits())
+	if _, err := st.Propose(pid, memory.Entry{Kind: memory.KindNote, Text: "Tests need docker running"}); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	m := open(st, "", &n)
+	v := m.View()
+	if !strings.Contains(v, "(agent)") || strings.Contains(v, "()") {
+		t.Errorf("row:\n%s", v)
+	}
+	if v = press(m, "a").View(); !strings.Contains(v, "proposed by: the main agent") {
+		t.Errorf("approve screen:\n%s", v)
+	}
+}
+
 func TestApproveProposal(t *testing.T) {
 	st, n := seed(t), 0
 	m := press(open(st, "", &n), "a", "y")

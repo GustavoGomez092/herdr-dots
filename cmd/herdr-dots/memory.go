@@ -494,7 +494,10 @@ func (c *memCLI) approve(args []string) error {
 		return fmt.Errorf("%s is not a proposal", ref)
 	}
 	by := e.Dot
-	if by == "" {
+	switch {
+	case e.Source == memory.SourceAgent:
+		by = "the main agent"
+	case by == "":
 		by = "the developer"
 	}
 	paths := strings.Join(e.Paths, ", ")

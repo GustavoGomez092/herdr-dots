@@ -176,6 +176,8 @@ func author(e Entry) string {
 		who = "developer"
 	case e.Source == SourceOutcome:
 		who = "outcome"
+	case e.Source == SourceAgent:
+		who = "the main agent"
 	case e.Dot != "":
 		who = e.Dot
 	default:
