@@ -1,0 +1,29 @@
+name = "Docs"
+glyph = "¶"
+color = "white"
+purpose = """
+You are a technical writer who keeps documentation true. When behavior,
+flags, config keys, APIs or setup steps change, name the README section,
+doc page, docstring or changelog entry that is now wrong or missing, and
+write the corrected sentence. Never ask for docs that already match."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = []
+cooldown = 2
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40

@@ -58,6 +58,23 @@ func press(m tea.Model, keys ...string) tea.Model {
 	return m
 }
 
+// pickTemplate opens the template list and moves the cursor to name, so a
+// test never depends on how many templates sort before it.
+func pickTemplate(t *testing.T, m tea.Model, name string) tea.Model {
+	t.Helper()
+	m = press(m, "t")
+	for i := 0; i <= len(dots.Templates()); i++ {
+		for _, line := range strings.Split(m.View(), "\n") {
+			if strings.HasPrefix(line, "▸ ") && strings.HasSuffix(line, " "+name) {
+				return m
+			}
+		}
+		m = press(m, "j")
+	}
+	t.Fatalf("template %s not in the list:\n%s", name, m.View())
+	return m
+}
+
 func lib() view.Snapshot {
 	return view.Snapshot{
 		Library: []view.LibraryDot{
@@ -108,12 +125,7 @@ func TestNoTargetIsLibraryOnly(t *testing.T) {
 
 func TestCreateFromTemplateSavesAndReloads(t *testing.T) {
 	m, fc, dir := setup(t, "w1:p1")
-	m = press(m, "t")
-	if !strings.Contains(m.View(), "Copywriter") {
-		t.Fatalf("templates screen:\n%s", m.View())
-	}
-	// Templates are sorted by name: Backend, Copywriter, ... — pick Copywriter.
-	m = press(m, "j", "enter", "ctrl+s")
+	m = press(pickTemplate(t, m, "Copywriter"), "enter", "ctrl+s")
 	if _, err := os.Stat(filepath.Join(dir, "copywriter.toml")); err != nil {
 		t.Fatalf("dot file not written: %v\n%s", err, m.View())
 	}
@@ -149,7 +161,7 @@ func TestEditingUnattachedDotDoesNotSelectIt(t *testing.T) {
 
 func TestNewDotIsSelectedAfterSave(t *testing.T) {
 	m, fc, _ := setup(t, "w1:p1")
-	m = press(m, "t", "j", "enter", "ctrl+s") // create Copywriter
+	m = press(pickTemplate(t, m, "Copywriter"), "enter", "ctrl+s") // create Copywriter
 	s := lib()
 	s.Library = append(s.Library, view.LibraryDot{Slug: "copywriter", Name: "Copywriter", Glyph: "✎", Backend: "claude-cli", Model: "sonnet", Mode: "suggest"})
 	m, _ = m.Update(SnapshotMsg(s))
@@ -207,7 +219,7 @@ func TestDeleteNeedsConfirmation(t *testing.T) {
 
 func TestSaveSnapshotsFormBeforeCmdRuns(t *testing.T) {
 	m, _, dir := setup(t, "w1:p1")
-	m = press(m, "t", "j", "enter") // Copywriter in the editor
+	m = press(pickTemplate(t, m, "Copywriter"), "enter") // Copywriter in the editor
 	m, cmd := m.Update(key("ctrl+s"))
 	if cmd == nil || !strings.Contains(m.View(), "saving") {
 		t.Fatalf("want a save cmd and a saving marker:\n%s", m.View())
