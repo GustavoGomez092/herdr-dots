@@ -17,25 +17,26 @@ var (
 	ourCommandRe   = regexp.MustCompile(`^\s*command\s*=\s*["']herdr-dots\.`)
 )
 
-// RemoveBlock deletes every [[keys.command]] table whose command is one of
-// this plugin's actions (herdr-dots.*), and setup-keys's header comment, and
-// keeps every other byte of the file. removed counts deleted tables; left
-// counts plugin bindings it could not remove (other syntax, such as an
-// inline keys.command array), which the developer removes by hand. The
-// result must still parse; otherwise the original comes back with an error.
+// RemoveBlock removes what setup-keys added and nothing else. It first cuts
+// every exact copy of Block(Defaults()) out of data, byte for byte, so the
+// user's own comments, blank lines and line endings around it survive. It
+// then looks for hand-written or edited [[keys.command]] tables whose
+// command is one of this plugin's actions (herdr-dots.*) and deletes each
+// from its header to its last key line only: the comments and blank lines
+// after it stay with whatever follows. A blank line is dropped only when it
+// sits directly before a removed header (together with setup-keys's header
+// comment, when that comment is directly above it). removed counts deleted
+// bindings; left counts plugin bindings it could not remove (other syntax,
+// such as an inline keys.command array), which the developer removes by
+// hand. The result must still parse; otherwise the original comes back with
+// an error.
 func RemoveBlock(data string) (out string, removed, left int, err error) {
-	// First drop setup-keys's header comment and the blank line it wrote
-	// before it (the header can sit inside the span of the user's last table).
-	var lines []string
-	for _, l := range strings.SplitAfter(data, "\n") {
-		if strings.TrimRight(l, "\r\n") == blockHeader {
-			if n := len(lines); n > 0 && strings.TrimSpace(lines[n-1]) == "" {
-				lines = lines[:n-1]
-			}
-			continue
-		}
-		lines = append(lines, l)
+	rest := data
+	if block := Block(Defaults()); strings.Contains(rest, block) {
+		removed += strings.Count(rest, block) * len(Defaults())
+		rest = strings.ReplaceAll(rest, block, "")
 	}
+	lines := strings.SplitAfter(rest, "\n")
 	var keep []string
 	for i := 0; i < len(lines); {
 		l := lines[i]
@@ -44,25 +45,36 @@ func RemoveBlock(data string) (out string, removed, left int, err error) {
 			i++
 			continue
 		}
-		end := i + 1
-		for end < len(lines) && !tableHeaderRe.MatchString(lines[end]) {
-			end++
+		next := i + 1
+		for next < len(lines) && !tableHeaderRe.MatchString(lines[next]) {
+			next++
 		}
 		ours := false
-		for _, b := range lines[i+1 : end] {
-			ours = ours || ourCommandRe.MatchString(b)
+		last := i // the table's last key line
+		for j := i + 1; j < next; j++ {
+			t := strings.TrimSpace(lines[j])
+			if t != "" && !strings.HasPrefix(t, "#") {
+				last = j
+			}
+			ours = ours || ourCommandRe.MatchString(lines[j])
 		}
 		if !ours {
-			keep = append(keep, lines[i:end]...)
-			i = end
+			keep = append(keep, lines[i:next]...)
+			i = next
 			continue
 		}
 		removed++
-		// Drop one blank line before the table, as setup-keys wrote one.
 		if n := len(keep); n > 0 && strings.TrimSpace(keep[n-1]) == "" {
-			keep = keep[:n-1]
+			keep = keep[:n-1] // the separator setup-keys wrote
+			if n := len(keep); n > 0 && strings.TrimRight(keep[n-1], "\r\n") == blockHeader {
+				keep = keep[:n-1]
+				if n := len(keep); n > 0 && strings.TrimSpace(keep[n-1]) == "" {
+					keep = keep[:n-1]
+				}
+			}
 		}
-		i = end
+		keep = append(keep, lines[last+1:next]...)
+		i = next
 	}
 	out = strings.Join(keep, "")
 	var check map[string]any

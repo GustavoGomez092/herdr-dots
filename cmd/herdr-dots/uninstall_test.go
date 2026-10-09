@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -150,5 +151,187 @@ func TestSafeToPurgeRefusesHomeRootAndRelativePaths(t *testing.T) {
 	}
 	if !safeToPurge(filepath.Join(home, ".config", "herdr", "plugins", "herdr-dots"), home) {
 		t.Error("a plugin dir under home must be purgeable")
+	}
+}
+
+func TestSafeToPurgeRefusesOrdinaryDirectoriesUnderHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home", "me")
+	for _, d := range []string{".config", "Documents", "Desktop", filepath.Join(".config", "herdr"), filepath.Join(".config", "herdr", "plugins"), filepath.Join("Documents", "taxes")} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if safeToPurge(filepath.Join(home, d), home) {
+			t.Errorf("safeToPurge(~/%s) = true", d)
+		}
+	}
+	// A dir holding a plugin marker is fine whatever it is called.
+	for name, mk := range map[string]string{"cfg": ".state-dir", "cfg2": "credentials.toml", "cfg3": filepath.Join("dots", "x.toml"), "st": filepath.Join("memory", "g"), "st2": filepath.Join("0123456789ab", "engine.lock")} {
+		d := filepath.Join(home, "elsewhere", name)
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(d, mk)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, mk), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !safeToPurge(d, home) {
+			t.Errorf("a dir with marker %s must be purgeable", mk)
+		}
+	}
+}
+
+func TestPurgeRefusesDirsThatContainEachOtherOrTheHerdrConfig(t *testing.T) {
+	r := newUninstallRig(t, purgeConfirm+"\n")
+	// The state dir lives inside the config dir.
+	r.p.StateDir = filepath.Join(r.p.ConfigDir, "herdr-dots")
+	if err := uninstallExtras([]string{"--yes", "--purge"}, r.u); err == nil || !strings.Contains(err.Error(), "contains") {
+		t.Fatalf("nested dirs: %v", err)
+	}
+	r2 := newUninstallRig(t, purgeConfirm+"\n")
+	r2.u.keysPath = filepath.Join(r2.p.ConfigDir, "config.toml") // Herdr's config inside the plugin dir
+	if err := os.WriteFile(r2.u.keysPath, []byte(keys.Block(keys.Defaults())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := uninstallExtras([]string{"--yes", "--purge"}, r2.u); err == nil || !strings.Contains(err.Error(), "contains") {
+		t.Fatalf("keys path inside: %v", err)
+	}
+	if len(r.mcpRuns)+len(r2.mcpRuns) != 0 {
+		t.Fatal("a refused purge must change nothing")
+	}
+}
+
+// lockOnRead takes the engine lock the first time the confirmation is read:
+// an engine that starts between the check and the typed phrase.
+type lockOnRead struct {
+	r    io.Reader
+	path string
+	l    *lockfile.Lock
+	t    *testing.T
+}
+
+func (x *lockOnRead) Read(b []byte) (int, error) {
+	if x.l == nil {
+		l, err := lockfile.TryLock(x.path)
+		if err != nil {
+			x.t.Fatal(err)
+		}
+		x.l = l
+	}
+	return x.r.Read(b)
+}
+
+func TestPurgeRechecksEnginesAfterTheConfirmation(t *testing.T) {
+	r := newUninstallRig(t, "")
+	if err := os.MkdirAll(r.p.SessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	x := &lockOnRead{r: strings.NewReader(purgeConfirm + "\n"), path: r.p.EngineLock(), t: t}
+	r.u.in = x
+	err := uninstallExtras([]string{"--yes", "--purge"}, r.u)
+	if x.l != nil {
+		defer x.l.Release()
+	}
+	if x.l == nil || err == nil || !strings.Contains(err.Error(), "quit Herdr first") {
+		t.Fatalf("engine started after the check: %v", err)
+	}
+	for _, d := range []string{r.p.ConfigDir, r.p.StateDir, r.p.DotsDir()} {
+		if _, err := os.Stat(d); err != nil {
+			t.Fatalf("nothing may be deleted: %v", err)
+		}
+	}
+}
+
+func TestPurgeRefusesUnreadableStateDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory modes")
+	}
+	r := newUninstallRig(t, purgeConfirm+"\n")
+	if err := os.Chmod(r.p.StateDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(r.p.StateDir, 0o700)
+	if err := uninstallExtras([]string{"--yes", "--purge"}, r.u); err == nil {
+		t.Fatal("an unreadable state dir may hide a running engine: refuse")
+	}
+}
+
+func TestPurgeRefusesSymlinkedDirsAndKeepsTheTarget(t *testing.T) {
+	for _, which := range []string{"config", "state"} {
+		r := newUninstallRig(t, purgeConfirm+"\n")
+		dir := &r.p.ConfigDir
+		if which == "state" {
+			dir = &r.p.StateDir
+		}
+		target := filepath.Join(t.TempDir(), "real", "herdr-dots")
+		if err := os.MkdirAll(filepath.Join(target, "memory"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(*dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, *dir); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		err := uninstallExtras([]string{"--yes", "--purge"}, r.u)
+		real, _ := filepath.EvalSymlinks(target)
+		if err == nil || !strings.Contains(err.Error(), "is a link to") || !strings.Contains(err.Error(), real) || !strings.Contains(err.Error(), "remove that yourself") {
+			t.Fatalf("%s: %v", which, err)
+		}
+		if strings.Contains(r.out.String(), "Deleted") {
+			t.Fatalf("%s: must not claim a deletion:\n%s", which, r.out.String())
+		}
+		if _, err := os.Stat(filepath.Join(target, "memory")); err != nil {
+			t.Fatalf("%s: the target must survive", which)
+		}
+		if len(r.mcpRuns) != 0 {
+			t.Fatalf("%s: a refused purge must change nothing", which)
+		}
+	}
+}
+
+func TestRefusedPurgeLeavesMCPAndKeysUntouched(t *testing.T) {
+	r := newUninstallRig(t, purgeConfirm+"\n")
+	if err := os.MkdirAll(r.p.SessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	l, err := lockfile.TryLock(r.p.EngineLock())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Release()
+	if err := uninstallExtras([]string{"--yes", "--purge"}, r.u); err == nil {
+		t.Fatal("want a refusal")
+	}
+	if len(r.mcpRuns) != 0 {
+		t.Fatalf("MCP touched: %v", r.mcpRuns)
+	}
+	if got, _ := os.ReadFile(r.u.keysPath); !strings.Contains(string(got), "herdr-dots.manage") {
+		t.Fatal("keys touched")
+	}
+}
+
+func TestPurgeWithoutTheRightPhraseSaysNothingWasDeleted(t *testing.T) {
+	r := newUninstallRig(t, "no\n")
+	if err := uninstallExtras([]string{"--yes", "--purge"}, r.u); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.out.String(), "Not confirmed. Nothing deleted.") {
+		t.Fatalf("output:\n%s", r.out.String())
+	}
+}
+
+func TestUninstallPreviewsTheExactLinesAndAbbreviatesHome(t *testing.T) {
+	r := newUninstallRig(t, "n\n")
+	r.u.home = filepath.Dir(filepath.Dir(r.u.keysPath)) // the rig's base dir
+	if err := uninstallExtras(nil, r.u); err != nil {
+		t.Fatal(err)
+	}
+	out := r.out.String()
+	for _, want := range []string{"- command = \"herdr-dots.manage\"", "- [[keys.command]]", "~" + string(filepath.Separator) + filepath.Join("herdr", "config.toml")} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, r.u.home) {
+		t.Fatalf("home not abbreviated:\n%s", out)
 	}
 }
