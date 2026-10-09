@@ -23,7 +23,7 @@ var commands = map[string]handler{
 		fmt.Println("herdr-dots", version.Version, "(scaffold)")
 		return nil
 	},
-	"engine":     notYet("engine"),
+	"engine":     runEngine,
 	"pane":       notYet("pane"),
 	"manage":     notYet("manage"),
 	"summon-ui":  notYet("summon-ui"),
