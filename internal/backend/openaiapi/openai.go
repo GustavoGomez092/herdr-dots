@@ -18,6 +18,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/backend/httpx"
 	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/pricing"
@@ -51,9 +52,11 @@ func (b *Backend) client() (openai.Client, string, error) {
 		base = DefaultBaseURL // explicit, so OPENAI_BASE_URL can't redirect a dot
 	}
 	opts := []option.RequestOption{option.WithAPIKey(key), option.WithBaseURL(base), option.WithMaxRetries(2)}
-	if b.o.HTTP != nil {
-		opts = append(opts, option.WithHTTPClient(b.o.HTTP))
+	hc := b.o.HTTP
+	if hc == nil {
+		hc = httpx.SameHostClient() // never forward the key to another host on a redirect
 	}
+	opts = append(opts, option.WithHTTPClient(hc))
 	for k, v := range b.o.Provider.ExtraHeaders {
 		opts = append(opts, option.WithHeader(k, v))
 	}

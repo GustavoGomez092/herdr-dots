@@ -205,20 +205,28 @@ func (c Client) maxWait() time.Duration {
 	return c.MaxWait
 }
 
-// sameHostClient is used when Client.HTTP is nil. It refuses redirects to a
-// different host, so configured auth headers (x-api-key and friends) can never
-// be forwarded to a third party. A caller-supplied HTTP client keeps its own
-// policy.
-var sameHostClient = &http.Client{
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return errors.New("stopped after 10 redirects")
-		}
-		if req.URL.Host != via[0].URL.Host {
-			return http.ErrUseLastResponse
-		}
-		return nil
-	},
+// sameHostClient is used when Client.HTTP is nil. A caller-supplied HTTP
+// client keeps its own policy.
+var sameHostClient = SameHostClient()
+
+// SameHostClient returns an HTTP client that refuses redirects to a different
+// host (port included), so configured auth headers (x-api-key, Authorization,
+// extra_headers) can never be forwarded to a third party. The SDK-based
+// adapters use it too when no client is configured.
+func SameHostClient() *http.Client {
+	return &http.Client{CheckRedirect: SameHostRedirect}
+}
+
+// SameHostRedirect is an http.Client CheckRedirect policy: follow at most 10
+// redirects, and only to the original host.
+func SameHostRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if req.URL.Host != via[0].URL.Host {
+		return http.ErrUseLastResponse
+	}
+	return nil
 }
 
 func (c Client) scrub(err error) error {

@@ -15,6 +15,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/backend/httpx"
 	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/pricing"
@@ -61,9 +62,11 @@ func (b *Backend) client() (anthropic.Client, string, error) {
 		return anthropic.Client{}, "", err
 	}
 	opts = append(opts, option.WithMaxRetries(2))
-	if b.o.HTTP != nil {
-		opts = append(opts, option.WithHTTPClient(b.o.HTTP))
+	hc := b.o.HTTP
+	if hc == nil {
+		hc = httpx.SameHostClient() // never forward the key to another host on a redirect
 	}
+	opts = append(opts, option.WithHTTPClient(hc))
 	if u := b.o.Provider.BaseURL; u != "" {
 		opts = append(opts, option.WithBaseURL(u))
 	}
