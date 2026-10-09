@@ -318,7 +318,8 @@ anything but protocol messages.
 
 ## Windows (beta)
 
-Herdr Dots runs on the Herdr Windows beta with the same features as on macOS and Linux.
+Herdr Dots is built to run on the Herdr Windows beta with the same features as on macOS and
+Linux, but it has not been run on Windows yet.
 
 - **Not run-verified yet.** Every Windows code path is compiled and unit-tested on macOS, and
   `.github/workflows/ci.yml` runs the full test suite on `windows-latest`, but the developer has
