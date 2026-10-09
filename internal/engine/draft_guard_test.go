@@ -89,8 +89,10 @@ func TestAPaneThatClosesMidDraftGetsNoCard(t *testing.T) {
 	if ents, _ := os.ReadDir(r.wts); len(ents) != 0 || r.refs(t) != "" {
 		t.Fatalf("worktree or ref left: %v %q", ents, r.refs(t))
 	}
-	if got := r.usage.Calls(pane, "security"); got != calls {
-		t.Fatalf("a closed pane was charged: %d calls, was %d", got, calls)
+	// Detaching the last dot resets the pane's usage (as a closed pane does):
+	// the draft ending afterwards must not charge it again.
+	if got := r.usage.Calls(pane, "security"); calls == 0 || got != 0 {
+		t.Fatalf("a closed pane was charged: %d calls after the reset (was %d)", got, calls)
 	}
 }
 

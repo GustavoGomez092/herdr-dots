@@ -127,10 +127,12 @@ func (e *Engine) scheduleTick() {
 		e.broadcast() // the roster's "scheduled Mon 09:00"
 	}
 	for _, x := range due {
-		e.spawn(func() {
+		if !e.spawn(func() {
 			defer e.fireDone(x.dot.Slug)
 			e.fireSchedule(x)
-		})
+		}) {
+			e.fireDone(x.dot.Slug) // the engine is shutting down: release the reservation
+		}
 	}
 }
 

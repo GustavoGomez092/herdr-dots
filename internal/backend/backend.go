@@ -32,6 +32,11 @@ type Request struct {
 	Pass      string // PassReview, PassMemory, PassWrite or PassResearch
 	Web       bool   // research only: add web search/fetch where the backend has them (WebSupported)
 	Trigger   string // what started a review: TriggerTurn, TriggerScheduled or TriggerCommit
+	// MaxBudgetUSD caps one run's spend where the backend can enforce it
+	// (claude-cli: --max-budget-usd). Set only by the engine's background
+	// runs (the daily budget left, at most $0.50; ruling P8-R15); 0 = no cap
+	// (every foreground run). A non-positive value is never passed on.
+	MaxBudgetUSD float64
 	// Write gives the run file-editing tools confined to Cwd (an isolated
 	// worktree). Backends honor it only together with Pass == PassWrite, so
 	// one stray field can never make a review write.

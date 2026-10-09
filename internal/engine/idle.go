@@ -203,7 +203,9 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 		e.broadcast()
 	}
 	for _, j := range jobs {
-		e.spawn(func() { e.runResearch(j) })
+		if !e.spawn(func() { e.runResearch(j) }) {
+			e.researchDone(j) // the engine is shutting down: release the reservation
+		}
 	}
 }
 

@@ -138,17 +138,19 @@ type Engine struct {
 
 	// Proactive state (Phase 8), guarded by mu. Daily, inbox, memory and git
 	// I/O never happen under mu.
-	bgBusy   map[key]string        // the running background job (it holds bgSem) -> its kind
-	bgQueued map[key]int           // background jobs queued or running per key, for dedupe
-	bgSem    chan struct{}         // one background run at a time per engine
-	today    state.Day             // last daily.json read (snapshot and roster hints)
-	todayAt  time.Time             // when today was read
-	dailyErr string                // the local date a run's cost could not be recorded: no more background work that day
-	inboxAt  time.Time             // last inbox sweep
-	toasted  map[string]string     // once-a-day toasts: key -> date
-	idle     map[string]*idleState // pane -> idle research bookkeeping (idle.go)
-	plan     map[string]time.Time  // scheduled dot -> its next slot (schedule.go)
-	schedOff bool                  // a schedule tick found proactive work or memory off (schedule.go)
+	bgBusy   map[key]string                                                // the running background job (it holds bgSem) -> its kind
+	bgQueued map[key]int                                                   // background jobs queued or running per key, for dedupe
+	bgSem    chan struct{}                                                 // one background run at a time per engine
+	today    state.Day                                                     // last daily.json read (snapshot and roster hints)
+	todayAt  time.Time                                                     // when today was read
+	dailyErr string                                                        // the local date a run's cost could not be recorded: no more background work that day
+	inboxAt  time.Time                                                     // last inbox sweep
+	toasted  map[string]string                                             // once-a-day toasts: key -> date
+	idle     map[string]*idleState                                         // pane -> idle research bookkeeping (idle.go)
+	plan     map[string]time.Time                                          // scheduled dot -> its next slot (schedule.go)
+	schedOff bool                                                          // a schedule tick found proactive work or memory off (schedule.go)
+	dailyAdd func(slug, kind string, costUSD float64, now time.Time) error // tests only: replaces Daily.Add
+	sleep    func(time.Duration)                                           // tests only: replaces the Daily.Add retry backoff's wait
 
 	heads       map[key]headSeen // on_commit dot on a pane -> the HEAD it last saw (commits.go)
 	commitAt    time.Time        // last HEAD check
@@ -403,16 +405,33 @@ func (e *Engine) Detach(paneID, slug string) error {
 		cur, ok := e.d.Attachments.Get(paneID)
 		empty = ok && len(cur.Dots) == 0
 	}
+	orphaned := 0
+	var oerr error
 	if empty {
-		// In the same e.mu section as the delete: a draft registering after it
-		// sees the attachment gone, one before it is abandoned here.
+		// The attachment ends as in dropPane, in the same e.mu section as the
+		// delete: a draft registering after it sees the attachment gone, one
+		// before it is abandoned here; the pane's pending cards are orphaned
+		// and its usage reset, so the same pane id attached again inherits no
+		// card (a digest included), spend or status.
 		e.abandonDraftsLocked(paneID, "")
 		e.gens[paneID]++
 		delete(e.idle, paneID) // a later attach starts a fresh idle period (idle.go)
+		orphaned, oerr = e.d.Queue.OrphanPane(paneID)
+		_ = e.d.Usage.ResetPane(paneID)
 		_ = e.d.Attachments.Delete(paneID)
+		for k := range e.status {
+			if k.pane == paneID {
+				delete(e.status, k)
+			}
+		}
 	}
 	e.mu.Unlock()
 	if empty {
+		if oerr != nil {
+			e.d.Logf("orphan cards for %s: %v", paneID, oerr)
+		} else if orphaned > 0 {
+			e.d.Logf("pane %s: last dot detached: %d card(s) orphaned", paneID, orphaned)
+		}
 		e.unwatch(paneID)
 	}
 	e.broadcast()
@@ -568,7 +587,10 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 	var budgetHit []budgetNote
 	turnEnded := false
 	e.mu.Lock()
-	paneCalls := e.d.Usage.PaneCalls(paneID)
+	// Reviews, memory passes, asks, drafts and background runs in flight
+	// count as calls already made (ruling P8-R8, the shared inFlightLocked),
+	// and so does each run this pass starts (paneCalls++ below).
+	paneCalls := e.d.Usage.PaneCalls(paneID) + e.inFlightLocked(paneID, key{})
 	paneCost := e.d.Usage.PaneCost(paneID)
 	_ = e.d.Attachments.Update(paneID, func(a *state.Attachment) {
 		if a.SessionValue != session {

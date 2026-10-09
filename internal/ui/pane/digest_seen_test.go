@@ -37,6 +37,35 @@ func TestEnterReExpandsADigestThatGainedParts(t *testing.T) {
 	}
 }
 
+// Ruling P8-R9 for `e`: editing a digest counts as reading it only if its
+// parts were shown at the current count. Otherwise `e` first expands it,
+// like ⏎, and a second `e` opens the editor.
+func TestEditExpandsAnUnseenDigestFirst(t *testing.T) {
+	fc := &fakeCaller{}
+	m := press(awayReady(fc), "e")
+	v := m.View()
+	if strings.Contains(v, "ctrl+s save") {
+		t.Fatalf("e opened the editor on a digest whose parts were never shown:\n%s", v)
+	}
+	if !strings.Contains(v, "prototype pollution advisory") || !strings.Contains(v, "digest expanded: e again to edit it") {
+		t.Fatalf("first e should expand the digest with a hint:\n%s", v)
+	}
+	if v := press(m, "e").View(); !strings.Contains(v, "ctrl+s save") {
+		t.Fatalf("second e should open the editor:\n%s", v)
+	}
+	if v := press(awayReady(&fakeCaller{}), " ", "e").View(); !strings.Contains(v, "ctrl+s save") {
+		t.Fatalf("e on an expanded digest edits at once:\n%s", v)
+	}
+	m = digestGrew(press(awayReady(&fakeCaller{}), " "))
+	v = press(m, "e").View()
+	if strings.Contains(v, "ctrl+s save") || !strings.Contains(v, "digest has new parts: e again to edit it") || !strings.Contains(v, "changelog") {
+		t.Fatalf("e on a digest that gained parts re-expands it:\n%s", v)
+	}
+	if len(fc.calls) != 0 {
+		t.Fatalf("calls %+v", fc.calls)
+	}
+}
+
 func TestSendAllSkipsADigestThatGainedParts(t *testing.T) {
 	fc := &fakeCaller{}
 	m := press(awayReady(fc), " ")

@@ -2,10 +2,12 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
 
+	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/transcript"
 )
 
@@ -68,7 +70,7 @@ func TestClaudeWebToolsOnlyForWebResearch(t *testing.T) {
 	args := c.BuildCmd(r).Args
 	tools, _ := argAfter(args, "--tools")
 	allowed, _ := argAfter(args, "--allowedTools")
-	if tools != "Read,Grep,Glob,WebSearch,WebFetch" || allowed != tools {
+	if tools != "Read,Grep,Glob,WebSearch" || allowed != tools {
 		t.Fatalf("tools %q allowed %q", tools, allowed)
 	}
 	for _, bad := range []string{"Bash", "Edit", "Write"} {
@@ -76,7 +78,7 @@ func TestClaudeWebToolsOnlyForWebResearch(t *testing.T) {
 			t.Fatalf("research must stay read-only: %v", args)
 		}
 	}
-	for _, bad := range []string{"--bare", "--dangerously-skip-permissions", "--restricted", "--permission-mode"} {
+	for _, bad := range []string{"--bare", "--dangerously-skip-permissions", "--permission-mode"} {
 		if slices.Contains(args, bad) {
 			t.Fatalf("research argv has %s: %v", bad, args)
 		}
@@ -88,8 +90,74 @@ func TestClaudeWebToolsOnlyForWebResearch(t *testing.T) {
 		t.Fatalf("missing --no-session-persistence: %v", args)
 	}
 	r.RepoRead = false
-	if v, _ := argAfter(c.BuildCmd(r).Args, "--tools"); v != "WebSearch,WebFetch" {
+	if v, _ := argAfter(c.BuildCmd(r).Args, "--tools"); v != "WebSearch" {
 		t.Fatalf("web without repo read: %q", v)
+	}
+}
+
+// P8-R14: unattended claude-cli research must not be able to send a secret
+// out. No page fetching (WebSearch only), --restricted (user/project settings
+// can't add allow rules), and a settings JSON that keeps hooks off and denies
+// Read of every secret glob the API tools deny.
+func TestClaudeResearchDeniesSecretsAndFetch(t *testing.T) {
+	c := ClaudeCLI{Environ: func() []string { return nil }}
+	for _, web := range []bool{true, false} {
+		r := req()
+		r.Pass, r.Web = PassResearch, web
+		args := c.BuildCmd(r).Args
+		for _, a := range args {
+			if strings.Contains(a, "WebFetch") {
+				t.Fatalf("web=%v: research argv mentions WebFetch: %v", web, args)
+			}
+		}
+		if !slices.Contains(args, "--restricted") {
+			t.Fatalf("web=%v: research must run --restricted: %v", web, args)
+		}
+		settings, _ := argAfter(args, "--settings")
+		var s struct {
+			DisableAllHooks bool `json:"disableAllHooks"`
+			Permissions     struct {
+				Deny []string `json:"deny"`
+			} `json:"permissions"`
+		}
+		if err := json.Unmarshal([]byte(settings), &s); err != nil {
+			t.Fatalf("settings not JSON: %q: %v", settings, err)
+		}
+		if !s.DisableAllHooks {
+			t.Fatalf("web=%v: hooks must stay off: %q", web, settings)
+		}
+		for _, g := range []string{".env", ".env.*", "**/.env", "*.pem", "*.key", "id_rsa*", "**/.ssh/**", "**/.aws/**",
+			".netrc", "**/credentials*", ".git/**", ".claude/**", ".codex/**", ".mcp.json"} {
+			if !slices.Contains(s.Permissions.Deny, "Read("+g+")") {
+				t.Errorf("web=%v: settings deny lacks Read(%s): %v", web, g, s.Permissions.Deny)
+			}
+		}
+		// Built from the shared deny constants: every API-tool deny glob is here too.
+		for _, g := range append(append([]string(nil), toolloop.DefaultDeny...), toolloop.DraftDeny...) {
+			if !slices.Contains(s.Permissions.Deny, "Read("+g+")") {
+				t.Errorf("web=%v: settings deny lacks Read(%s)", web, g)
+			}
+		}
+	}
+}
+
+// A review or memory pass (not research) keeps the v1 argv: hookless
+// settings, no --restricted, the read tools only, even with Web set.
+func TestClaudeNonResearchPassUnchanged(t *testing.T) {
+	c := ClaudeCLI{Environ: func() []string { return nil }}
+	for _, pass := range []string{PassReview, PassMemory} {
+		r := req()
+		r.Pass, r.Web = pass, true
+		args := c.BuildCmd(r).Args
+		if v, _ := argAfter(args, "--settings"); v != `{"disableAllHooks":true}` {
+			t.Errorf("pass %q: settings %q", pass, v)
+		}
+		if slices.Contains(args, "--restricted") {
+			t.Errorf("pass %q: --restricted is for research and drafts only: %v", pass, args)
+		}
+		if v, _ := argAfter(args, "--tools"); v != "Read,Grep,Glob" {
+			t.Errorf("pass %q: tools %q", pass, v)
+		}
 	}
 }
 

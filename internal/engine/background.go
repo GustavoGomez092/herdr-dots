@@ -91,6 +91,7 @@ type bgJob struct {
 	paused      bool      // the dot is paused on paneID
 	gen         uint64    // paneID's attachment generation (e.gens) when the job was built
 	turn        int       // the pane's last turn index, for memory evidence (0 without a pane)
+	fromDot     bool      // commit: the pane's last turn was started by a dot (loop guard: never inject)
 	period      int       // research: the pane's idle period when the run was reserved
 	since       time.Time // research: when that idle period began
 	deliver     func(j bgJob, v backend.Verdict)
@@ -279,7 +280,11 @@ func (e *Engine) runBackground(j bgJob) {
 	}
 	defer func() { <-e.sem }()
 
-	// Checked again after the wait: another dot or session may have spent the budget.
+	// Checked again after the wait: another dot or session may have spent the
+	// budget, and the dot may have been paused (pause-all is read in the gate).
+	e.mu.Lock()
+	j.paused = e.bgPausedLocked(j)
+	e.mu.Unlock()
 	if r := e.backgroundGate(j.dot.Slug, j.kind, j.maxPerDay, j.paused); r != ReasonRun {
 		e.d.Logf("dot %s: %s skipped (%s)", j.dot.Slug, j.label, r)
 		return
@@ -321,6 +326,9 @@ func (e *Engine) runBackground(j bgJob) {
 	case state.RunCommit:
 		req.Trigger = backend.TriggerCommit
 	}
+	if c := e.bgRunCap(); c > 0 { // the gate stopped the run if nothing is left
+		req.MaxBudgetUSD = c
+	}
 	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
@@ -329,13 +337,20 @@ func (e *Engine) runBackground(j bgJob) {
 	if res.CostKnown {
 		cost = res.CostUSD
 	}
-	if derr := e.d.Daily.Add(j.dot.Slug, j.kind, cost, e.now()); derr != nil {
-		// The spend is unrecorded: count today as "budget reached" in this
-		// engine (it resumes at local midnight), never as unlimited.
+	if derr := e.recordDaily(j.dot.Slug, j.kind, cost); derr != nil {
+		// The spend is unrecorded after every retry: count today as "budget
+		// reached" in this engine (it resumes at local midnight), never as
+		// unlimited.
 		e.mu.Lock()
 		e.dailyErr = dayOf(e.now())
 		e.mu.Unlock()
-		e.d.Logf("daily budget: %v (background work paused until midnight)", derr)
+		if e.onceToday("daily-unrecorded") {
+			e.d.Logf("daily budget: %v (background work paused until midnight)", derr)
+			msg := "a background run's cost could not be recorded: research, schedules and commit reviews are paused until midnight"
+			if err := e.d.Herdr.Notify(e.ctx, "Herdr Dots", msg); err != nil {
+				e.d.Logf("notify: %v", err)
+			}
+		}
 	}
 	e.refreshToday()
 	if !e.keepPane(&j, "ended") {
@@ -366,6 +381,55 @@ func (e *Engine) runBackground(j bgJob) {
 	}
 }
 
+// dailyAddBackoff are the waits between Daily.Add attempts (ruling P8-R16):
+// a lock held a moment too long by another session shouldn't stop
+// background work for the rest of the day.
+var dailyAddBackoff = []time.Duration{100 * time.Millisecond, 300 * time.Millisecond, 900 * time.Millisecond}
+
+// recordDaily adds a finished run to daily.json, retrying a failed Add after
+// each dailyAddBackoff wait. It returns the last error if every attempt
+// failed. No engine lock may be held: it does file I/O and waits.
+func (e *Engine) recordDaily(slug, kind string, cost float64) error {
+	add, sleep := e.d.Daily.Add, e.sleep
+	if e.dailyAdd != nil {
+		add = e.dailyAdd
+	}
+	if sleep == nil {
+		sleep = func(d time.Duration) {
+			t := time.NewTimer(d)
+			defer t.Stop()
+			select {
+			case <-t.C:
+			case <-e.ctx.Done():
+			}
+		}
+	}
+	for i := 0; ; i++ {
+		err := add(slug, kind, cost, e.now())
+		if err == nil || i == len(dailyAddBackoff) {
+			return err
+		}
+		sleep(dailyAddBackoff[i])
+	}
+}
+
+// bgRunMaxUSD is the most one background run may spend where the backend
+// can stop it (claude-cli --max-budget-usd; ruling P8-R15).
+const bgRunMaxUSD = 0.50
+
+// bgRunCap is a background run's dollar cap: the daily budget left (the
+// day backgroundGate just read), at most bgRunMaxUSD, rounded to a
+// millionth of a dollar. It may be zero or less; the caller passes only a
+// positive cap.
+func (e *Engine) bgRunCap() float64 {
+	budget := dailyBudget(e.config().DailyBudgetUSD)
+	now := e.now()
+	e.mu.Lock()
+	spent := e.todayLocked(now).CostUSD
+	e.mu.Unlock()
+	return math.Round(min(budget-spent, bgRunMaxUSD)*1e6) / 1e6
+}
+
 // bgFeed writes a job's feed line with the pane check in the same e.mu
 // section (e.mu -> stores), so a pane closed or reused meanwhile gets no
 // line. As in keepPane, a scheduled job whose pane is gone carries on
@@ -376,7 +440,7 @@ func (e *Engine) bgFeed(j *bgJob, outcome, detail string) bool {
 	if e.bgPaneGoneLocked(*j) {
 		if j.kind != state.RunScheduled {
 			e.mu.Unlock()
-			e.d.Logf("dot %s: %s ended after pane %s closed; dropped", j.dot.Slug, j.label, j.paneID)
+			e.d.Logf("dot %s: %s ended after pane %s closed or the dot was detached; dropped", j.dot.Slug, j.label, j.paneID)
 			return false
 		}
 		j.paneID, j.session, j.turn, j.paused = "", "", 0, false
@@ -389,15 +453,30 @@ func (e *Engine) bgFeed(j *bgJob, outcome, detail string) bool {
 	return true
 }
 
-// bgPaneGoneLocked reports whether a job's pane closed, or its id now names
-// a new attachment (the generation changed, as for Phase 7 drafts), since the
-// job was built. Caller holds e.mu (e.mu -> stores).
+// bgPaneGoneLocked reports whether a job's pane closed, its id now names a
+// new attachment (the generation changed, as for Phase 7 drafts), or the
+// job's dot was detached from it, since the job was built. A detached dot is
+// treated like a closed pane everywhere this is checked (charge, feed,
+// card): a research or commit run ends with nothing, a scheduled run goes to
+// the project's inbox. Caller holds e.mu (e.mu -> stores).
 func (e *Engine) bgPaneGoneLocked(j bgJob) bool {
 	if j.paneID == "" {
 		return false
 	}
-	_, ok := e.d.Attachments.Get(j.paneID)
-	return !ok || e.gens[j.paneID] != j.gen
+	a, ok := e.d.Attachments.Get(j.paneID)
+	return !ok || e.gens[j.paneID] != j.gen || a.Find(j.dot.Slug) == nil
+}
+
+// bgPausedLocked is whether j's dot is paused on j's pane now, read from the
+// attachment (the job's copy is from when it was built). A job whose pane or
+// dot is gone keeps its copy: keepPane decides those.
+// Caller holds e.mu (e.mu -> stores).
+func (e *Engine) bgPausedLocked(j bgJob) bool {
+	if j.paneID == "" || e.bgPaneGoneLocked(j) {
+		return j.paused
+	}
+	a, _ := e.d.Attachments.Get(j.paneID)
+	return a.Find(j.dot.Slug).Paused // not gone: the dot is attached
 }
 
 func (e *Engine) bgPaneGone(j bgJob) bool {
@@ -418,7 +497,7 @@ func (e *Engine) keepPane(j *bgJob, when string) bool {
 		j.paneID, j.session, j.turn, j.paused = "", "", 0, false
 		return true
 	}
-	e.d.Logf("dot %s: %s %s after pane %s closed; dropped", j.dot.Slug, j.label, when, j.paneID)
+	e.d.Logf("dot %s: %s %s after pane %s closed or the dot was detached; dropped", j.dot.Slug, j.label, when, j.paneID)
 	return false
 }
 
@@ -435,13 +514,20 @@ func (e *Engine) chargeBackground(j bgJob, d state.Delta) {
 	_ = e.d.Usage.Add(j.paneID, j.dot.Slug, d)
 }
 
-// inFlightLocked counts the pane's runs that may still charge it: MCP asks,
-// live drafts and the running background job (bgBusy; a job still waiting
-// for bgSem has not started and re-checks the budgets itself), except the
-// background run keyed except. Phase 7's ask and draft budget checks count
-// them too (ruling P8-R2). Caller holds e.mu.
+// inFlightLocked counts the pane's runs that may still charge it: turn
+// reviews and memory passes (e.running), MCP asks, live drafts and the
+// running background job (bgBusy; a job still waiting for bgSem has not
+// started and re-checks the budgets itself), except the background run keyed
+// except. Every session-budget check (turn reviews, asks, drafts, research,
+// commit and background runs) counts them as calls already made (rulings
+// P8-R2 and P8-R8). Caller holds e.mu.
 func (e *Engine) inFlightLocked(paneID string, except key) int {
 	n := 0
+	for k := range e.running {
+		if k.pane == paneID {
+			n++
+		}
+	}
 	for k := range e.asking {
 		if k.pane == paneID {
 			n++

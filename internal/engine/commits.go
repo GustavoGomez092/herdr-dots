@@ -262,7 +262,8 @@ func (e *Engine) reviewCommit(a state.Attachment, gen uint64, head string, ds []
 		paneCalls++
 		j := bgJob{kind: state.RunCommit, paneID: a.PaneID, session: cur.SessionValue, project: cur.ProjectID, projectName: cur.ProjectName,
 			cwd: a.Cwd, dot: d, turns: tail(turns, d.Context.Turns), question: question, label: label,
-			maxPerDay: maxCommitsPerDay, paused: da.Paused, gen: gen, deliver: e.deliverCommit}
+			maxPerDay: maxCommitsPerDay, paused: da.Paused, gen: gen, deliver: e.deliverCommit,
+			fromDot: len(turns) > 0 && turns[len(turns)-1].FromAnyDot()}
 		if len(j.turns) > 0 {
 			j.turn = j.turns[len(j.turns)-1].Index
 		}
@@ -313,12 +314,14 @@ func (e *Engine) commitDone(k key) {
 }
 
 // deliverCommit routes a commit review like a turn review: the dot's mode,
-// inject allowed for inject dots (the commit was not started by a dot). The
-// pane and its generation are re-checked in the same e.mu section as the
-// card's add (e.mu -> stores), as for scheduled results and Phase 7 drafts,
-// so a pane closed or reused meanwhile never gets the card.
+// inject allowed for inject dots unless the pane's last turn was started by
+// a dot (j.fromDot: the commit may be that dot's doing, and inject → commit
+// → review → inject would loop, so the card is queued, as for a turn review
+// of a dot's turn). The pane and its generation are re-checked in the same
+// e.mu section as the card's add (e.mu -> stores), as for scheduled results
+// and Phase 7 drafts, so a pane closed or reused meanwhile never gets the card.
 func (e *Engine) deliverCommit(j bgJob, v backend.Verdict) {
-	c, mode := e.routeCard(j.paneID, j.dot, j.turn, v, runOpts{origin: state.RunCommit, label: j.label})
+	c, mode := e.routeCard(j.paneID, j.dot, j.turn, v, runOpts{origin: state.RunCommit, label: j.label, forceQueue: j.fromDot})
 	e.mu.Lock()
 	gone := e.bgPaneGoneLocked(j)
 	var err error
@@ -328,7 +331,7 @@ func (e *Engine) deliverCommit(j bgJob, v backend.Verdict) {
 	e.mu.Unlock()
 	switch {
 	case gone:
-		e.d.Logf("dot %s: %s ended after pane %s closed; dropped", j.dot.Slug, j.label, j.paneID)
+		e.d.Logf("dot %s: %s ended after pane %s closed or the dot was detached; dropped", j.dot.Slug, j.label, j.paneID)
 	case err != nil:
 		e.d.Logf("queue add: %v", err)
 	default:

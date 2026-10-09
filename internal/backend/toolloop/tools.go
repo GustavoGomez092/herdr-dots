@@ -506,8 +506,7 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 	if fi, err := os.Lstat(gitDir); err != nil || !fi.IsDir() {
 		return nil, errors.New("not a git work tree root")
 	}
-	cmd, err := platform.CommandContext(ctx, "git", []string{"-c", "core.fsmonitor=", "-c", "core.hooksPath=" + platform.DevNull,
-		"--git-dir=" + gitDir, "--work-tree=" + root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"})
+	cmd, err := platform.CommandContext(ctx, "git", gitFilesArgs(gitDir, root))
 	if err != nil {
 		return nil, err
 	}
@@ -529,12 +528,20 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 	return files, nil
 }
 
+// gitFilesArgs is gitFiles' git command line: fsmonitor and hooks off, and
+// every transport refused (with gitEnv's GIT_ALLOW_PROTOCOL=none and
+// GIT_NO_LAZY_FETCH=1, a partial clone never fetches).
+func gitFilesArgs(gitDir, root string) []string {
+	return []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + platform.DevNull, "-c", "protocol.allow=never",
+		"--git-dir=" + gitDir, "--work-tree=" + root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"}
+}
+
 // gitEnv filters env for a git child: no HERDR_*/Claude session variables
 // (the CleanEnv set) and none of the GIT_* variables that would override the
 // pinned git dir or the config. (A local copy: internal/backend imports this
 // package, and memory's filter is unexported.)
 func gitEnv(env []string) []string {
-	out := make([]string, 0, len(env)+3)
+	out := make([]string, 0, len(env)+5)
 	for _, kv := range env {
 		raw, _, _ := strings.Cut(kv, "=")
 		name := platform.EnvKey(raw)
@@ -543,12 +550,14 @@ func gitEnv(env []string) []string {
 		}
 		switch name {
 		case "CLAUDECODE", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
-			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES":
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+			"GIT_ALLOW_PROTOCOL", "GIT_NO_LAZY_FETCH":
 			continue
 		}
 		out = append(out, kv)
 	}
-	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
+	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=none")
 }
 
 const walkCap = 50000

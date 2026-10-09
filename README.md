@@ -390,12 +390,15 @@ the dot's file. `proactive_enabled` in `config.toml` switches all of it off at o
   digest you haven't expanded expands it first (a second `⏎` sends it), `a` skips digests you haven't
   expanded, and the engine refuses to send a digest that changed since you read it. Observe-mode dots
   research for their memory only and never make a card. Research can write `research` and `question`
-  memory entries (dot scope; project scope stays a proposal until you approve it), and you can add a
-  question yourself to steer the next pass:
+  memory entries (dot scope; project scope stays a proposal until you approve it, unless
+  `memory_auto_approve_project` is on), and you can add a question yourself to steer the next pass:
   `herdr-dots memory add --scope dot --dot <slug> --kind question "…"`.
-- **Web research.** `[research] web = true` gives research passes web tools: search and fetch for
-  `claude-cli` and `anthropic-api` dots, hosted search for `openai-api` dots. Other backends research
-  without the web (the editor says so). **With web on, research sends search queries to that
+- **Web research.** `[research] web = true` gives research passes web tools: web search only (no
+  page fetching) for `claude-cli` dots, search and fetch for `anthropic-api` dots, hosted search for
+  `openai-api` dots. Other backends research without the web (the editor says so). `claude-cli`
+  research runs `--restricted` (your user and project Claude settings can't add tools or allow
+  rules), and secret files (`.env`, keys, `.ssh`, `.aws`, credentials, `.git`, `.claude`, …) are
+  denied to its reads. **With web on, research sends search queries to that
   provider's search service, and the queries are derived from your code and conversation.** The dot
   is told never to put code, secrets or private names in a query, but that is an instruction to a
   model, not a filter. Results are treated as untrusted data. `anthropic-api` and `openai-api` runs
@@ -462,10 +465,17 @@ what is running (`◌ researching…`, `◌ scheduled run…`, `◌ reviewing co
 one at a time per engine. The pane header shows `today $0.37/1.00` once anything ran today. A
 background run on a pane also counts toward the dot's and the pane's session budgets, and a run with
 an unknown cost counts as one run and $0. When the budget is reached, background work stops until
-local midnight and each Herdr session toasts once. A run already going can take the day slightly over
-the cap. If `daily.json` is corrupt, it is set aside (`daily.json.corrupt-<time>`) and background
-work stops for the rest of that local day; while it can't be read or written, nothing runs. The
-budget never becomes unlimited.
+local midnight and each Herdr session toasts once. A run already going can take the day over the cap,
+by how much depends on the backend: a `claude-cli` background run is given the budget left, at most
+$0.50 a run (`--max-budget-usd`), and Claude Code stops it there; API backends are bounded only by
+their per-run token and web-use limits; a run with an unknown cost counts $0. A `claude-cli` run
+that fails still counts the cost Claude Code reports, but one killed by `run_timeout_seconds`
+reports no cost and counts $0. If `daily.json` is corrupt, it is set aside
+(`daily.json.corrupt-<time>`) and background work stops for the rest of that local day. While it
+can't be read, no background run starts. If a finished run can't be recorded in it (another session
+holding its lock, say), the write is retried three times, after 100 ms, 300 ms and 900 ms; only if
+every attempt fails does background work in that Herdr session stop until local midnight, with one
+log line and one toast. The budget never becomes unlimited.
 
 ## Files
 
@@ -570,7 +580,8 @@ Linux, but it has not been run on Windows yet.
   when it is read, like the feed.
 - Proactive dots are opt-in per dot and read-only, even when the dot is write-capable: research,
   scheduled runs and commit reviews never draft. With `[research] web = true`, research sends search
-  queries derived from your code to the backend's web search provider. Background spend is capped by
+  queries derived from your code to the backend's web search provider. `claude-cli` research uses web
+  search only, with no page fetching, and secret files are denied to its reads. Background spend is capped by
   `daily_budget_usd` (default $1.00) across every Herdr session.
 - Commit reviews never install git hooks; they only read `HEAD` and `git log`/`git show` output, with
   the repository's hooks, fsmonitor, diff drivers and transports disabled.
