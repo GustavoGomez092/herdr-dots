@@ -31,12 +31,18 @@ const (
 	KindDismissed  Kind = "dismissed"
 	KindPreference Kind = "preference"
 	KindNote       Kind = "note"
+	KindResearch   Kind = "research" // what a research pass found (Phase 8)
+	KindQuestion   Kind = "question" // an open question a research pass will look into
 )
 
-var Kinds = []Kind{KindConvention, KindDecision, KindFinding, KindDismissed, KindPreference, KindNote}
+var Kinds = []Kind{KindConvention, KindDecision, KindFinding, KindDismissed, KindPreference, KindNote, KindResearch, KindQuestion}
 
 // ModelKinds are the only kinds a model may write.
 var ModelKinds = []Kind{KindConvention, KindDecision, KindFinding, KindNote}
+
+// ResearchKinds are the extra kinds a model may write in a research pass only
+// (Apply with ApplyOptions{Research: true}).
+var ResearchKinds = []Kind{KindResearch, KindQuestion}
 
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 

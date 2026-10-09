@@ -41,7 +41,7 @@ func eligible(e Entry, dot string) bool {
 	return e.Scope == ScopeProject || e.Dot == dot
 }
 
-var kindWeight = map[Kind]float64{KindDismissed: 20, KindConvention: 15, KindDecision: 15, KindPreference: 10, KindFinding: 5}
+var kindWeight = map[Kind]float64{KindDismissed: 20, KindConvention: 15, KindDecision: 15, KindPreference: 10, KindFinding: 5, KindQuestion: 5, KindResearch: 5}
 
 // Score ranks an entry for a run: pinned first, then path-glob overlap with
 // the touched paths, keyword overlap, kind, recency, use count, and the
@@ -154,6 +154,8 @@ var sections = []section{
 	{"Developer preferences:", []Kind{KindPreference}},
 	{"Your accepted findings:", []Kind{KindFinding}},
 	{"Your dismissed findings: do not raise these again unless the code changed materially:", []Kind{KindDismissed}},
+	{"Your research notes:", []Kind{KindResearch}},
+	{"Open questions you noted to look into:", []Kind{KindQuestion}},
 	{"Notes:", nil},
 }
 

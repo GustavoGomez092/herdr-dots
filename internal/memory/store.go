@@ -903,6 +903,8 @@ type ProjectMeta struct {
 	Name      string    `json:"name"`
 	Roots     []string  `json:"roots"`
 	CreatedAt time.Time `json:"created_at"`
+
+	DotsSeen map[string]time.Time `json:"dots_seen,omitempty"` // dot slug -> last time it was attached here (Phase 8)
 }
 
 // SeeProject records a project in meta.json: its name and every toplevel
@@ -1200,6 +1202,9 @@ func (s *Store) DeleteDot(slug string) (DotDeletion, error) {
 				perrs = append(perrs, err)
 			}
 			perrs = append(perrs, removeDotAsidesLocked(filepath.Join(dir, "dots"), slug))
+			if name != GlobalID {
+				perrs = append(perrs, s.scrubDotProactiveLocked(name, slug))
+			}
 			return errors.Join(perrs...)
 		}))
 	}

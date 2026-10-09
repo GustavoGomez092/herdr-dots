@@ -10,6 +10,12 @@ import (
 	"herdr-dots/internal/textutil"
 )
 
+// ApplyOptions widens what Apply accepts. Research is set only for a dot's
+// idle research pass: its ops may also add research and question entries.
+type ApplyOptions struct {
+	Research bool
+}
+
 // ApplyResult counts what Store.Apply did. Rejected holds one reason per
 // refused op and never the op's text (it may hold a secret).
 type ApplyResult struct {
@@ -22,20 +28,27 @@ func (r ApplyResult) Applied() int { return r.Added + r.Updated + r.Forgotten }
 // Apply validates and applies a dot's model-written memory ops (spec §6.5):
 //   - text that looks like a secret, is empty or is too long is refused;
 //   - add: dot scope lands active; project scope lands proposed (active with
-//     AutoApproveProject); only convention, decision, finding and note; never
+//     AutoApproveProject); only convention, decision, finding and note (plus
+//     research and question with ApplyOptions{Research: true}); never
 //     dismissed, preference or global;
 //   - update/forget: only the dot's own model-written dot entries and its own
 //     still-proposed project entries.
 //
 // The error is only for store failures (lock timeout, newer file version);
 // per-op problems go to Rejected.
-func (s *Store) Apply(p, dot string, ops []backend.MemoryOp, ev Evidence) (ApplyResult, error) {
+func (s *Store) Apply(p, dot string, ops []backend.MemoryOp, ev Evidence, opts ...ApplyOptions) (ApplyResult, error) {
 	var res ApplyResult
+	kinds := ModelKinds
+	for _, o := range opts {
+		if o.Research {
+			kinds = append(slices.Clone(ModelKinds), ResearchKinds...)
+		}
+	}
 	if len(ops) > backend.MaxPassOps {
 		ops = ops[:backend.MaxPassOps]
 	}
 	for i, op := range ops {
-		err := s.applyOne(p, dot, op, ev, &res)
+		err := s.applyOne(p, dot, op, ev, kinds, &res)
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrLocked), errors.Is(err, ErrVersion):
@@ -57,7 +70,7 @@ func opLabel(op string) string {
 	return "unknown op"
 }
 
-func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *ApplyResult) error {
+func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, kinds []Kind, res *ApplyResult) error {
 	// Scan what is stored: prepare strips control characters, which could
 	// otherwise split a secret and hide it from the scan.
 	text := strings.TrimSpace(textutil.SanitizeModelText(op.Text))
@@ -80,7 +93,7 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *A
 		if k == "" {
 			k = KindNote
 		}
-		if !slices.Contains(ModelKinds, k) {
+		if !slices.Contains(kinds, k) {
 			return fmt.Errorf("%w: models can't write that kind of entry", ErrDenied)
 		}
 		e := Entry{Scope: sc, Dot: dot, Kind: k, Text: text, Paths: paths, Status: StatusActive, Source: SourceModel, Evidence: ev}
