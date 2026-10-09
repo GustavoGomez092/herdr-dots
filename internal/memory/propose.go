@@ -16,6 +16,10 @@ const SourceAgent Source = "agent"
 // AgentKinds are the kinds the main agent may propose.
 var AgentKinds = []Kind{KindConvention, KindDecision, KindNote}
 
+// MaxPendingProposals caps the agent proposals waiting for the developer per
+// project.
+const MaxPendingProposals = 20
+
 // Propose stores a project-scope proposal from the main agent. Whatever the
 // caller set, the entry is project scope, status proposed (the developer
 // approves it in the memory screen), source agent, no dot, not pinned.
@@ -44,8 +48,36 @@ func (s *Store) Propose(p string, e Entry) (Entry, error) {
 			return Entry{}, fmt.Errorf("%w (%s, in the evidence)", ErrSecret, kind)
 		}
 	}
-	return s.Add(p, Entry{Scope: ScopeProject, Kind: e.Kind, Text: e.Text, Paths: e.Paths,
-		Status: StatusProposed, Source: SourceAgent, Evidence: e.Evidence})
+	in := Entry{Scope: ScopeProject, Kind: e.Kind, Text: e.Text, Paths: e.Paths,
+		Status: StatusProposed, Source: SourceAgent, Evidence: e.Evidence}
+	var out Entry
+	err := s.mutate(p, ScopeProject, "", func(f *scopeFile) error {
+		prep, err := s.prepare(in)
+		if err != nil {
+			return err
+		}
+		// A text that dedupes into an existing entry stores nothing new, so
+		// only a new proposal needs a free slot.
+		if i, _ := findMatch(f, prep); i < 0 {
+			if n := pendingAgentProposals(f); n >= MaxPendingProposals {
+				return fmt.Errorf("%d proposals are waiting for the developer; %w", n, ErrTooManyProposals)
+			}
+		}
+		out, _, err = s.insert(f, in)
+		return err
+	})
+	return out, err
+}
+
+// pendingAgentProposals counts the agent's proposals still waiting.
+func pendingAgentProposals(f *scopeFile) int {
+	n := 0
+	for _, x := range f.Entries {
+		if x.Status == StatusProposed && x.Source == SourceAgent {
+			n++
+		}
+	}
+	return n
 }
 
 func stripControls(s string) string {
