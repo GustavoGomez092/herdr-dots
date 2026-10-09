@@ -56,6 +56,13 @@ func (e *Engine) Query(ctx context.Context, cmd string, raw json.RawMessage) (an
 		}
 		r, err := e.Ask(ctx, a.PaneID, a.Slug, a.Question, a.IncludeTurns)
 		return r, err
+	case ipc.CmdAskCouncil:
+		var a ipc.AskCouncilArgs
+		if err := decodePane(raw, &a, &a.PaneID); err != nil {
+			return nil, err
+		}
+		r, err := e.AskCouncil(ctx, a.PaneID, a.Question)
+		return r, err
 	case ipc.CmdListQueue:
 		var a ipc.ListQueueArgs
 		if err := decodePane(raw, &a, &a.PaneID); err != nil {
@@ -220,11 +227,19 @@ func (e *Engine) askable(paneID, slug string) (dots.Dot, error) {
 	e.mu.Lock()
 	d, known := e.dots[slug]
 	pausedAll := e.pausedAll
+	inCouncil := false
+	if run := e.councils[paneID]; run != nil {
+		for _, m := range run.members {
+			inCouncil = inCouncil || m.Slug == slug
+		}
+	}
 	e.mu.Unlock()
 	if !known {
 		return dots.Dot{}, fmt.Errorf("%w '%s': its dot file is missing or invalid", ErrNotAttached, slug)
 	}
 	switch {
+	case inCouncil:
+		return d, fmt.Errorf("%s is in a council right now; ask again when it ends", d.Name)
 	case pausedAll:
 		return d, fmt.Errorf("all dots are %w", ErrPaused)
 	case da.Paused:

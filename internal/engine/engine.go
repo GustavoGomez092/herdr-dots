@@ -687,8 +687,8 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 			// stopping: not the dot's failure, and maybe no pane to show it.
 			// A real timeout is DeadlineExceeded and still fails below.
 			e.d.Logf("dot %s on %s: run cancelled: %v", d.Slug, paneID, err)
-			if o.ask {
-				e.restoreStatus(k, prev)
+			if o.ask || (o.sink != nil && !o.memoryPass) {
+				e.restoreStatus(k, prev) // an ask or a council member: put the status back
 			}
 			return
 		}
@@ -696,8 +696,11 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		return
 	}
 	sinkRes, sinkErr = res, nil
-	if o.ask && base.Err() != nil {
-		e.restoreStatus(k, prev) // the agent gave up or the engine stopped: learn and log nothing
+	// The agent gave up or the engine stopped (or, for a council member, its
+	// council was abandoned): learn and log nothing. A council member that
+	// merely hit the council's deadline still reports its answer.
+	if (o.ask && base.Err() != nil) || (!o.ask && o.sink != nil && !o.memoryPass && errors.Is(base.Err(), context.Canceled)) {
+		e.restoreStatus(k, prev)
 		return
 	}
 	e.touchMemory(mem)
