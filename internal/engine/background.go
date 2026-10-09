@@ -336,13 +336,20 @@ func (e *Engine) runBackground(j bgJob) {
 	if res.CostKnown {
 		cost = res.CostUSD
 	}
-	if derr := e.d.Daily.Add(j.dot.Slug, j.kind, cost, e.now()); derr != nil {
-		// The spend is unrecorded: count today as "budget reached" in this
-		// engine (it resumes at local midnight), never as unlimited.
+	if derr := e.recordDaily(j.dot.Slug, j.kind, cost); derr != nil {
+		// The spend is unrecorded after every retry: count today as "budget
+		// reached" in this engine (it resumes at local midnight), never as
+		// unlimited.
 		e.mu.Lock()
 		e.dailyErr = dayOf(e.now())
 		e.mu.Unlock()
-		e.d.Logf("daily budget: %v (background work paused until midnight)", derr)
+		if e.onceToday("daily-unrecorded") {
+			e.d.Logf("daily budget: %v (background work paused until midnight)", derr)
+			msg := "a background run's cost could not be recorded: research, schedules and commit reviews are paused until midnight"
+			if err := e.d.Herdr.Notify(e.ctx, "Herdr Dots", msg); err != nil {
+				e.d.Logf("notify: %v", err)
+			}
+		}
 	}
 	e.refreshToday()
 	if !e.keepPane(&j, "ended") {
@@ -370,6 +377,38 @@ func (e *Engine) runBackground(j bgJob) {
 	}
 	if j.deliver != nil {
 		j.deliver(j, v)
+	}
+}
+
+// dailyAddBackoff are the waits between Daily.Add attempts (ruling P8-R16):
+// a lock held a moment too long by another session shouldn't stop
+// background work for the rest of the day.
+var dailyAddBackoff = []time.Duration{100 * time.Millisecond, 300 * time.Millisecond, 900 * time.Millisecond}
+
+// recordDaily adds a finished run to daily.json, retrying a failed Add after
+// each dailyAddBackoff wait. It returns the last error if every attempt
+// failed. No engine lock may be held: it does file I/O and waits.
+func (e *Engine) recordDaily(slug, kind string, cost float64) error {
+	add, sleep := e.d.Daily.Add, e.sleep
+	if e.dailyAdd != nil {
+		add = e.dailyAdd
+	}
+	if sleep == nil {
+		sleep = func(d time.Duration) {
+			t := time.NewTimer(d)
+			defer t.Stop()
+			select {
+			case <-t.C:
+			case <-e.ctx.Done():
+			}
+		}
+	}
+	for i := 0; ; i++ {
+		err := add(slug, kind, cost, e.now())
+		if err == nil || i == len(dailyAddBackoff) {
+			return err
+		}
+		sleep(dailyAddBackoff[i])
 	}
 }
 

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -216,6 +217,77 @@ func TestDetachingTheLastDotEndsThePane(t *testing.T) {
 	}
 	if n := r.usage.PaneCalls(pane); n != 0 {
 		t.Fatalf("the new attachment inherited %d calls", n)
+	}
+}
+
+// Ruling P8-R16: a Daily.Add that fails (a lock timeout) is retried with a
+// short backoff before background work is blocked until midnight. Two
+// failures then a success: the run is recorded and work goes on. Every
+// attempt failing: blocked, with one log line and one toast.
+func TestDailyAddIsRetriedBeforeBlocking(t *testing.T) {
+	d := dot("Security", dots.ModeQueue)
+	var mu sync.Mutex
+	failures, attempts := 0, 0
+	var waits []time.Duration
+	var r *proRig
+	r = newProRig(t, proOpts{engine: func(e *Engine) {
+		e.dailyAdd = func(slug, kind string, cost float64, now time.Time) error {
+			mu.Lock()
+			attempts++
+			fail := failures > 0
+			if fail {
+				failures--
+			}
+			mu.Unlock()
+			if fail {
+				return errors.New("daily.json: lock timeout")
+			}
+			return r.daily.Add(slug, kind, cost, now)
+		}
+		e.sleep = func(d time.Duration) {
+			mu.Lock()
+			waits = append(waits, d)
+			mu.Unlock()
+		}
+	}}, d)
+	mu.Lock()
+	failures = 2
+	mu.Unlock()
+	r.e.runBackground(scheduledJob(r, d))
+	if day := r.today(t); day.Count("security", state.RunScheduled) != 1 {
+		t.Fatalf("the run was not recorded after two failed attempts: %+v", day)
+	}
+	mu.Lock()
+	if attempts != 3 || len(waits) != 2 || waits[0] != 100*time.Millisecond || waits[1] != 300*time.Millisecond {
+		t.Fatalf("attempts %d waits %v, want 3 attempts after waits [100ms 300ms]", attempts, waits)
+	}
+	mu.Unlock()
+	r.e.runBackground(scheduledJob(r, d))
+	if r.be.n() != 2 {
+		t.Fatal("a Daily.Add that succeeded on a retry blocked background work")
+	}
+
+	mu.Lock()
+	failures, attempts, waits = 100, 0, nil
+	mu.Unlock()
+	r.e.runBackground(scheduledJob(r, d))
+	mu.Lock()
+	if attempts != 4 || len(waits) != 3 || waits[2] != 900*time.Millisecond {
+		t.Fatalf("attempts %d waits %v, want 4 attempts after waits [100ms 300ms 900ms]", attempts, waits)
+	}
+	mu.Unlock()
+	r.e.runBackground(scheduledJob(r, d))
+	if r.be.n() != 3 {
+		t.Fatal("every Daily.Add attempt failed: background work must stop until midnight")
+	}
+	n := 0
+	for _, msg := range r.toasts() {
+		if strings.Contains(msg, "could not be recorded") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want one toast for the unrecorded run, got %v", r.toasts())
 	}
 }
 

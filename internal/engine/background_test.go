@@ -424,7 +424,7 @@ func TestCorruptDailyFileStopsBackgroundRuns(t *testing.T) {
 // stops background work in this engine for the rest of the local day.
 func TestDailyStoreErrorsFailClosed(t *testing.T) {
 	d := dot("Security", dots.ModeQueue)
-	r := newProRig(t, proOpts{}, d)
+	r := newProRig(t, proOpts{engine: func(e *Engine) { e.sleep = func(time.Duration) {} }}, d) // no real retry backoff
 	r.daily.Timeout = 50 * time.Millisecond
 	lockPath := filepath.Join(r.dir, "daily.json.lock")
 	l, err := lockfile.Acquire(lockPath, time.Second)

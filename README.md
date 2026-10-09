@@ -471,8 +471,11 @@ $0.50 a run (`--max-budget-usd`), and Claude Code stops it there; API backends a
 their per-run token and web-use limits; a run with an unknown cost counts $0. A `claude-cli` run
 that fails still counts the cost Claude Code reports, but one killed by `run_timeout_seconds`
 reports no cost and counts $0. If `daily.json` is corrupt, it is set aside
-(`daily.json.corrupt-<time>`) and background work stops for the rest of that local day; while it can't be read or written, nothing runs. The
-budget never becomes unlimited.
+(`daily.json.corrupt-<time>`) and background work stops for the rest of that local day. While it
+can't be read, no background run starts. If a finished run can't be recorded in it (another session
+holding its lock, say), the write is retried three times, after 100 ms, 300 ms and 900 ms; only if
+every attempt fails does background work in that Herdr session stop until local midnight, with one
+log line and one toast. The budget never becomes unlimited.
 
 ## Files
 

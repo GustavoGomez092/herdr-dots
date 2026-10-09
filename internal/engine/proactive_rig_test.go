@@ -121,6 +121,7 @@ type proOpts struct {
 	shared     string        // memory, daily.json and inbox.json under this dir (two engines); "" = private
 	prepare    func(*memory.Store)
 	hook       func(point string) // Engine.testHook, set before Start (no race with engine goroutines)
+	engine     func(*Engine)      // last-minute Engine changes, before Start
 }
 
 // proStart is a Wednesday morning, local time.
@@ -229,6 +230,9 @@ func newProRig(t *testing.T, o proOpts, ds ...dots.Dot) *proRig {
 	}
 	r.e = New(deps)
 	r.e.testHook = o.hook
+	if o.engine != nil {
+		o.engine(r.e)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(r.e.Wait)
 	t.Cleanup(cancel)
