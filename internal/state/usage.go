@@ -69,8 +69,9 @@ func (u *Usage) Add(paneID, slug string, d Delta) error {
 	c.CacheWriteTokens += d.CacheWrite
 	if d.CostKnown && d.CostUSD >= 0 && !math.IsNaN(d.CostUSD) && !math.IsInf(d.CostUSD, 0) {
 		c.CostUSD += d.CostUSD
-	} else if d.Calls > 0 {
-		c.UnknownCostCalls += d.Calls
+	} else {
+		// Unknown cost is always visible, even for a delta with Calls == 0.
+		c.UnknownCostCalls += max(d.Calls, 1)
 	}
 	return writeJSON(u.path, u.data)
 }
@@ -91,6 +92,19 @@ func (u *Usage) CostKnown(paneID, slug string) bool {
 	defer u.mu.Unlock()
 	if c := u.data[paneID][slug]; c != nil {
 		return c.UnknownCostCalls == 0
+	}
+	return true
+}
+
+// PaneCostKnown is false once any run on the pane, by any dot or the council
+// chair, had no price.
+func (u *Usage) PaneCostKnown(paneID string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for _, c := range u.data[paneID] {
+		if c.UnknownCostCalls > 0 {
+			return false
+		}
 	}
 	return true
 }

@@ -252,7 +252,11 @@ func estimateLine(p council.Preflight) string {
 	if p.Chair && len(p.Members) >= 2 {
 		s += " + chair"
 	}
-	return s + fmt.Sprintf(") · %d left", p.PaneLeft)
+	s += fmt.Sprintf(") · %d left", p.PaneLeft)
+	if p.PaneBudgetUSD > 0 { // Phase 4: API dots spend dollars too
+		s += fmt.Sprintf(" · $%.2f of $%.2f spent", p.PaneCostUSD, p.PaneBudgetUSD)
+	}
+	return s
 }
 
 // questionWidth is the question input's visible width for a terminal width

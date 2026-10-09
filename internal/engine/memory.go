@@ -32,6 +32,12 @@ type MemoryInput struct {
 	DotCalls      int
 	PaneCalls     int
 	PaneBudget    int
+
+	// Dollar budgets (Phase 4), as in FilterInput; a budget <= 0 is off.
+	DotCostUSD    float64
+	PaneCostUSD   float64
+	DotBudgetUSD  float64
+	PaneBudgetUSD float64
 }
 
 // DecideMemory reports whether an observe-mode dot should run a memory pass
@@ -47,6 +53,8 @@ func DecideMemory(in MemoryInput) bool {
 	case in.Att.MemoryPasses >= m.MaxPassesPerSession:
 		return false
 	case in.DotCalls >= in.Dot.Budget.MaxCallsPerSession, in.PaneCalls >= in.PaneBudget:
+		return false
+	case OverUSD(in.DotCostUSD, in.DotBudgetUSD), OverUSD(in.PaneCostUSD, in.PaneBudgetUSD):
 		return false
 	}
 	for _, t := range in.NewTurns {

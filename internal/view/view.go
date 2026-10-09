@@ -30,6 +30,10 @@ type DotState struct {
 
 	MemoryEntries int  `json:"memory_entries"` // this dot's entries for the pane's project
 	Learning      bool `json:"learning"`       // a memory pass is running
+
+	CostUSD     float64 `json:"cost_usd,omitempty"`
+	CostUnknown bool    `json:"cost_unknown,omitempty"` // some runs had no price
+	BudgetUSD   float64 `json:"budget_usd,omitempty"`   // 0 = off
 }
 
 type Pane struct {
@@ -46,6 +50,10 @@ type Pane struct {
 	ProjectName     string `json:"project_name,omitempty"`
 	MemoryEntries   int    `json:"memory_entries"`   // project + dot entries for this project
 	MemoryProposals int    `json:"memory_proposals"` // project entries awaiting approval
+
+	CostUSD     float64 `json:"cost_usd,omitempty"`     // known spend on this pane, council chair included
+	CostUnknown bool    `json:"cost_unknown,omitempty"` // some run on this pane (a dot's or the chair's) had no price
+	BudgetUSD   float64 `json:"budget_usd,omitempty"`   // 0 = off
 
 	Council          *CouncilState      `json:"council,omitempty"`           // a council in progress
 	CouncilPreflight *council.Preflight `json:"council_preflight,omitempty"` // the last preflight, for the popup

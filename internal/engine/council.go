@@ -109,12 +109,14 @@ func (e *Engine) councilPlan(att state.Attachment, slugs []string) (council.Pref
 		c := council.Candidate{Slug: da.Slug, Paused: da.Paused || pausedAll, Unknown: !ok}
 		if ok {
 			c.CallsLeft = callsLeft(d.Budget.MaxCallsPerSession, e.d.Usage.Calls(att.PaneID, da.Slug))
+			c.OverUSD = OverUSD(e.d.Usage.Cost(att.PaneID, da.Slug), d.Budget.MaxUSDPerSession)
 		}
 		cands = append(cands, c)
 	}
 	pf := council.Plan(council.PlanInput{
 		Candidates: cands, Rounds: cc.Rounds, MaxMembers: cc.MaxMembers,
 		PaneLeft: callsLeft(cfg.SessionBudgetCalls, e.d.Usage.PaneCalls(att.PaneID)), Chair: cc.Merge == config.MergeChair,
+		PaneCostUSD: e.d.Usage.PaneCost(att.PaneID), PaneBudgetUSD: cfg.SessionBudgetUSD,
 	})
 	if slugs != nil { // nil = every eligible dot; an explicit empty selection leaves no members
 		pf = pf.Select(slugs)
@@ -382,10 +384,15 @@ func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.Counc
 	}
 	if model == "" {
 		model = cfg.DefaultModel
+		if kind != cfg.DefaultBackend {
+			// default_model belongs to default_backend: an anthropic-api chair
+			// must not be asked for "sonnet" (Phase 4).
+			model = dots.DefaultModelFor(kind)
+		}
 	}
 	be, err := e.d.Backend(kind)
 	if err != nil {
-		return "", err
+		return "", redactErr(err)
 	}
 	n := 1
 	for _, d := range run.members {
@@ -407,9 +414,9 @@ func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.Counc
 	ctx, cancel := context.WithTimeout(run.ctx, cfg.RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
-	_ = e.d.Usage.Record(run.paneID, councilSlug, res.InputTokens, res.OutputTokens)
+	_ = e.d.Usage.Add(run.paneID, councilSlug, deltaOf(res)) // the chair's dollars count against the pane
 	if err != nil {
-		return "", err
+		return "", redactErr(err)
 	}
 	if !res.Verdict.Relevant || strings.TrimSpace(textutil.SanitizeModelText(res.Verdict.Message)) == "" {
 		return "", errors.New("the chair returned no digest")

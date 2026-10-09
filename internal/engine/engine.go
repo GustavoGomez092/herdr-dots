@@ -468,6 +468,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 	var budgetHit []dots.Dot
 	e.mu.Lock()
 	paneCalls := e.d.Usage.PaneCalls(paneID)
+	paneCost := e.d.Usage.PaneCost(paneID)
 	_ = e.d.Attachments.Update(paneID, func(a *state.Attachment) {
 		if a.SessionValue != session {
 			return // the session changed under us; this read is stale
@@ -496,6 +497,8 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 				Dot: d, Att: *da, NewTurns: newTurns, PausedAll: e.pausedAll,
 				DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls,
 				PaneBudget: e.config().SessionBudgetCalls,
+				DotCostUSD: e.d.Usage.Cost(paneID, da.Slug), PaneCostUSD: paneCost,
+				DotBudgetUSD: d.Budget.MaxUSDPerSession, PaneBudgetUSD: e.config().SessionBudgetUSD,
 			})
 			da.LastSeenTurn = len(turns)
 			switch dec.Reason {
@@ -513,6 +516,8 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 				if DecideMemory(MemoryInput{
 					Dot: d, Att: *da, NewTurns: memTurns, PausedAll: e.pausedAll, MemoryEnabled: e.config().MemoryEnabled,
 					DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls, PaneBudget: e.config().SessionBudgetCalls,
+					DotCostUSD: e.d.Usage.Cost(paneID, da.Slug), PaneCostUSD: paneCost,
+					DotBudgetUSD: d.Budget.MaxUSDPerSession, PaneBudgetUSD: e.config().SessionBudgetUSD,
 				}) {
 					e.running[k] = true
 					paneCalls++
@@ -622,6 +627,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	}
 	be, err := e.d.Backend(d.Backend.Kind)
 	if err != nil {
+		err = redactErr(err)
 		sinkErr = err
 		e.runFailed(k, d, turn, err)
 		return
@@ -630,12 +636,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	if o.noLearn {
 		mem.learn = false // no remember ops asked for, none applied
 	}
-	req := backend.Request{
-		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
-		Model: d.Backend.Model, Args: d.Backend.Args, RepoRead: d.Context.RepoRead,
-		Cwd: att.Cwd, Turns: turns, Question: o.question, Force: o.summon && !o.noForce,
-		Memory: mem.block, Learn: mem.learn,
-	}
+	req := requestFor(d, att.Cwd)
+	req.Turns, req.Question, req.Force = turns, o.question, o.summon && !o.noForce
+	req.Memory, req.Learn = mem.block, mem.learn
 	if o.memoryPass {
 		if mem.project == "" {
 			return // no project: the pass's ops could not be stored, so skip the call
@@ -645,8 +648,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	ctx, cancel := context.WithTimeout(base, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
-	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
+	_ = e.d.Usage.Add(paneID, d.Slug, deltaOf(res))
 	if err != nil {
+		err = redactErr(err) // defense in depth: adapters redact already
 		sinkErr = err
 		if errors.Is(base.Err(), context.Canceled) {
 			// Its council was abandoned (the pane closed) or the engine is
@@ -695,11 +699,11 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		}
 	}
 	if !res.Verdict.Relevant {
-		e.feed(paneID, d.Slug, turn, state.OutcomePass, "")
+		e.feed(paneID, d.Slug, turn, state.OutcomePass, costDetail(d, res))
 		e.setStatus(k, view.StatusPassed)
 		return
 	}
-	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, res.Verdict.Message)
+	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, withCost(res.Verdict.Message, costDetail(d, res)))
 	e.setStatus(k, view.StatusFlagged)
 	if o.sink != nil {
 		return // council member: the council turns every answer into one card
@@ -708,6 +712,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 }
 
 func (e *Engine) runFailed(k key, d dots.Dot, turn int, err error) {
+	err = redactErr(err) // defense in depth: adapters redact already
 	e.d.Logf("dot %s on %s: %v", d.Slug, k.pane, err)
 	e.feed(k.pane, d.Slug, turn, state.OutcomeError, err.Error())
 	e.setStatus(k, view.StatusError)
@@ -809,6 +814,8 @@ func (e *Engine) Snapshot() view.Snapshot {
 		ms := e.memStats[a.ProjectID]
 		pv := view.Pane{PaneID: a.PaneID, Agent: a.Agent, Source: a.Source,
 			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls,
+			CostUSD: e.d.Usage.PaneCost(a.PaneID), CostUnknown: !e.d.Usage.PaneCostKnown(a.PaneID),
+			BudgetUSD: e.config().SessionBudgetUSD,
 			ProjectID: a.ProjectID, ProjectName: a.ProjectName, MemoryEntries: ms.Total(), MemoryProposals: ms.Proposals}
 		for _, da := range a.Dots {
 			d, ok := e.dots[da.Slug]
@@ -825,7 +832,9 @@ func (e *Engine) Snapshot() view.Snapshot {
 			pv.Dots = append(pv.Dots, view.DotState{Slug: da.Slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
 				Mode: string(d.Delivery.Mode), Status: st, Paused: da.Paused,
 				Calls: e.d.Usage.Calls(a.PaneID, da.Slug), Budget: d.Budget.MaxCallsPerSession,
-				MemoryEntries: ms.Entries[da.Slug], Learning: e.learning[key{a.PaneID, da.Slug}]})
+				MemoryEntries: ms.Entries[da.Slug], Learning: e.learning[key{a.PaneID, da.Slug}],
+				CostUSD: e.d.Usage.Cost(a.PaneID, da.Slug), CostUnknown: !e.d.Usage.CostKnown(a.PaneID, da.Slug),
+				BudgetUSD: d.Budget.MaxUSDPerSession})
 		}
 		pv.Cards = e.d.Queue.Visible(a.PaneID)
 		pv.Feed = e.d.Feed.Recent(a.PaneID, 20)

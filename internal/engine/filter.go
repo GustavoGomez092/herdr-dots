@@ -36,6 +36,13 @@ type FilterInput struct {
 	DotCalls   int
 	PaneCalls  int
 	PaneBudget int
+
+	// Dollar budgets (Phase 4); a budget <= 0 is off. Costs are known
+	// costs only: runs without a price never count.
+	DotCostUSD    float64
+	PaneCostUSD   float64
+	DotBudgetUSD  float64
+	PaneBudgetUSD float64
 }
 
 type Decision struct {
@@ -71,10 +78,10 @@ func Decide(in FilterInput) Decision {
 	if len(in.Dot.Trigger.FileGlobs) > 0 && !globsMatch(in.Dot.Trigger.FileGlobs, turns) {
 		return Decision{Reason: ReasonGlobs}
 	}
-	if in.DotCalls >= in.Dot.Budget.MaxCallsPerSession {
+	if in.DotCalls >= in.Dot.Budget.MaxCallsPerSession || OverUSD(in.DotCostUSD, in.DotBudgetUSD) {
 		return Decision{Reason: ReasonBudget}
 	}
-	if in.PaneCalls >= in.PaneBudget {
+	if in.PaneCalls >= in.PaneBudget || OverUSD(in.PaneCostUSD, in.PaneBudgetUSD) {
 		return Decision{Reason: ReasonSessionBudget}
 	}
 	return Decision{Run: true, Reason: ReasonRun, Turns: turns}
