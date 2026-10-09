@@ -84,12 +84,14 @@ func ParseClaudeOutput(out []byte) (Result, error) { return parseClaude(out, Pas
 
 func parseClaude(out []byte, pass string) (Result, error) {
 	var o struct {
-		IsError bool    `json:"is_error"`
-		Result  string  `json:"result"`
-		Cost    float64 `json:"total_cost_usd"`
+		IsError bool     `json:"is_error"`
+		Result  string   `json:"result"`
+		Cost    *float64 `json:"total_cost_usd"`
 		Usage   struct {
-			In  int `json:"input_tokens"`
-			Out int `json:"output_tokens"`
+			In         int `json:"input_tokens"` // uncached input only
+			Out        int `json:"output_tokens"`
+			CacheRead  int `json:"cache_read_input_tokens"`
+			CacheWrite int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &o); err != nil {
@@ -98,6 +100,11 @@ func parseClaude(out []byte, pass string) (Result, error) {
 	if o.IsError {
 		return Result{}, fmt.Errorf("claude error: %s", o.Result)
 	}
-	res := Result{InputTokens: o.Usage.In, OutputTokens: o.Usage.Out, CostUSD: o.Cost, Raw: o.Result}
+	// The real input is uncached + cache writes + cache reads.
+	res := Result{InputTokens: o.Usage.In + o.Usage.CacheWrite + o.Usage.CacheRead, OutputTokens: o.Usage.Out,
+		CacheReadTokens: o.Usage.CacheRead, CacheWriteTokens: o.Usage.CacheWrite, Raw: o.Result}
+	if o.Cost != nil {
+		res.CostUSD, res.CostKnown = *o.Cost, true
+	}
 	return finishResult(res, o.Result, pass)
 }
