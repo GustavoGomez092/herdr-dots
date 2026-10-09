@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
@@ -36,10 +37,14 @@ func councilReady(fc *fakeCaller, cs *view.CouncilState) tea.Model {
 func TestCouncilCardHeaderAndExpand(t *testing.T) {
 	m := councilReady(&fakeCaller{}, nil)
 	v := m.View()
-	for _, want := range []string{"⊕ CRITICAL  Council · turn 22 · 3 dots", "## Must fix", "merged without chair (chair error: timed out)", "⏎ send  e edit  x dismiss  space expand"} {
+	for _, want := range []string{"⊕ CRITICAL  Council · turn 22 · 3 dots", "## Must fix", "⏎ send  e edit  x dismiss  space expand"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view missing %q\n%s", want, v)
 		}
+	}
+	// The note wraps to the body width (final review item 2).
+	if flat := strings.Join(strings.Fields(v), " "); !strings.Contains(flat, "merged without chair (chair error: timed out)") {
+		t.Errorf("view missing the note\n%s", v)
 	}
 	if strings.Contains(v, "✗ timed out") {
 		t.Fatal("parts stay hidden until expanded")
@@ -122,6 +127,24 @@ func TestExpandedCouncilCardStaysWithinTheViewport(t *testing.T) {
 		if !strings.Contains(v, want) {
 			t.Fatalf("missing %q\n%s", want, v)
 		}
+	}
+}
+
+// Final review item 2: the footer note wraps like every other card line, so
+// a long chair error reason is not cut off by the terminal.
+func TestCouncilNoteWrapsToTheBodyWidth(t *testing.T) {
+	s := councilSnapshot(nil)
+	s.Panes[0].Cards[0].Note = "merged without chair (chair error: error: backend exited with status 1 after the upstream closed the connection reason-end)"
+	m, _ := New("w1:p1", &fakeCaller{}).Update(SnapshotMsg(s))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 80})
+	v := m.View()
+	for _, line := range strings.Split(v, "\n") {
+		if w := lipgloss.Width(line); w > 60 {
+			t.Fatalf("line of width %d in a 60-wide pane: %q\n%s", w, line, v)
+		}
+	}
+	if !strings.Contains(v, "reason-end)") {
+		t.Fatalf("the note's end is missing\n%s", v)
 	}
 }
 

@@ -94,7 +94,7 @@ func councilDetail(c queue.Card, expanded bool, body lipgloss.Style) string {
 	}
 	var b strings.Builder
 	if c.Note != "" {
-		b.WriteString(style.Dim.Render("  "+c.Note) + "\n")
+		b.WriteString(body.Render(style.Dim.Render("  "+c.Note)) + "\n")
 	}
 	if !expanded {
 		return b.String()
