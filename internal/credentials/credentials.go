@@ -8,10 +8,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"strings"
-	"syscall"
 	"unicode"
 
 	"github.com/BurntSushi/toml"
@@ -65,6 +65,11 @@ type entry struct {
 	APIKey string `toml:"api_key"`
 }
 
+// String and GoString keep a stray %v, %+v or %#v of the parsed file from
+// printing a key.
+func (entry) String() string   { return Redacted }
+func (entry) GoString() string { return Redacted }
+
 const header = "# Managed by herdr-dots. Do not commit. Mode 0600.\n"
 
 func (f File) env(name string) string {
@@ -108,23 +113,26 @@ func (f File) Lookup(provider string) (string, string, error) {
 // read loads credentials.toml. A missing file is empty. The file must be a
 // regular file owned by this user with no group or other permission bits.
 func (f File) read() (map[string]entry, error) {
-	st, err := os.Lstat(f.Path)
+	fd, st, err := openChecked(f.Path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return map[string]entry{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if !st.Mode().IsRegular() {
+	if fd != nil {
+		defer fd.Close()
+	}
+	if fd == nil || !st.Mode().IsRegular() {
 		return nil, fmt.Errorf("credentials.toml must be a regular file (%s)", f.Path)
 	}
 	if st.Mode().Perm()&0o077 != 0 {
 		return nil, ErrInsecurePerms
 	}
-	if sys, ok := st.Sys().(*syscall.Stat_t); ok && int(sys.Uid) != os.Getuid() {
+	if !ownedByMe(st) {
 		return nil, ErrNotOwner
 	}
-	data, err := os.ReadFile(f.Path)
+	data, err := io.ReadAll(io.LimitReader(fd, 1<<20))
 	if err != nil {
 		return nil, err
 	}

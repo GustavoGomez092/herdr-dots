@@ -13,13 +13,15 @@ var redactions = []struct {
 	repl string
 }{
 	// Provider key shapes. sk-ant- and sk-or- come before the generic sk-.
-	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_\-]{6,}`), "sk-ant-" + Redacted},
-	{regexp.MustCompile(`sk-or-[A-Za-z0-9_\-]{6,}`), "sk-or-" + Redacted},
-	{regexp.MustCompile(`sk-[A-Za-z0-9_\-]{12,}`), "sk-" + Redacted},
+	{regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_\-]{6,}`), "sk-ant-" + Redacted},
+	{regexp.MustCompile(`\bsk-or-[A-Za-z0-9_\-]{6,}`), "sk-or-" + Redacted},
+	{regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{12,}`), "sk-" + Redacted},
 	// Authorization: Bearer <token>
-	{regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=\-]{8,}`), "${1}" + Redacted},
+	{regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=\-]{16,}`), "${1}" + Redacted},
 	// api_key=…, "api_key": "…", x-api-key: …, authorization: …
-	{regexp.MustCompile(`(?i)((?:api[_-]?key|x-api-key|authorization|access[_-]?token)["']?\s*[:=]\s*["']?)[^\s"'&,;}]{6,}`), "${1}" + Redacted},
+	{regexp.MustCompile(`(?i)((?:api[_-]?key|x-api-key|access[_-]?token)["']?\s*[:=]\s*["']?)[^\s"'&,;}]{6,}`), "${1}" + Redacted},
+	// authorization: [scheme] credential (Basic, token, Bearer, ...)
+	{regexp.MustCompile(`(?i)(authorization["']?\s*[:=]\s*["']?)(?:\w+\s+)?[^\s"'&,;}]{6,}`), "${1}" + Redacted},
 }
 
 // Redact scrubs secrets from s before it reaches a log, the feed, a toast, a
