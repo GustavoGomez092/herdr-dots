@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -84,7 +85,7 @@ func TestDailyCorruptFileBlocksTheDay(t *testing.T) {
 	if err != nil || !day.Blocked || day.Date != "2026-10-21" {
 		t.Fatalf("day %+v err %v", day, err)
 	}
-	if m, _ := filepath.Glob(p + ".corrupt-*"); len(m) != 1 {
+	if m := asidesOf(t, p); len(m) != 1 {
 		t.Fatalf("moved aside: %v", m)
 	}
 	if err := d.Add("x", RunResearch, 0.5, now); err != nil {
@@ -211,7 +212,7 @@ func TestDailyBadStoredDateBlocksToday(t *testing.T) {
 		if err != nil || !day.Blocked || day.Date != "2026-10-21" || logged != 1 {
 			t.Fatalf("%s: day %+v err %v logged %d", content, day, err, logged)
 		}
-		if m, _ := filepath.Glob(p + ".corrupt-*"); len(m) != 1 {
+		if m := asidesOf(t, p); len(m) != 1 {
 			t.Fatalf("%s: moved aside: %v", content, m)
 		}
 		next, err := d.Today(now.AddDate(0, 0, 1))
@@ -380,5 +381,93 @@ func TestDailyXProcChild(t *testing.T) {
 		if err := d.Add("security", RunResearch, 0.01, time.Date(2026, 10, 21, 12, 0, 0, 0, time.Local)); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// asidesOf lists p's corrupt-* asides without globbing, so a state dir with
+// glob metacharacters in its name still matches.
+func asidesOf(t *testing.T, p string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Dir(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), filepath.Base(p)+".corrupt-") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// The aside scan must not glob d.path: a state dir named with glob
+// metacharacters would match nothing and open the cap.
+func TestDailyCorruptAsideFoundUnderGlobMetacharDir(t *testing.T) {
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	dirs := []string{"a[b"}
+	if runtime.GOOS != "windows" {
+		dirs = append(dirs, "x*y?z", `back\slash`)
+	}
+	for _, dir := range dirs {
+		p := filepath.Join(t.TempDir(), dir, "daily.json")
+		d, err := OpenDaily(p)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		if err := os.WriteFile(p+".corrupt-"+strconv.FormatInt(now.UnixNano(), 10), []byte("{x"), 0o600); err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		day, err := d.Today(now)
+		if err != nil || !day.Blocked {
+			t.Fatalf("%s: day %+v err %v, want blocked", dir, day, err)
+		}
+	}
+}
+
+// A promotion rename that keeps failing while daily.json stays corrupt must
+// not leave a new corrupt-* aside behind on every call, and every call must
+// still fail closed.
+func TestDailyPersistentPromotionFailureKeepsOneAsidePerDay(t *testing.T) {
+	d, p := dailyAt(t)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	d.rename = func(from, to string) error {
+		if to == p {
+			return errors.New("EIO")
+		}
+		return os.Rename(from, to)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
+			_ = os.WriteFile(p, []byte("{not json"), 0o600) // still corrupt
+		}
+		day, err := d.Today(now.Add(time.Duration(i) * time.Minute))
+		if err == nil && !day.Blocked {
+			t.Fatalf("call %d: unblocked day %+v with no error", i, day)
+		}
+	}
+	if m := asidesOf(t, p); len(m) > 1 {
+		t.Fatalf("%d asides after 5 calls, want at most 1: %v", len(m), m)
+	}
+	d.rename = nil
+	if day, err := d.Today(now.Add(time.Hour)); err != nil || !day.Blocked {
+		t.Fatalf("after recovery: %+v %v", day, err)
+	}
+}
+
+// If the directory cannot be listed, a missing daily.json may hide a
+// quarantined day: the call errors rather than returning an empty day.
+func TestDailyUnlistableDirFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX permissions and a non-root user")
+	}
+	d, p := dailyAt(t)
+	dir := filepath.Dir(p)
+	if err := os.Chmod(dir, 0o300); err != nil { // write+search, no read
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if day, err := d.Today(time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)); err == nil {
+		t.Fatalf("day %+v with no error, want the directory scan error", day)
 	}
 }

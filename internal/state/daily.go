@@ -223,24 +223,46 @@ func (d *Daily) recoverMissing(now time.Time, empty dailyFile) (dailyFile, error
 	case !errors.Is(err, fs.ErrNotExist):
 		return dailyFile{}, err
 	}
-	asides, _ := filepath.Glob(d.path + ".corrupt-*")
-	for _, a := range asides {
-		if d.asideIsFrom(a, now) {
-			if werr := d.write(blocked); werr != nil {
-				return dailyFile{}, fmt.Errorf("daily budget: cannot record block: %w", werr)
-			}
-			if d.Logf != nil {
-				d.Logf("daily budget: %s missing but %s was quarantined today; blocked for %s", d.path, a, empty.Date)
-			}
-			return blocked, nil
-		}
+	a, err := d.todaysAside(now)
+	if err != nil {
+		return dailyFile{}, err
 	}
-	return empty, nil
+	if a == "" {
+		return empty, nil
+	}
+	if werr := d.write(blocked); werr != nil {
+		return dailyFile{}, fmt.Errorf("daily budget: cannot record block: %w", werr)
+	}
+	if d.Logf != nil {
+		d.Logf("daily budget: %s missing but %s was quarantined today; blocked for %s", d.path, a, empty.Date)
+	}
+	return blocked, nil
 }
 
-// asideIsFrom: the corrupt-<unix nanos> file was created on now's local day.
-func (d *Daily) asideIsFrom(path string, now time.Time) bool {
-	name := strings.TrimPrefix(path, d.path+".corrupt-")
+// todaysAside returns the path of a corrupt-* aside of daily.json created on
+// now's local day, or "" if there is none. It lists the directory rather than
+// globbing d.path, whose directory may contain glob metacharacters.
+func (d *Daily) todaysAside(now time.Time) (string, error) {
+	dir := filepath.Dir(d.path)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("daily budget: cannot scan for quarantined files: %w", err)
+	}
+	prefix := filepath.Base(d.path) + ".corrupt-"
+	for _, e := range entries {
+		if name, ok := strings.CutPrefix(e.Name(), prefix); ok && asideIsFrom(name, now) {
+			return filepath.Join(dir, e.Name()), nil
+		}
+	}
+	return "", nil
+}
+
+// asideIsFrom: the corrupt-<unix nanos> suffix names a file created on now's
+// local day.
+func asideIsFrom(name string, now time.Time) bool {
 	digits := name
 	for i, r := range name {
 		if r < '0' || r > '9' {
@@ -293,6 +315,11 @@ func removeIfPresent(path string) error {
 // the side file takes its place. A failure rolls back and returns every
 // error; if the rollback itself fails the side file is kept, and the next read
 // promotes it (recoverMissing), so nothing reads as an empty day.
+//
+// At most one aside is kept per local day: if one from today already exists
+// (an earlier quarantine whose promotion kept failing, say), the bad file is
+// not moved aside again but replaced in one atomic write by the blocked
+// record. A failed write leaves the corrupt file in place and errors.
 func (d *Daily) quarantine(now time.Time, empty dailyFile, cause error) (dailyFile, error) {
 	blocked := empty
 	blocked.Blocked = true
@@ -300,14 +327,24 @@ func (d *Daily) quarantine(now time.Time, empty dailyFile, cause error) (dailyFi
 	if err != nil {
 		return dailyFile{}, err
 	}
+	prior, err := d.todaysAside(now)
+	if err != nil {
+		return dailyFile{}, err
+	}
+	if prior != "" {
+		if err := d.writeAtomic(d.path, data, 0o600); err != nil {
+			return dailyFile{}, fmt.Errorf("daily budget: cannot record block: %w", err)
+		}
+		if d.Logf != nil {
+			d.Logf("daily budget: %s unreadable (%v); already quarantined today as %s, replaced with a block for %s", d.path, cause, prior, empty.Date)
+		}
+		return blocked, nil
+	}
 	side := d.path + ".blocked"
 	if err := d.writeAtomic(side, data, 0o600); err != nil {
 		return dailyFile{}, fmt.Errorf("daily budget: cannot record block: %w", err)
 	}
 	aside := fmt.Sprintf("%s.corrupt-%d", d.path, now.UnixNano())
-	if _, serr := os.Stat(aside); serr == nil {
-		aside = fmt.Sprintf("%s-%d", aside, time.Now().UnixNano())
-	}
 	if err := d.rename0(d.path, aside); err != nil {
 		return dailyFile{}, errors.Join(err, removeIfPresent(side))
 	}
