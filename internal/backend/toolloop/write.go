@@ -48,8 +48,8 @@ func Select(root string, read, write bool, lim Limits) ([]Tool, Limits, string) 
 // tools' jail: the same deny-list (Unicode case-folded, home-anchored globs
 // included), exact on-disk spellings, Windows-reserved names refused, and no
 // tools at all for an Unavailable root. They never write through a symlink,
-// never create anything outside root and never touch .git in any spelling,
-// whatever the deny-list says.
+// never create anything outside root and never touch .git or agent
+// configuration (DraftDeny) in any spelling, whatever the deny-list says.
 func WriteTools(root string, lim Limits) []Tool {
 	if Unavailable(root) {
 		return nil
@@ -90,36 +90,17 @@ type writer struct {
 // the path allowed by the deny-list both relative to the root and, when the
 // root sits below the home directory, relative to home.
 func resolveForWrite(root, p string, deny []string) (rr, abs, rel string, err error) {
-	if strings.ContainsRune(p, 0) {
-		return "", "", "", errors.New("invalid path")
-	}
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return "", "", "", errors.New("path is required")
-	}
-	absRoot, err := filepath.Abs(root)
+	rr, _, rel, err = jailEntry(root, p)
 	if err != nil {
 		return "", "", "", err
 	}
-	rr, err = filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return "", "", "", fmt.Errorf("project root: %w", err)
-	}
-	joined := filepath.Join(rr, p)
-	if filepath.IsAbs(p) {
-		joined = filepath.Clean(p)
-		if r, ok := within(absRoot, joined); ok {
-			joined = filepath.Join(rr, r)
-		}
-	}
-	rel, ok := within(rr, joined)
-	if !ok || rel == "." {
+	if rel == "." {
 		return "", "", "", ErrOutsideRoot
 	}
 	if err := worktree.CheckPath(rel); err != nil {
 		return "", "", "", fmt.Errorf("%w (%v)", ErrDenied, err)
 	}
-	if Denied(rel, deny) || platform.ReservedPathName(rel) {
+	if Denied(rel, deny) || Denied(rel, DraftDeny) || platform.ReservedPathName(rel) {
 		return "", "", "", ErrDenied
 	}
 	res := newResolver()

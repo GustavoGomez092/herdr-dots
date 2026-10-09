@@ -121,31 +121,9 @@ func TestARunningDraftEndsWhenItsAttachmentGenerationChanged(t *testing.T) {
 	}
 }
 
-// Fix 2.2: Meta.Summary stays redacted for every display reader; the raw text
-// lives in SummaryRaw, which only the memory outcome paths read.
-func TestMetaSummaryIsRedactedAndSummaryRawIsNot(t *testing.T) {
-	r := newDraftRig(t, draftOpts{}, writeDot("Security"))
-	key := "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF"
-	r.dr.mu.Lock()
-	r.dr.msg = "Rotated " + key + " out of the config."
-	r.dr.mu.Unlock()
-	r.dr.set(fixJWT, nil)
-	r.attach(t, "security")
-	if _, err := r.e.Draft(context.Background(), pane, "security", "fix", ""); err != nil {
-		t.Fatal(err)
-	}
-	c := r.patchCard(t)
-	m, err := r.patches.Get(c.PatchID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(m.Summary, key) || m.Summary != c.Body {
-		t.Fatalf("Meta.Summary must be the redacted text: %q (card %q)", m.Summary, c.Body)
-	}
-	if !strings.Contains(m.SummaryRaw, key) {
-		t.Fatalf("SummaryRaw = %q, want the text as written", m.SummaryRaw)
-	}
-}
+// Fix 2.2 (Meta.Summary redacted; the raw text kept for memory) is
+// superseded by the Phase 7 final fixes: the raw text is never stored
+// (TestADraftSummarySecretIsNeverStoredAndMemoryStillSkipsIt).
 
 // Fix 2.3: detaching one dot mid-draft still charges the pane for the call.
 func TestDetachingOneDotMidDraftStillChargesTheBackendCall(t *testing.T) {
@@ -203,7 +181,7 @@ func TestSendCardsCannotDeliverACardBeingApplied(t *testing.T) {
 				sendErr = r.e.SendCards([]string{c.ID})
 			}
 		}
-		if err := r.e.ApplyPatch(c.ID); err != nil {
+		if err := r.applyReviewed(c.ID); err != nil {
 			t.Fatal(err)
 		}
 		if sendErr == nil {
@@ -222,7 +200,7 @@ func TestSendCardsCannotDeliverACardBeingApplied(t *testing.T) {
 			t.Fatal(err)
 		}
 		eventually(t, "sent", func() bool { got, _ := r.q.Get(c.ID); return got.Status == queue.StatusSent })
-		if err := r.e.ApplyPatch(c.ID); err == nil {
+		if err := r.applyReviewed(c.ID); err == nil {
 			t.Fatal("applied a card that was sent")
 		}
 		if got, _ := os.ReadFile(r.repo + "/auth.js"); strings.Contains(string(got), "setCookie") {

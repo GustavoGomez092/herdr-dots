@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,6 +33,8 @@ var (
 	ErrDraftRunning    = errors.New("this dot is already drafting")
 	ErrAgentBusy       = errors.New("agent is working; try when idle")
 	ErrNotPatch        = errors.New("not a patch card")
+	// ErrPatchNotRemembered: a patch card summarizes a diff; it is not advice.
+	ErrPatchNotRemembered = errors.New("a patch card can't be remembered: remember the advice card it came from")
 )
 
 // maxSnapshotIndex caps a draft's snapshot index (spec §8.1: 500 MB).
@@ -195,9 +198,10 @@ func (e *Engine) setDraftPhase(id, phase string) {
 }
 
 // denyCheck is the jail's own deny match (case folded) over the built-in
-// list plus the configured tool_deny_globs, for worktree.Validate.
+// list, the draft-only list (agent configuration, for every backend) and the
+// configured tool_deny_globs, for worktree.Validate.
 func (e *Engine) denyCheck() func(rel string) bool {
-	deny := append(append([]string(nil), toolloop.DefaultDeny...), e.config().ToolDenyGlobs...)
+	deny := append(append(append([]string(nil), toolloop.DefaultDeny...), toolloop.DraftDeny...), e.config().ToolDenyGlobs...)
 	return func(rel string) bool { return toolloop.Denied(rel, deny) }
 }
 
@@ -292,7 +296,9 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 	// record the next engine start cleans up. It is deleted last (this defer
 	// runs after the ref and worktree cleanups below) unless it is kept as a
 	// ready or rejected patch.
-	crashed, keepRecord := false, false
+	// A ref that could not be dropped keeps its record (as drop-pending, or
+	// as the rejected record it already is) so the next sweep retries.
+	crashed, keepRecord, refStuck := false, false, false
 	meta := patchstore.Meta{ID: id, Dot: d.Slug, Pane: att.PaneID, Repo: repo, Status: patchstore.StatusDrafting}
 	if err := e.d.Patches.Put(meta); err != nil {
 		fail(err)
@@ -300,6 +306,12 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 	}
 	defer func() {
 		if keepRecord || e.stopBefore(&crashed, "record") {
+			return
+		}
+		if refStuck {
+			if _, err := e.d.Patches.Update(id, func(m *patchstore.Meta) { m.Status = patchstore.StatusDropPending }); err != nil {
+				e.d.Logf("draft %s: keep record for the ref retry: %v", id, err)
+			}
 			return
 		}
 		if err := e.d.Patches.Delete(id); err != nil {
@@ -314,7 +326,8 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 			return
 		}
 		if err := worktree.DropSnapshot(context.Background(), g, repo, id); err != nil {
-			e.d.Logf("draft %s: drop snapshot ref: %v", id, err)
+			refStuck = true
+			e.d.Logf("draft %s: drop snapshot ref (retried by the next sweep): %v", id, err)
 		}
 	}()
 	s, err := worktree.TakeSnapshot(ctx, g, repo, id, maxSnapshotIndex)
@@ -390,11 +403,13 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		e.notify(d, "patch rejected: "+reason)
 		return
 	}
-	// Meta.Summary and the card are redacted; SummaryRaw keeps the text as
-	// written (only the memory outcome paths read it, so ScanSecrets still
-	// sees a key).
+	// Meta.Summary and the card are redacted, and the text as written is
+	// never stored: the record only says whether it held a secret, which is
+	// what memory's outcome paths need (a redacted ledger line, no entry).
 	raw := strings.TrimSpace(textutil.SanitizeModelText(res.Verdict.Message))
 	summary := strings.TrimSpace(credentials.Redact(raw))
+	found, _ := memory.ScanSecrets(raw)
+	hadSecret := summary != raw || found
 	if summary == "" {
 		summary = "Drafted a fix."
 	}
@@ -406,10 +421,11 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		fail(ErrPaneClosed) // no card for a pane that is gone: nobody could apply it
 		return
 	}
-	meta.Summary, meta.Stat, meta.Files, meta.Paths, meta.Flags, meta.Status = summary, p.Stat, p.Files, p.Paths(), p.Flags, patchstore.StatusReady
-	if raw != summary {
-		meta.SummaryRaw = raw
+	if toolloop.AgentConfigAny(p.Paths()) { // allowed, but loudly: first on the card
+		p.Flags = append([]string{toolloop.FlagAgentConfig}, p.Flags...)
 	}
+	meta.Summary, meta.Stat, meta.Files, meta.Paths, meta.Flags, meta.Status = summary, p.Stat, p.Files, p.Paths(), p.Flags, patchstore.StatusReady
+	meta.SummaryHadSecret = hadSecret
 	// Only what passed Validate is stored, and the engine applies exactly
 	// those bytes (hash-verified by patchstore.Diff).
 	if err := e.d.Patches.PutPatch(meta, p.Diff); err != nil {
@@ -429,8 +445,18 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		fail(ErrPaneClosed)
 		return
 	}
+	e.hook("draft-carded")
+	if _, err := e.d.Patches.Update(id, func(m *patchstore.Meta) { m.Card = c.ID }); err != nil {
+		// Take the card back (under dmu, like any dismiss) and let the
+		// cleanups delete the patch, its record and its ref: a card its
+		// record doesn't name can't be trusted to apply or discard cleanly.
+		e.dmu.Lock()
+		_ = e.d.Queue.SetStatus(c.ID, queue.StatusDismissed)
+		e.dmu.Unlock()
+		fail(fmt.Errorf("record the patch card: %w", err))
+		return
+	}
 	keepRef, keepRecord = true, true
-	_, _ = e.d.Patches.Update(id, func(m *patchstore.Meta) { m.Card = c.ID })
 	e.feed(att.PaneID, d.Slug, turn, state.OutcomeDrafted, p.Stat)
 	e.reportPending(att.PaneID)
 	e.broadcast()
@@ -451,16 +477,19 @@ func (e *Engine) patchCard(id string) (queue.Card, error) {
 	return c, nil
 }
 
+// ErrUnreviewed refuses an apply that does not name the patch it reviewed.
+var ErrUnreviewed = errors.New("open the patch to review it before applying")
+
 // ApplyPatch applies a patch card to the working tree (gate 2, confirmed in
 // the diff viewer): only while the agent is idle, only into the repository
 // the patch was drafted for, never into the index, never as a commit.
 // Conflicts leave markers in the files and are reported, not an error.
-func (e *Engine) ApplyPatch(cardID string) error { return e.ApplyPatchChecked(cardID, "") }
-
-// ApplyPatchChecked is ApplyPatch for a caller that shows the patch first
-// (the diff viewer): a non-empty wantSHA256 must equal the stored patch's
-// hash, or nothing is applied (the patch changed since it was reviewed).
-func (e *Engine) ApplyPatchChecked(cardID, wantSHA256 string) error {
+// wantSHA256 is the hash of the patch the viewer showed (P7-R7): it is
+// required, and must equal the stored patch's hash, or nothing is applied.
+func (e *Engine) ApplyPatch(cardID, wantSHA256 string) error {
+	if strings.TrimSpace(wantSHA256) == "" {
+		return ErrUnreviewed
+	}
 	if _, err := e.patchCard(cardID); err != nil {
 		return err
 	}
@@ -495,7 +524,7 @@ func (e *Engine) ApplyPatchChecked(cardID, wantSHA256 string) error {
 	if m.Status != patchstore.StatusReady {
 		return fmt.Errorf("patch %s is %s", c.PatchID, m.Status)
 	}
-	if wantSHA256 != "" && !strings.EqualFold(wantSHA256, m.SHA256) {
+	if !strings.EqualFold(wantSHA256, m.SHA256) {
 		return errors.New("the patch changed since you reviewed it; open it again")
 	}
 	p, err := e.d.Herdr.PaneGet(e.ctx, c.PaneID)
@@ -515,6 +544,7 @@ func (e *Engine) ApplyPatchChecked(cardID, wantSHA256 string) error {
 	if err != nil {
 		return fmt.Errorf("apply: %w", err)
 	}
+	e.hook("apply-applied")
 	note, detail := "applied to your working tree (not staged)", m.Stat
 	var flags []string
 	if len(conflicts) > 0 {
@@ -534,11 +564,11 @@ func (e *Engine) ApplyPatchChecked(cardID, wantSHA256 string) error {
 	if len(conflicts) > 0 {
 		e.notify(dots.Dot{Name: c.DotName, Glyph: c.Glyph}, note)
 	}
-	oc := c // memory gets the summary as written, so its secret scan still sees a key
-	if s := memorySummary(m); s != "" {
-		oc.Body = s
+	oc := c
+	if m.Summary != "" {
+		oc.Body = m.Summary
 	}
-	e.spawnOutcome(oc, memory.OutcomeApplied)
+	e.spawnOutcomeOf(oc, memory.OutcomeApplied, m.SummaryHadSecret)
 	e.reportPending(c.PaneID)
 	e.broadcast()
 	return nil
@@ -561,6 +591,13 @@ func (e *Engine) DiscardPatch(cardID string) error {
 		return err
 	}
 	e.hook("discard-reserved")
+	// A patch already applied (an apply interrupted after the patch landed,
+	// before the card was marked) is never discarded: memory would record
+	// "discarded" after "applied". The reservation keeps an apply out.
+	m, merr := e.d.Patches.Get(c.PatchID)
+	if merr == nil && m.Status == patchstore.StatusApplied {
+		return fmt.Errorf("patch %s was already applied to your working tree", c.PatchID)
+	}
 	// The status changes under dmu, like Dismiss of any card, so it never
 	// interleaves with a delivery; the git and patch-file work comes after.
 	e.dmu.Lock()
@@ -570,32 +607,29 @@ func (e *Engine) DiscardPatch(cardID string) error {
 		return err
 	}
 	oc := c
-	if m, err := e.d.Patches.Get(c.PatchID); err == nil {
-		if s := memorySummary(m); s != "" {
-			oc.Body = s
+	stuck := false
+	if merr == nil {
+		if m.Summary != "" {
+			oc.Body = m.Summary
 		}
 		if m.Repo != "" {
 			if err := worktree.DropSnapshot(e.ctx, e.d.Git, m.Repo, c.PatchID); err != nil {
-				e.d.Logf("patch %s: drop snapshot ref: %v", c.PatchID, err)
+				stuck = true
+				e.d.Logf("patch %s: drop snapshot ref (retried by the next sweep): %v", c.PatchID, err)
 			}
 		}
 	}
-	if err := e.d.Patches.Delete(c.PatchID); err != nil {
+	if stuck { // the record stays so the sweep can find and drop the ref
+		if _, err := e.d.Patches.Update(c.PatchID, func(m *patchstore.Meta) { m.Status = patchstore.StatusDropPending }); err != nil {
+			e.d.Logf("patch %s: %v", c.PatchID, err)
+		}
+	} else if err := e.d.Patches.Delete(c.PatchID); err != nil {
 		e.d.Logf("patch %s: %v", c.PatchID, err)
 	}
-	e.spawnOutcome(oc, memory.OutcomeDiscarded)
+	e.spawnOutcomeOf(oc, memory.OutcomeDiscarded, merr == nil && m.SummaryHadSecret)
 	e.reportPending(c.PaneID)
 	e.broadcast()
 	return nil
-}
-
-// memorySummary is the summary memory's outcome paths record: as written when
-// the record has it, else the stored (redacted) one.
-func memorySummary(m patchstore.Meta) string {
-	if m.SummaryRaw != "" {
-		return m.SummaryRaw
-	}
-	return m.Summary
 }
 
 // cardReserved reports whether a patch card is being applied or discarded.
@@ -649,7 +683,8 @@ func (e *Engine) forDelivery(cards []queue.Card) []queue.Card {
 
 // patchSent marks a delivered patch card's patch as sent (kept 7 days) and
 // records the usual "sent" outcome. It runs in the background: no patch I/O
-// under dmu. Memory gets the summary as written (see runDraft).
+// under dmu. Memory gets the redacted summary and whether it held a secret
+// (see runDraft).
 func (e *Engine) patchSent(c queue.Card) {
 	if c.Kind != queue.KindPatch || e.d.Patches == nil {
 		return
@@ -659,11 +694,11 @@ func (e *Engine) patchSent(c queue.Card) {
 		m, err := e.d.Patches.Update(c.PatchID, func(m *patchstore.Meta) { m.Status = patchstore.StatusSent })
 		if err != nil {
 			e.d.Logf("patch %s: %v", c.PatchID, err)
-		} else if s := memorySummary(m); s != "" {
-			oc.Body = s
+		} else if m.Summary != "" {
+			oc.Body = m.Summary
 		}
 		if e.memEnabled() {
-			e.recordOutcome(oc, memory.OutcomeSent, "", false)
+			e.recordOutcome(oc, memory.OutcomeSent, "", false, err == nil && m.SummaryHadSecret)
 		}
 	})
 }
@@ -680,14 +715,26 @@ func (e *Engine) draftViews(paneID string) []view.DraftState {
 	return out
 }
 
+// sameRepo reports whether a and b are the same directory: by file identity
+// (symlinks, case variants and Windows short names all match), or, when
+// either can't be stat'ed, by the cleaned, symlink-resolved paths (compared
+// case-insensitively on Windows, see pathsEqual).
 func sameRepo(a, b string) bool {
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	if aerr == nil && berr == nil {
+		return os.SameFile(ai, bi)
+	}
+	if aerr == nil || berr == nil {
+		return false // one exists and the other doesn't
+	}
 	clean := func(p string) string {
 		if r, err := filepath.EvalSymlinks(p); err == nil {
 			p = r
 		}
 		return filepath.Clean(p)
 	}
-	return clean(a) == clean(b)
+	return pathsEqual(clean(a), clean(b))
 }
 
 func fileWord(n int) string {

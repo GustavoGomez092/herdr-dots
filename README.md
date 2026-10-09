@@ -332,7 +332,9 @@ drafts are compile-checked and unit-tested only.
    ```
 
    `claude-cli` and the API backends can draft. `codex-cli` dots can't: `codex exec` always has a
-   shell, and write-capable dots never get one.
+   shell, and write-capable dots never get one. A `claude-cli` draft needs a Claude Code version
+   that supports `--restricted` (2.1.295 is verified); an older one refuses the flag and the draft
+   fails without running.
 
 **Draft.** In the Dots pane, select a card and press `w`, or select a write-capable dot in the
 roster and press `w` and type what to fix. The confirm shows the dot, backend, model, time limit,
@@ -343,10 +345,14 @@ refused, not shortened, so what you confirmed is exactly what runs. While it run
 and closing the agent's pane cancels its draft.
 
 **Review.** The result is a `PATCH` card with a diffstat and flags such as `[binary]`, `[mode]`
-or `[symlink]`.
+or `[symlink]`. A patch that changes agent or CI configuration (CI workflows, `.vscode` tasks and
+settings, `.envrc`, `.gitattributes`, `.gitmodules`, pre-commit and husky hooks, `Makefile`,
+`package.json`, `.npmrc`) is flagged `[agent/CI config]` first: those files run code the next time
+CI, your editor, git or a package script starts.
 
 - `v` opens the patch viewer: the changed files on the left, the diff on the right, `n`/`p` for
-  the next and previous hunk.
+  the next and previous hunk. Long lines wrap onto rows marked `↪`, never cut, and a file counts
+  as viewed only once every row of it has been on screen.
 - `A` opens the viewer with *Apply N files to your working tree? Nothing is staged or committed.
   (y/N)*; `y` applies. The confirm lists the files you haven't viewed yet, so you can see what you
   are skipping. The apply request carries the hash of the patch you reviewed, and the engine
@@ -414,14 +420,19 @@ Linux, but it has not been run on Windows yet.
   dots get read-only tools.
 - A draft runs in a git worktree outside your repository, made from a snapshot of your working
   tree (uncommitted and untracked files included) through a private index. Your index, stash,
-  branches, `HEAD` and commits never change; the only things added to the repository are objects
-  and a private ref (`refs/herdr-dots/snapshots/<id>`) that goes away when the patch is resolved.
+  branches, `HEAD` and commits never change. What is added to the repository: objects, a private
+  ref (`refs/herdr-dots/snapshots/<id>`), and, while the draft runs, git's own registration files
+  for the worktree under `.git/worktrees/`. The ref goes when the patch is applied or discarded,
+  stays 7 days after the patch is sent to the agent, and stays for a pending card, or one whose
+  pane closed, until you apply or discard it. A daily sweep removes refs no patch owns.
   Git hooks and fsmonitor programs never run for it.
-- No dot ever gets a shell. A claude draft gets `Read, Grep, Glob, Edit, Write`, and only edits
+- No dot ever gets a shell. A claude draft gets `Read, Grep, Glob, Edit, Write` and runs with
+  `--restricted` (your and the repository's Claude settings files are ignored), and only edits
   inside its worktree are accepted; API drafts get `write_file`/`edit_file` jailed to the worktree.
   Symlinks that point outside the repository are replaced while the dot works.
-- Patches are validated before you see them. They are rejected when they touch `.git`, reach
-  outside the repository, hit the deny list (secret-looking files such as `.env`), create or change
+- Patches are validated before you see them. They are rejected when they touch `.git` or agent
+  configuration (`.claude/`, `.mcp.json`, `.codex/`, for every backend), reach outside the
+  repository, hit the deny list (secret-looking files such as `.env`), create or change
   any symlink, or go over the size or file caps. (Deleting a symlink, or replacing it with a regular
   file, is allowed.) Every draft needs two approvals: one to start, one (with the diff on screen)
   to apply. Applying touches the working tree only; it never stages or commits.
@@ -448,7 +459,11 @@ Linux, but it has not been run on Windows yet.
 - Forgetting is real: `forget` removes the entry from disk, `--scrub` also removes its ledger lines,
   and `purge` deletes a project's whole memory.
   Deleting a dot's memory in all projects (the manage popup) also removes the ledger lines its
-  cards left and the project conventions it proposed that you never approved.
+  cards left and the project conventions it proposed that you never approved. It also deletes the
+  copies of that dot's memory file that were set aside as damaged (`<dot>.json.corrupt-*`).
+  A damaged project file set aside as `project.json.corrupt-*` mixes every dot's entries and is
+  never edited, so it may still hold a deleted dot's text: `herdr-dots memory purge` is what
+  clears those.
 - Memory text is stripped of control characters (terminal escape sequences) when it is written and
   when it is read, like the feed.
 

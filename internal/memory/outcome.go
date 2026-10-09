@@ -55,7 +55,7 @@ func (s *Store) RecordOutcome(p string, o Outcome) error {
 	if o.At.IsZero() {
 		o.At = s.now()
 	}
-	secret := false
+	secret := o.Secret
 	for _, t := range []string{o.Body, o.Edited} {
 		if found, _ := ScanSecrets(t); found {
 			secret = true

@@ -349,10 +349,17 @@ func (e *Engine) Detach(paneID, slug string) error {
 	if err != nil {
 		return err
 	}
+	e.hook("detach-updated")
 	e.mu.Lock()
 	delete(e.status, key{paneID, slug})
 	delete(e.warned, key{paneID, slug})
 	e.abandonDraftsLocked(paneID, slug) // a detached dot's draft would make a card for a dot that is gone
+	if empty {
+		// Decided again here: an Attach (which upserts under e.mu) may have
+		// added a dot since the update above.
+		cur, ok := e.d.Attachments.Get(paneID)
+		empty = ok && len(cur.Dots) == 0
+	}
 	if empty {
 		// In the same e.mu section as the delete: a draft registering after it
 		// sees the attachment gone, one before it is abandoned here.

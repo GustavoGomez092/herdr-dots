@@ -37,7 +37,7 @@ var (
 var allowed = map[Status][]Status{
 	StatusPending:  {StatusSent, StatusDismissed, StatusAuto, StatusOrphaned, StatusApplied},
 	StatusAuto:     {StatusSent, StatusPending, StatusDismissed, StatusOrphaned},
-	StatusOrphaned: {StatusDismissed},
+	StatusOrphaned: {StatusDismissed, StatusApplied}, // applied: a patch card whose pane closed mid-apply
 }
 
 type Card struct {

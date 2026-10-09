@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/platform"
 )
 
 // Statuses (Meta.Status). A discarded patch is deleted, not kept.
@@ -28,6 +29,9 @@ const (
 	StatusApplied  = "applied"  // applied to the working tree
 	StatusSent     = "sent"     // the "Patch ready" message went to the agent
 	StatusRejected = "rejected" // failed validation (Reason says why); no patch file
+	// StatusDropPending: resolved, but deleting its snapshot ref failed. The
+	// record stays only so the next sweep retries; it goes once the ref does.
+	StatusDropPending = "drop-pending"
 )
 
 var (
@@ -47,21 +51,22 @@ type Meta struct {
 	Ref      string `json:"ref,omitempty"`      // its private ref
 	BaseHead string `json:"base_head,omitempty"`
 	Summary  string `json:"summary,omitempty"` // redacted: safe for every display reader
-	// SummaryRaw is the summary as the dot wrote it (sanitized, not redacted),
-	// kept only when it differs from Summary. Only the memory outcome paths
-	// read it, so their secret scan still sees a key. Never display it.
-	SummaryRaw string    `json:"summary_raw,omitempty"`
-	Stat       string    `json:"stat,omitempty"` // "3 files +42 −7"
-	Files      int       `json:"files"`
-	Bytes      int       `json:"bytes"`
-	Paths      []string  `json:"paths,omitempty"`
-	Flags      []string  `json:"flags,omitempty"`
-	SHA256     string    `json:"sha256,omitempty"` // of the patch file
-	Conflicts  []string  `json:"conflicts,omitempty"`
-	Status     string    `json:"status"`
-	Reason     string    `json:"reason,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	// SummaryHadSecret: the summary as the dot wrote it looked like it held a
+	// credential (it was redacted, or memory's scan found one). Memory's
+	// outcome paths then write a redacted ledger line and no entry. The text
+	// as written is never stored (older records' summary_raw is ignored).
+	SummaryHadSecret bool      `json:"summary_had_secret,omitempty"`
+	Stat             string    `json:"stat,omitempty"` // "3 files +42 −7"
+	Files            int       `json:"files"`
+	Bytes            int       `json:"bytes"`
+	Paths            []string  `json:"paths,omitempty"`
+	Flags            []string  `json:"flags,omitempty"`
+	SHA256           string    `json:"sha256,omitempty"` // of the patch file
+	Conflicts        []string  `json:"conflicts,omitempty"`
+	Status           string    `json:"status"`
+	Reason           string    `json:"reason,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // Store reads and writes patches in Dir. One process (the engine) writes.
@@ -95,7 +100,7 @@ func (s *Store) write(m *Meta) error {
 	if !ValidID(m.ID) {
 		return fmt.Errorf("%w: %q", ErrInvalidID, m.ID)
 	}
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := s.ensureDir(); err != nil {
 		return err
 	}
 	now := s.now()
@@ -108,6 +113,17 @@ func (s *Store) write(m *Meta) error {
 		return err
 	}
 	return fsutil.WriteFileAtomic(s.metaPath(m.ID), append(data, '\n'), 0o600)
+}
+
+// ensureDir creates the patches directory and makes it private (0700 on
+// Unix, an owner-only ACL on Windows) even if it already existed: it names
+// files and holds diffs of the user's code. Files are written private by
+// fsutil.WriteFileAtomic.
+func (s *Store) ensureDir() error {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return err
+	}
+	return platform.SecureDir(s.Dir)
 }
 
 // Put writes m's metadata.
@@ -124,7 +140,7 @@ func (s *Store) PutPatch(m Meta, diff []byte) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := s.ensureDir(); err != nil {
 		return err
 	}
 	if err := fsutil.WriteFileAtomic(s.PatchPath(m.ID), diff, 0o600); err != nil {

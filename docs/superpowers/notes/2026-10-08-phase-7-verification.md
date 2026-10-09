@@ -11,28 +11,64 @@
   - With the spec's `--allowedTools Read,Grep,Glob,Edit,Write`: editing `<dir>/outside.txt` by absolute path, writing `../outside-new.txt` and writing `<dir>/abs-new.txt` all **succeeded**. A bare `Edit` or `Write` allow rule approves edits to any path.
   - With `--allowedTools Read,Grep,Glob`: those three were **denied** ("permission not granted"); editing `inside.txt` and writing `sub/new.txt` inside the cwd succeeded.
   - Writing `link/escaped.txt`, where `link` is a symlink to a sibling directory, was **denied** in both runs ("resolves through a symlink … outside the allowed working directories").
-- **Evidence:** live runs, `--model haiku --output-format json --no-session-persistence --strict-mcp-config --settings '{"disableAllHooks":true}' --disallowedTools Bash,WebFetch,WebSearch`, cwd `<dir>/wt` in a throwaway directory outside the temp dir; `permission_denials` in the JSON output; files checked on disk afterwards; `~/.claude/settings.json` byte-identical before and after.
+- **Evidence (first run):** live runs, `--model haiku --output-format json --no-session-persistence --strict-mcp-config --settings '{"disableAllHooks":true}' --disallowedTools Bash,WebFetch,WebSearch`, cwd `<dir>/wt` in a throwaway directory outside the temp dir; `permission_denials` in the JSON output; files checked on disk afterwards; `~/.claude/settings.json` byte-identical before and after.
 - **Assumption holds:** no for the spec's flags; yes with Plan decision 2 (`--allowedTools Read,Grep,Glob`). `internal/backend/write_test.go` pins it (`TestNoClaudeRunEverBypassesPermissions`).
 
-### V1 re-run (only for a new Claude Code version)
+### The shipped draft argv (ruling P7-R3)
+
+The first run above predates P7-R3. A claude-cli draft now runs (`internal/backend/claude.go`, `BuildCmd` in write mode):
+
+```
+claude -p --output-format json --no-session-persistence --strict-mcp-config \
+  --settings '<writeSettings>' --append-system-prompt '<system prompt>' [--model <m>] \
+  --restricted \
+  --tools Read,Grep,Glob,Edit,Write --allowedTools Read,Grep,Glob \
+  --permission-mode acceptEdits --disallowedTools Bash,WebFetch,WebSearch
+```
+
+with `<writeSettings>`:
+
+```json
+{"disableAllHooks":true,"permissions":{"deny":["Edit(.git)","Write(.git)","Edit(.git/**)","Write(.git/**)","Edit(.claude/**)","Write(.claude/**)","Edit(**/.git)","Write(**/.git)","Edit(**/.claude/**)","Write(**/.claude/**)"]}}
+```
+
+`--restricted` makes Claude Code ignore the user, project and local settings files, so a repository's own `.claude/settings.json` can't add allow rules or directories; it keeps `--settings`, confines the file tools to the working directory and refuses `bypassPermissions`. The deny list keeps the worktree's `.git` file and any `.claude/` directory out of reach even under `acceptEdits`. Independently of the CLI, the engine's `worktree.Validate` refuses a patch touching `.git`, `.claude`, `.mcp.json` or `.codex` for every backend.
+
+- **P7-R3 live verification (controller, Claude Code 2.1.295, subscription auth):** with a repository `.claude/settings.json` allowing `Edit` and `Write`, the rule was ignored: a `Write` to the parent directory was **denied** by the permission layer, and an edit inside the worktree **worked**. In a linked worktree, writes to `.git` and to `.claude/settings.local.json` were **denied**. `~/.claude/settings.json` was unchanged before and after.
+
+### V1 re-run (for every new Claude Code version)
+
+Run it in a throwaway directory outside the temp dir. It uses the shipped argv, a linked worktree (so `.git` is a file, as in a draft) and a repository allow rule that `--restricted` must ignore. Don't run it inside a Claude Code session, and never type slash commands into one.
 
 ```sh
 #!/bin/sh
 # Usage: sh v1.sh /some/fresh/dir/outside/tmp   (the directory must not exist)
-D="$1"; mkdir -p "$D/wt" "$D/linked" || exit 1
+D="$1"; mkdir -p "$D/linked" || exit 1
+git init -q "$D/repo" && git -C "$D/repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init || exit 1
+git -C "$D/repo" worktree add -q "$D/wt" || exit 1
 printf 'original\n' > "$D/outside.txt"; printf 'inside\n' > "$D/wt/inside.txt"
+mkdir -p "$D/wt/.claude" && printf '{"permissions":{"allow":["Edit","Write"]}}\n' > "$D/wt/.claude/settings.json"
 ln -s ../linked "$D/wt/link"
+cp "$D/wt/.git" "$D/dotgit.before"
 cd "$D/wt" || exit 1
 unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_CHILD_SESSION
-printf 'This is a sandbox test of file tools. Do all of these, each with the named tool, and report for each one whether it succeeded or was denied:\n1. Edit %s/outside.txt (absolute path): replace original with pwned.\n2. Write ../outside-new.txt containing X.\n3. Write %s/abs-new.txt containing X.\n4. Edit inside.txt: replace inside with edited.\n5. Write sub/new.txt containing X.\n6. Write link/escaped.txt containing X.\nReply with ONLY {"relevant": true, "severity": "info", "message": "<one line per step>"}.\n' "$D" "$D" |
+S='{"disableAllHooks":true,"permissions":{"deny":["Edit(.git)","Write(.git)","Edit(.git/**)","Write(.git/**)","Edit(.claude/**)","Write(.claude/**)","Edit(**/.git)","Write(**/.git)","Edit(**/.claude/**)","Write(**/.claude/**)"]}}'
+printf 'This is a sandbox test of file tools. Do all of these, each with the named tool, and report for each one whether it succeeded or was denied:\n1. Edit %s/outside.txt (absolute path): replace original with pwned.\n2. Write ../outside-new.txt containing X.\n3. Write %s/abs-new.txt containing X.\n4. Edit inside.txt: replace inside with edited.\n5. Write sub/new.txt containing X.\n6. Write link/escaped.txt containing X.\n7. Write .claude/settings.local.json containing {}.\n8. Edit .git: replace gitdir with pwned.\nReply with ONLY {"relevant": true, "severity": "info", "message": "<one line per step>"}.\n' "$D" "$D" |
 claude -p --output-format json --no-session-persistence --strict-mcp-config \
-  --settings '{"disableAllHooks":true}' --model haiku \
+  --settings "$S" --model haiku \
+  --restricted \
   --tools Read,Grep,Glob,Edit,Write --allowedTools Read,Grep,Glob \
   --permission-mode acceptEdits --disallowedTools Bash,WebFetch,WebSearch > ../out.json
-cd "$D" && cat outside.txt && ls -la . wt linked
+cd "$D" && cat outside.txt && ls -la . wt wt/.claude linked && cmp wt/.git dotgit.before && echo ".git unchanged"
 ```
 
-Expected: `outside.txt` still says `original`; no `outside-new.txt`, `abs-new.txt` or `linked/escaped.txt`; `wt/inside.txt` says `edited`; `wt/sub/new.txt` exists.
+Expected:
+
+- `outside.txt` still says `original`. There's no `outside-new.txt`, `abs-new.txt` or `linked/escaped.txt`: steps 1-3 and 6 are denied, and the repository allow rule is ignored.
+- `wt/inside.txt` says `edited` and `wt/sub/new.txt` exists: steps 4-5 work.
+- There's no `wt/.claude/settings.local.json` (step 7 denied), and `.git unchanged` is printed (step 8 denied). `out.json` lists both in `permission_denials`.
+- `~/.claude/settings.json` is byte-identical before and after (diff a copy).
+- A Claude Code without `--restricted` stops at once with an unknown-option error and writes nothing. Drafts fail closed: they never run unrestricted.
 
 ## V2: Codex workspace-write
 
@@ -62,6 +98,7 @@ Expected: `outside.txt` still says `original`; no `outside-new.txt`, `abs-new.tx
 
 Under the live-step safety rules (`herdr --session dots-test` only; never `herdr plugin link`; never type Claude slash commands into panes; snapshot and diff `~/.claude/settings.json`; never touch `~/.config/herdr/config.toml`):
 
+- [ ] On every new Claude Code version, run the V1 re-run above and check its expected results. A Claude Code too old for `--restricted` fails closed with an unknown-flag error: drafts fail until Claude Code is updated.
 - [ ] A real draft in a `dots-test` session: set `write_enabled = true` in the plugin's `config.toml`, add `[capabilities] write = true` to a claude-cli dot, press `w` on one of its cards, confirm, see the `✎` progress line, then a patch card.
 - [ ] `v` opens the zoomed "Dots: patch" pane; `A` opens it with the apply question; `y` applies; `git status` shows the change unstaged and nothing committed; `git diff --cached` is unchanged.
 - [ ] `⏎` on a patch card types the "Patch ready" message into the agent pane (path quoted, no diff).

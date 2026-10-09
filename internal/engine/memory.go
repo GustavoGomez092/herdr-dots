@@ -314,7 +314,12 @@ func (e *Engine) clearError(k key) {
 }
 
 // spawnOutcome records what happened to a card, off the caller's locks.
-func (e *Engine) spawnOutcome(c queue.Card, kind string) {
+func (e *Engine) spawnOutcome(c queue.Card, kind string) { e.spawnOutcomeOf(c, kind, false) }
+
+// spawnOutcomeOf is spawnOutcome for a card whose text held a secret that was
+// redacted before it reached the card (secret: a redacted ledger line, no
+// entry).
+func (e *Engine) spawnOutcomeOf(c queue.Card, kind string, secret bool) {
 	e.mu.Lock()
 	orig, edited := e.origBody[c.ID]
 	delete(e.origBody, c.ID)
@@ -322,10 +327,10 @@ func (e *Engine) spawnOutcome(c queue.Card, kind string) {
 	if !e.memEnabled() {
 		return
 	}
-	e.spawn(func() { e.recordOutcome(c, kind, orig, edited) })
+	e.spawn(func() { e.recordOutcome(c, kind, orig, edited, secret) })
 }
 
-func (e *Engine) recordOutcome(c queue.Card, kind, orig string, edited bool) {
+func (e *Engine) recordOutcome(c queue.Card, kind, orig string, edited, secret bool) {
 	if c.Kind == queue.KindCouncil {
 		e.recordCouncilOutcomes(c, kind, edited) // one outcome per contributing member (council_memory.go)
 		return
@@ -345,7 +350,7 @@ func (e *Engine) recordOutcome(c queue.Card, kind, orig string, edited bool) {
 		e.d.Logf("card %s: project unknown; outcome not remembered", c.ID)
 		return
 	}
-	o := memory.Outcome{Dot: c.Dot, Card: c.ID, Kind: kind, Severity: c.Severity, Body: c.Body, Turn: c.Turn, Pane: c.PaneID}
+	o := memory.Outcome{Dot: c.Dot, Card: c.ID, Kind: kind, Severity: c.Severity, Body: c.Body, Turn: c.Turn, Pane: c.PaneID, Secret: secret}
 	if attached {
 		o.Session = a.SessionValue
 	}
@@ -371,6 +376,9 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	c, ok := e.d.Queue.Get(cardID)
 	if !ok {
 		return fmt.Errorf("card %s: %w", cardID, queue.ErrNotFound)
+	}
+	if c.Kind == queue.KindPatch {
+		return fmt.Errorf("card %s: %w", cardID, ErrPatchNotRemembered)
 	}
 	if c.Kind == queue.KindCouncil && as != memory.AsConvention {
 		return errors.New("a council card can only be remembered as a project convention (c)")

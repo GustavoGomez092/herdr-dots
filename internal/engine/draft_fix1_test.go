@@ -165,7 +165,7 @@ func TestDiscardAndApplyShareOneReservation(t *testing.T) {
 		t.Fatal("a discard must release its reservation")
 	}
 	r.e.mu.Unlock()
-	if err := r.e.ApplyPatch(c.ID); err == nil {
+	if err := r.applyReviewed(c.ID); err == nil {
 		t.Fatal("applying a discarded patch must fail")
 	}
 	if got, _ := os.ReadFile(r.repo + "/auth.js"); strings.Contains(string(got), "setCookie") {
@@ -224,7 +224,7 @@ func TestASecretInAPatchSummaryNeverBecomesAMemoryEntry(t *testing.T) {
 	if strings.Contains(c.Body, key) {
 		t.Fatalf("the card shows the key: %q", c.Body)
 	}
-	if err := r.e.ApplyPatch(c.ID); err != nil {
+	if err := r.applyReviewed(c.ID); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "a ledger line", func() bool {

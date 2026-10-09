@@ -190,23 +190,29 @@ func (r *resolver) homeRel(dir string) (string, bool) {
 	return hit.rel, hit.ok
 }
 
-func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err error) {
+// jailEntry is where the read and write jails start: p must be non-empty
+// with no NUL, the root is made absolute and resolved (rr), and p is joined
+// to it (an absolute p is taken as is, and one under the root as the pane
+// reports it, through a symlink such as /var for /private/var, is mapped onto
+// rr). lexRel is the lexical path relative to rr; a path outside rr is
+// ErrOutsideRoot.
+func jailEntry(root, p string) (rr, joined, lexRel string, err error) {
 	if strings.ContainsRune(p, 0) {
-		return "", "", errors.New("invalid path")
+		return "", "", "", errors.New("invalid path")
 	}
 	p = strings.TrimSpace(p)
 	if p == "" {
-		return "", "", errors.New("path is required")
+		return "", "", "", errors.New("path is required")
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	rr, err := filepath.EvalSymlinks(absRoot)
+	rr, err = filepath.EvalSymlinks(absRoot)
 	if err != nil {
-		return "", "", fmt.Errorf("project root: %w", err)
+		return "", "", "", fmt.Errorf("project root: %w", err)
 	}
-	joined := filepath.Join(rr, p)
+	joined = filepath.Join(rr, p)
 	if filepath.IsAbs(p) {
 		joined = filepath.Clean(p)
 		// The pane may report the root through a symlink (/var vs /private/var).
@@ -216,7 +222,15 @@ func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err 
 	}
 	lexRel, ok := within(rr, joined)
 	if !ok {
-		return "", "", ErrOutsideRoot
+		return "", "", "", ErrOutsideRoot
+	}
+	return rr, joined, lexRel, nil
+}
+
+func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err error) {
+	rr, joined, lexRel, err := jailEntry(root, p)
+	if err != nil {
+		return "", "", err
 	}
 	// Windows: an alternate data stream (".env::$DATA"), a device name (NUL)
 	// or a trailing dot would reach a file the deny-list can't see.
@@ -235,7 +249,7 @@ func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err 
 		}
 		return "", "", fmt.Errorf("cannot resolve %s", lexRel)
 	}
-	rel, ok = within(rr, real)
+	rel, ok := within(rr, real)
 	if !ok {
 		return "", "", ErrOutsideRoot
 	}

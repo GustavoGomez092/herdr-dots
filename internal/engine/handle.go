@@ -105,7 +105,7 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 		if err := decode(raw, &a); err != nil {
 			return err
 		}
-		return e.ApplyPatchChecked(a.ID, a.SHA256)
+		return e.ApplyPatch(a.ID, a.SHA256) // an empty hash is refused
 	case ipc.CmdDiscardPatch:
 		var a ipc.CardArgs
 		if err := decode(raw, &a); err != nil {

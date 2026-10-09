@@ -45,11 +45,10 @@ func TestOnlyPendingCardsCanBeApplied(t *testing.T) {
 	if err := s.SetStatusNote(c.ID, StatusApplied, ""); !errors.Is(err, ErrTransition) {
 		t.Fatalf("dismissed → applied: %v", err)
 	}
+	// orphaned → applied is allowed for a patch card since the Phase 7 final
+	// fixes (a pane closing mid-apply): TestAnOrphanedPatchCardCanBeMarkedApplied
 	o, _ := s.Add(patchCard())
 	_, _ = s.OrphanPane("w1:p1")
-	if err := s.SetStatus(o.ID, StatusApplied); !errors.Is(err, ErrTransition) {
-		t.Fatalf("orphaned → applied: %v", err)
-	}
 	if err := s.SetStatus(o.ID, StatusDismissed); err != nil {
 		t.Fatalf("an orphaned patch can still be discarded: %v", err)
 	}
