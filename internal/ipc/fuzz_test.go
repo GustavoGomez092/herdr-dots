@@ -48,6 +48,7 @@ func FuzzIPCDecode(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data string) {
 		srv, cli := net.Pipe()
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel() // also on the t.Fatalf path
 		done := make(chan struct{})
 		go func() { serveConn(ctx, srv, fuzzHandler{}); close(done) }()
 		go func() { _, _ = io.Copy(io.Discard, cli) }() // read every reply

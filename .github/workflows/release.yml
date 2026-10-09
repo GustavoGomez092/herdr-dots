@@ -81,6 +81,12 @@ jobs:
         with:
           go-version-file: go.mod
       - run: sh scripts/fuzz.sh 10m
+      - name: keep crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
 
   candidate:
     needs: [meta, test, fuzz]

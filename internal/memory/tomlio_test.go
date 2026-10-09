@@ -132,3 +132,24 @@ func TestImportValidatesStatusSourceDotAndRef(t *testing.T) {
 		t.Fatalf("valid doc: %+v %v", got, err)
 	}
 }
+
+// An entry not stored yet (no ID) exports without a ref in every scope: a
+// "p:", "d:" or "g:" ref would not import back (fuzz crasher 8a748f204ecc8c6f).
+func TestExportTOMLWritesNoRefForAnUnsavedEntry(t *testing.T) {
+	for _, sc := range []Scope{ScopeProject, ScopeDot, ScopeGlobal} {
+		e := Entry{Scope: sc, Kind: KindNote, Text: "x", Status: StatusActive, Source: SourceUser}
+		if sc != ScopeProject {
+			e.Dot = "security"
+		}
+		data, err := ExportTOML([]Entry{e})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "ref =") {
+			t.Errorf("%s: an unsaved entry exported a ref:\n%s", sc, data)
+		}
+		if back, err := ImportTOML(data); err != nil || len(back) != 1 || back[0].ID != "" || back[0].Scope != sc {
+			t.Errorf("%s: re-import gave %+v, %v", sc, back, err)
+		}
+	}
+}

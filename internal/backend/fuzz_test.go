@@ -17,6 +17,9 @@ func hasControl(s string) bool {
 // seedReplies adds the recorded live replies (Phase 2 fixtures) to the corpus.
 func seedReplies(f *testing.F) {
 	files, _ := filepath.Glob("../memory/testdata/replies/*.txt")
+	if len(files) == 0 {
+		f.Log("no recorded replies under ../memory/testdata/replies: fuzzing from the inline seeds only")
+	}
 	for _, p := range files {
 		if b, err := os.ReadFile(p); err == nil {
 			f.Add(string(b))

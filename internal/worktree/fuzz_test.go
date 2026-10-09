@@ -34,6 +34,9 @@ func FuzzDiffHeaders(f *testing.F) {
 			if path == "" {
 				t.Fatalf("empty path in %q", diff)
 			}
+			// Only the new mode is checked: replacing a symlink with a regular
+			// file (old 120000, new 100644) or deleting one is allowed (ruling
+			// P7-R6; TestReplacingASymlinkWithARegularFileIsAllowedAndApplies).
 			if m.new == symlinkMode {
 				t.Fatalf("%s becomes a symlink in an accepted diff: %q", path, diff)
 			}

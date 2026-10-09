@@ -272,9 +272,10 @@ func RemoveCodexBlock(before string) (string, bool, error) {
 	eol := eolOf(before)
 	head, tail := strings.Join(lines[:start], ""), strings.Join(lines[end:], "")
 	if tail == "" && strings.TrimSpace(lines[start]) == BlockBegin {
-		if strings.HasSuffix(head, eol+eol) {
+		// The last line may end in "\n" even in a CRLF file (mixed endings).
+		if strings.HasSuffix(head, "\n"+eol) {
 			head = strings.TrimSuffix(head, eol) // the blank line the install added
-		} else if strings.HasSuffix(head, eol) && !strings.HasSuffix(head, "\n"+eol) {
+		} else if strings.HasSuffix(head, eol) {
 			head = strings.TrimSuffix(head, eol) // the line break the install added to an unterminated last line
 		}
 	}

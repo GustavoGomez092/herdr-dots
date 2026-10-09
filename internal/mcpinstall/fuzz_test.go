@@ -1,13 +1,15 @@
 package mcpinstall
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
 
 // FuzzCodexBlock edits arbitrary Codex config files the way setup-mcp edits
 // the developer's ~/.codex/config.toml: installing twice is a no-op, and
-// removing after an install leaves no marker line of ours. (The developer's
+// removing after an install leaves no marker line of ours (and, for a file
+// without the server, gives the file back byte for byte). (The developer's
 // own text may quote the marker inside a longer line, or even hold a whole
 // stray marker line outside our block; those lines are theirs and stay:
 // crashers a763424096dd21b2 and 816ef7fa033511c9. So a removal may keep the
@@ -41,6 +43,13 @@ func FuzzCodexBlock(f *testing.F) {
 		}
 		if markers(removed) > markers(before) {
 			t.Fatalf("remove after install left a marker line:\n%s", removed)
+		}
+		// A file with neither our block nor our table got the block appended,
+		// so removing it must give the developer's file back byte for byte.
+		old, _ := parseCodex(before) // Upsert parsed it already
+		hasBegin := slices.ContainsFunc(strings.Split(before, "\n"), func(l string) bool { return strings.TrimSpace(l) == BlockBegin })
+		if !hasBegin && !hasServer(old) && removed != before {
+			t.Fatalf("install then remove changed a file without the server:\n%q\n---\n%q", before, removed)
 		}
 	})
 }
