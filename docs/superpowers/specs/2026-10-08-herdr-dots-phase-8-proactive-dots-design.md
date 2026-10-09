@@ -5,7 +5,7 @@
 - **Proposed by drafter.** This phase isn't in the v1 roadmap. Rationale: OpenAI's Dots are defined by being *always on*. They do proactive, read-only research while you're away. v1 dots only react to finished turns. Without proactive behavior, Herdr Dots is a turn reviewer, not the always-on teammate the product promises. That makes this a requirement for feature complete.
 - **Date:** 2026-10-08
 - **Phase:** 8 of 10 (see the [roadmap](2026-10-08-herdr-dots-roadmap.md)). Phase 2, **dot memory (VITAL)**, comes first, and this phase depends on it heavily.
-- **Builds on:** v1 engine poll loop and `runDot`; Phase 2 memory (research results and open questions live there); Phase 4 cost tracking and dollar budgets (background work must be capped in dollars) and API web tools; Phase 6 platform helpers
+- **Builds on:** v1 engine poll loop and `runDot`; Phase 2 memory (research results and open questions live there); Phase 4 cost tracking and dollar budgets (background work must be capped in dollars) and API web tools; Phase 6 platform helpers; Phase 7's hook-free `worktree.Git` runner (reused for commit polling)
 - **Plan outline:** `docs/superpowers/plans/drafts/2026-10-08-herdr-dots-phase-8-proactive-dots-outline.md`
 - **The product is not done after this phase.** Ships as `0.8.0`.
 
