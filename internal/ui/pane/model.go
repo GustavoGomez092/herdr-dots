@@ -43,6 +43,8 @@ type Model struct {
 	area      area
 	roster    int
 	card      int
+	dotSlug   string // selected roster dot, re-found by slug on every snapshot
+	cardID    string // selected card, re-found by id on every snapshot
 	showFeed  bool
 	showHelp  bool
 	editing   bool
@@ -52,6 +54,7 @@ type Model struct {
 	askSlug   string
 	question  textinput.Model
 	width     int
+	height    int // 0 = unknown: render everything
 	status    string
 	seen      bool // a snapshot or disconnect has been received
 }
@@ -96,10 +99,39 @@ func sendable(c queue.Card) bool {
 	return (c.Status == queue.StatusPending || c.Status == queue.StatusAuto) && c.Mode != string(dots.ModeSuggest)
 }
 
+// clamp keeps the indexes in range and records which card and dot they point
+// at, so the selection can follow them when a snapshot reorders the lists.
 func (m *Model) clamp() {
 	p := m.pane()
 	m.card = max(0, min(m.card, len(p.Cards)-1))
 	m.roster = max(0, min(m.roster, len(p.Dots)-1))
+	m.cardID, m.dotSlug = "", ""
+	if m.card < len(p.Cards) {
+		m.cardID = p.Cards[m.card].ID
+	}
+	if m.roster < len(p.Dots) {
+		m.dotSlug = p.Dots[m.roster].Slug
+	}
+}
+
+// reselect moves the indexes to the previously selected card and dot in a new
+// snapshot (a new higher-severity card shifts indexes). If one is gone, the
+// index stays put and selects its neighbour.
+func (m *Model) reselect() {
+	p := m.pane()
+	for i, c := range p.Cards {
+		if m.cardID != "" && c.ID == m.cardID {
+			m.card = i
+			break
+		}
+	}
+	for i, d := range p.Dots {
+		if m.dotSlug != "" && d.Slug == m.dotSlug {
+			m.roster = i
+			break
+		}
+	}
+	m.clamp()
 }
 
 func (m *Model) move(d int) {
@@ -138,7 +170,7 @@ func (m Model) call(cmd string, args any) tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 		m.editor.SetWidth(max(20, msg.Width-2))
 		return m, nil
 	case SnapshotMsg:
@@ -146,7 +178,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status == offlineHint {
 			m.status = ""
 		}
-		m.clamp()
+		m.reselect()
 		return m, nil
 	case DisconnectedMsg:
 		m.connected, m.seen = false, true
@@ -236,6 +268,7 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "t":
 		m.target = nextTarget(m.snap, m.target)
 		m.roster, m.card = 0, 0
+		m.clamp()
 	case "enter":
 		c, ok := m.selectedCard()
 		if !ok {
@@ -325,14 +358,14 @@ func (m Model) View() string {
 	if agent == "" {
 		agent = "agent"
 	}
-	head := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
+	title := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
 	if ok {
-		head += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
+		title += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
 	}
 	if m.snap.PausedAll {
-		head += "  ⏸ all paused"
+		title += "  ⏸ all paused"
 	}
-	b.WriteString(style.Title.Render(head) + "\n")
+	b.WriteString(style.Title.Render(title) + "\n")
 	if p.Source == "scrollback" {
 		b.WriteString(style.Dim.Render("(reading scrollback: transcript unavailable)") + "\n")
 	}
@@ -350,8 +383,16 @@ func (m Model) View() string {
 		b.WriteString(line + "\n")
 	}
 	b.WriteString(rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w))
+	head := b.String() // header and roster: always on screen
+
+	// Body: cards, feed and help, scrolled so the selected card stays visible.
+	b.Reset()
+	selStart, selEnd := -1, -1
 	body := lipgloss.NewStyle().Width(max(10, w-2))
 	for i, c := range p.Cards {
+		if i == m.card {
+			selStart = lineCount(b.String())
+		}
 		sel := m.area == areaQueue && i == m.card
 		marker := " "
 		if sel {
@@ -382,12 +423,9 @@ func (m Model) View() string {
 				b.WriteString(style.Dim.Render("  ⏎ send  e edit  x dismiss") + "\n")
 			}
 		}
-	}
-	if m.editing {
-		b.WriteString(rule("EDIT", w) + m.editor.View() + "\n" + style.Dim.Render("ctrl+s save · esc cancel") + "\n")
-	}
-	if m.asking {
-		b.WriteString(rule("SUMMON "+m.askSlug, w) + m.question.View() + "\n")
+		if i == m.card {
+			selEnd = lineCount(b.String()) - 1
+		}
 	}
 	if m.showFeed {
 		b.WriteString(rule("FEED", w))
@@ -402,10 +440,54 @@ func (m Model) View() string {
 	if m.showHelp {
 		b.WriteString(rule("HELP", w) + helpText + "\n")
 	}
+	bodyText := b.String()
+
+	// Footer: open editors and the status line, always on screen.
+	b.Reset()
+	if m.editing {
+		b.WriteString(rule("EDIT", w) + m.editor.View() + "\n" + style.Dim.Render("ctrl+s save · esc cancel") + "\n")
+	}
+	if m.asking {
+		b.WriteString(rule("SUMMON "+m.askSlug, w) + m.question.View() + "\n")
+	}
 	footer := "j/k move · ⏎ send · a all · s summon · ? help"
 	if m.status != "" {
 		footer = m.status
 	}
 	b.WriteString(style.Dim.Render(footer))
-	return b.String()
+	foot := b.String()
+
+	if m.height > 0 {
+		avail := max(1, m.height-lineCount(head)-lineCount(foot))
+		bodyText = window(bodyText, avail, selStart, selEnd)
+	}
+	return head + bodyText + foot
+}
+
+// lineCount counts lines in s; a trailing line without "\n" counts too.
+func lineCount(s string) int {
+	n := strings.Count(s, "\n")
+	if s != "" && !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
+}
+
+// window returns at most n lines of the newline-terminated text, scrolled so
+// lines [selStart, selEnd] are visible; if they don't fit, their first line
+// (the card header) wins.
+func window(text string, n, selStart, selEnd int) string {
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) <= n {
+		return text
+	}
+	off := 0
+	if selStart >= 0 {
+		off = max(0, min(selEnd-n+1, selStart))
+	}
+	off = min(off, len(lines)-n)
+	return strings.Join(lines[off:off+n], "")
 }
