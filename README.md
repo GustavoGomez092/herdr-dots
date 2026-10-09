@@ -1,10 +1,10 @@
 # Herdr Dots
 
-> **Status: scaffold (v0.6.0).** Phases 1 (core loop), 2 (dot memory, VITAL), 3 (council), 4 (API and
-> Ollama backends, cost), 5 (Dots MCP server) and 6 (Windows support) are in. Windows support is
-> cross-compiled and unit-tested, but it has **not been run on Windows** by the developer yet (see
-> [Windows (beta)](#windows-beta)). The project is not done and not ready for general use; see the
-> [Roadmap](#roadmap) for what's missing.
+> **Status: 0.7.0, in development (scaffold, not done).** It is not finished and not ready for
+> general use. New in 0.7.0: write-capable dots can draft fixes in isolated git worktrees for you
+> to review and apply; this is built and unit-tested but has **not been run end to end inside
+> Herdr** by the developer yet. Windows support (0.6.0) has not been run on Windows yet. Phase 2
+> (dot memory) stays the VITAL part. See the [Roadmap](#roadmap) for what's missing.
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**: specialist agents (security,
 frontend, backend, copywriter, ...) that join a Claude Code or Codex session running in a Herdr
@@ -79,7 +79,7 @@ All actions also work from Herdr's action menu without any binding.
 4. Press `prefix+a` to open the Dots pane next to the agent.
 
 Dots pane keys: `⏎` send card · `a` send all · `e` edit · `x` dismiss · `s` summon · `m` cycle mode ·
-`p` pause · `d` detach · `r` reset an errored dot · `t` next agent · `f` feed · `C` council · `space` expand a council card · `?` help.
+`p` pause · `d` detach · `r` reset an errored dot · `t` next agent · `f` feed · `C` council · `space` expand a council card · `w` draft a fix (write-capable dots only) · `v` view a patch · `A` apply a patch · `?` help.
 
 ### Delivery modes
 
@@ -309,6 +309,59 @@ or the engine restarts. If `config.toml` can't be parsed when the agent starts t
 inject and memory off). The server logs to `mcp.log` in the plugin's state folder; it never prints
 anything but protocol messages.
 
+### Write-capable dots (drafts)
+
+A dot you trust can draft a fix instead of only describing it. It edits an isolated copy of your
+repository; nothing changes in your files until you read the diff and apply it. Drafts are built and
+unit-tested; a live Claude draft has **not been run** on the developer's machine yet, and on Windows
+drafts are compile-checked and unit-tested only.
+
+**Turn it on (both switches are off by default):**
+
+1. In the plugin's `config.toml`: `write_enabled = true`. A malformed `config.toml` turns it off
+   again until you fix the file. `max_concurrent_drafts` (default 2) limits drafts at once.
+2. In the dot's file, `dots/<slug>.toml` (there is no switch for this in the manage popup, on
+   purpose):
+
+   ```toml
+   [capabilities]
+   write                 = true
+   write_timeout_seconds = 600     # 60-3600
+   max_patch_bytes       = 200000  # larger patches are rejected
+   max_files             = 50      # patches touching more files are rejected
+   ```
+
+   `claude-cli` and the API backends can draft. `codex-cli` dots can't: `codex exec` always has a
+   shell, and write-capable dots never get one.
+
+**Draft.** In the Dots pane, select a card and press `w`, or select a write-capable dot in the
+roster and press `w` and type what to fix. The confirm shows the dot, backend, model, time limit,
+the tools it gets (no shell) and the full instruction; `y` starts it, `e` edits the instruction,
+`tab` picks another write-capable dot, `esc` cancels. An instruction over 4,000 characters is
+refused, not shortened, so what you confirmed is exactly what runs. While it runs the roster shows
+`✎ Security drafting… 1:12`. A draft counts against the dot's and the pane's budget like any call,
+and closing the agent's pane cancels its draft.
+
+**Review.** The result is a `PATCH` card with a diffstat and flags such as `[binary]`, `[mode]`
+or `[symlink]`.
+
+- `v` opens the patch viewer: the changed files on the left, the diff on the right, `n`/`p` for
+  the next and previous hunk.
+- `A` opens the viewer with *Apply N files to your working tree? Nothing is staged or committed.
+  (y/N)*; `y` applies. The confirm lists the files you haven't viewed yet, so you can see what you
+  are skipping. The apply request carries the hash of the patch you reviewed, and the engine
+  refuses it if the patch changed since. Apply runs only while the agent pane is idle and only into
+  the repository the patch was drafted for. If the files moved since the draft, it merges three
+  ways; files it can't merge keep conflict markers, and the card, the feed and a toast list them.
+  Your index, branches and commits never change: review and commit as usual.
+- `⏎` sends the agent a short note instead: *Patch ready: 3 files +42 −7. Review with
+  `git apply --stat "<path>"`, apply with `git apply "<path>"`.* The diff itself never goes into
+  the agent's context.
+- `x` discards the patch.
+
+Memory: an applied patch becomes a finding ("Applied patch: …") that keeps the dot from repeating
+the advice; a discarded one leaves only a ledger line.
+
 ## Files
 
 - Dots: `$(herdr plugin config-dir herdr-dots)/dots/<slug>.toml` (hand-editable)
@@ -355,7 +408,23 @@ Linux, but it has not been run on Windows yet.
   `openai-api`, OpenRouter and the model vendor it routes to for `openrouter`. `ollama` stays on your
   machine unless its `base_url` points elsewhere.
 - OpenAI requests use `store: false`; nothing is kept on OpenAI's side between tool turns.
-- Dots are read-only: claude dots get only `Read,Grep,Glob`; codex dots run with `--sandbox read-only`.
+- Dots are read-only unless you turn on writing twice (`write_enabled` and a dot's
+  `[capabilities] write`). Reviews, councils, MCP asks, summons and memory passes always stay
+  read-only: claude dots get only `Read,Grep,Glob`, codex dots run with `--sandbox read-only`, API
+  dots get read-only tools.
+- A draft runs in a git worktree outside your repository, made from a snapshot of your working
+  tree (uncommitted and untracked files included) through a private index. Your index, stash,
+  branches, `HEAD` and commits never change; the only things added to the repository are objects
+  and a private ref (`refs/herdr-dots/snapshots/<id>`) that goes away when the patch is resolved.
+  Git hooks and fsmonitor programs never run for it.
+- No dot ever gets a shell. A claude draft gets `Read, Grep, Glob, Edit, Write`, and only edits
+  inside its worktree are accepted; API drafts get `write_file`/`edit_file` jailed to the worktree.
+  Symlinks that point outside the repository are replaced while the dot works.
+- Patches are validated before you see them. They are rejected when they touch `.git`, reach
+  outside the repository, hit the deny list (secret-looking files such as `.env`), create or change
+  any symlink, or go over the size or file caps. (Deleting a symlink, or replacing it with a regular
+  file, is allowed.) Every draft needs two approvals: one to start, one (with the diff on screen)
+  to apply. Applying touches the working tree only; it never stages or commits.
 - Hooks are disabled for dot runs, and Herdr variables are stripped, so dots never affect your panes.
 - Queue mode (you approve) is the default. Inject mode is opt-in per dot and can be turned off for
   all dots with `inject_enabled = false` in `config.toml`.
@@ -378,6 +447,8 @@ Linux, but it has not been run on Windows yet.
   second save (popup) when you add it. A card that quotes a secret is never remembered.
 - Forgetting is real: `forget` removes the entry from disk, `--scrub` also removes its ledger lines,
   and `purge` deletes a project's whole memory.
+  Deleting a dot's memory in all projects (the manage popup) also removes the ledger lines its
+  cards left and the project conventions it proposed that you never approved.
 - Memory text is stripped of control characters (terminal escape sequences) when it is written and
   when it is read, like the feed.
 
@@ -406,6 +477,12 @@ Linux, but it has not been run on Windows yet.
   are reachable through OpenRouter).
 - A council in progress doesn't survive an engine restart.
 - Long council deliveries were verified live with Claude Code only; Codex is untested.
+- Write-capable dots (0.7.0) are unit-tested, with real git, on macOS only; a real draft inside
+  Herdr, Ubuntu's git and Git for Windows are still to be tried (checklist in
+  `docs/superpowers/notes/2026-10-08-phase-7-verification.md`, "User gates"). A live Claude draft
+  has not been run on this machine, and on Windows drafts are compile-checked and unit-tested only.
+- `codex-cli` dots can't draft (Codex has no verified way to run without a shell).
+- Drafts can't run tests or builds: write-capable dots get no shell.
 
 ## Roadmap
 
@@ -417,6 +494,7 @@ Linux, but it has not been run on Windows yet.
 | 4 | API and Ollama backends (Anthropic, OpenAI, OpenRouter, Ollama), key storage, USD cost and dollar budgets (in this scaffold since 0.4.0) |
 | 5 | Dots MCP server so the main agent can consult dots itself: ask a dot, convene a council, read the queue and memory, propose memory (in this scaffold since 0.5.0) |
 | 6 | Windows support: named pipes, Job Objects, ACL privacy, `.cmd` shims (in this scaffold since 0.6.0; built and unit-tested, **not run on Windows yet**) |
-| 7–10 | Write-capable dots, proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
+| 7 | Write-capable dots (0.7.0): drafts in isolated git worktrees, patch cards, a diff viewer, apply to the working tree only. Built and unit-tested; **not run end to end in Herdr yet** |
+| 8–10 | Proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
 
 See the draft roadmap for Phases 2–10.
