@@ -444,8 +444,18 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		fail(ErrPaneClosed)
 		return
 	}
+	e.hook("draft-carded")
+	if _, err := e.d.Patches.Update(id, func(m *patchstore.Meta) { m.Card = c.ID }); err != nil {
+		// Take the card back (under dmu, like any dismiss) and let the
+		// cleanups delete the patch, its record and its ref: a card its
+		// record doesn't name can't be trusted to apply or discard cleanly.
+		e.dmu.Lock()
+		_ = e.d.Queue.SetStatus(c.ID, queue.StatusDismissed)
+		e.dmu.Unlock()
+		fail(fmt.Errorf("record the patch card: %w", err))
+		return
+	}
 	keepRef, keepRecord = true, true
-	_, _ = e.d.Patches.Update(id, func(m *patchstore.Meta) { m.Card = c.ID })
 	e.feed(att.PaneID, d.Slug, turn, state.OutcomeDrafted, p.Stat)
 	e.reportPending(att.PaneID)
 	e.broadcast()
