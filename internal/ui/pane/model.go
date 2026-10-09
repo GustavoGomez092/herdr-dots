@@ -375,15 +375,16 @@ func (m Model) View() string {
 	if len(p.Dots) == 0 {
 		b.WriteString(style.Dim.Render("No dots here yet. Press prefix+d to add some.") + "\n")
 	}
+	top := b.String() // title and banners: always on screen
+	roster := make([]string, 0, len(p.Dots))
 	for i, d := range p.Dots {
 		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, d.Status)
 		if m.area == areaRoster && i == m.roster {
 			line = style.Selected.Render(line)
 		}
-		b.WriteString(line + "\n")
+		roster = append(roster, line+"\n")
 	}
-	b.WriteString(rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w))
-	head := b.String() // header and roster: always on screen
+	queueRule := rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w)
 
 	// Body: cards, feed and help, scrolled so the selected card stays visible.
 	b.Reset()
@@ -458,10 +459,39 @@ func (m Model) View() string {
 	foot := b.String()
 
 	if m.height > 0 {
+		// Cut the roster first so the title and the footer stay on screen,
+		// keeping one line for the body.
+		sel := -1
+		if m.area == areaRoster {
+			sel = m.roster
+		}
+		roster = fitRoster(roster, m.height-lineCount(top)-lineCount(queueRule)-lineCount(foot)-1, sel)
+	}
+	head := top + strings.Join(roster, "") + queueRule
+	if m.height > 0 {
 		avail := max(1, m.height-lineCount(head)-lineCount(foot))
 		bodyText = window(bodyText, avail, selStart, selEnd)
 	}
 	return head + bodyText + foot
+}
+
+// fitRoster returns at most n roster lines. When some are cut, the last line
+// says how many ("+N more") and the selected dot (sel, -1 for none) stays
+// visible.
+func fitRoster(lines []string, n, sel int) []string {
+	if len(lines) <= n {
+		return lines
+	}
+	if n <= 0 {
+		return nil
+	}
+	keep := n - 1
+	off := 0
+	if sel >= keep {
+		off = min(sel-keep+1, len(lines)-keep)
+	}
+	out := append([]string(nil), lines[off:off+keep]...)
+	return append(out, style.Dim.Render(fmt.Sprintf("  +%d more", len(lines)-keep))+"\n")
 }
 
 // lineCount counts lines in s; a trailing line without "\n" counts too.
