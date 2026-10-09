@@ -69,9 +69,7 @@ func TestOrdinaryCaseVariantIsNoSuchFile(t *testing.T) {
 func TestSymlinkTargetSpellingIsExactToo(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "id_rsa"), "PRIVATE KEY")
-	if err := os.Symlink("id_rſa", filepath.Join(root, "link.txt")); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, "id_rſa", filepath.Join(root, "link.txt"))
 	if _, _, err := ResolveInRoot(root, "link.txt", DefaultDeny); err == nil {
 		t.Fatal("a link spelled with a folded name must not resolve")
 	}
@@ -93,9 +91,7 @@ func TestListFiltersStaleIndexEntriesUnderSymlinkedParents(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustWrite(t, filepath.Join(outside, "a.go"), "x")
-	if err := os.Symlink(outside, filepath.Join(root, "real")); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, outside, filepath.Join(root, "real"))
 	out, err := run(t, RepoTools(root, DefaultLimits()), "list_files", map[string]any{})
 	if err != nil || strings.Contains(out, "real/a.go") {
 		t.Fatalf("list leaked via a stale entry:\n%s\n%v", out, err)
@@ -108,7 +104,7 @@ func TestUnavailableFallsBackWhenHomeIsUnsetAndMatchesCaseVariants(t *testing.T)
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	variant := filepath.Join(parent, "hOME")
 	if _, err := os.Stat(variant); err == nil {
 		if !Unavailable(variant) {
@@ -117,7 +113,7 @@ func TestUnavailableFallsBackWhenHomeIsUnsetAndMatchesCaseVariants(t *testing.T)
 	} else {
 		t.Log("case-sensitive filesystem: variant check skipped")
 	}
-	t.Setenv("HOME", "")
+	setHome(t, "")
 	if h := homeDir(); h == "" {
 		t.Error("homeDir must fall back to the user database when HOME is unset")
 	}
@@ -125,7 +121,7 @@ func TestUnavailableFallsBackWhenHomeIsUnsetAndMatchesCaseVariants(t *testing.T)
 
 func TestHomeAnchoredGlobsApplyWhenCwdIsBelowHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	mustWrite(t, filepath.Join(home, ".config", "gh", "hosts.yml"), "oauth_token: SECRET")
 	mustWrite(t, filepath.Join(home, ".config", "ok.txt"), "fine")
 	mustWrite(t, filepath.Join(home, ".docker", "config.json"), "SECRET")

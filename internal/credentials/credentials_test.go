@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"herdr-dots/internal/platform"
+	"herdr-dots/internal/platform/platformtest"
 )
 
 func envOf(m map[string]string) func(string) string {
@@ -22,10 +25,7 @@ func TestSetWritesOwnerOnlyAndLookupReadsIt(t *testing.T) {
 	if err := f.Set("anthropic", "  sk-ant-api03-abcdefghijklmnop  "); err != nil {
 		t.Fatal(err)
 	}
-	st, err := os.Stat(f.Path)
-	if err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v err %v, want 0600", st.Mode().Perm(), err)
-	}
+	platformtest.AssertPrivateFile(t, f.Path)
 	key, from, err := f.Lookup("anthropic")
 	if err != nil || key != "sk-ant-api03-abcdefghijklmnop" || from != "file" {
 		t.Fatalf("Lookup = %q %q %v", key, from, err)
@@ -64,11 +64,16 @@ func TestMissingKeyHasAHint(t *testing.T) {
 
 func TestPermissiveFileIsRefusedWithoutReadingIt(t *testing.T) {
 	f := credFile(t)
-	if err := os.WriteFile(f.Path, []byte("[anthropic]\napi_key = \"sk-ant-api03-abcdefghijklmnop\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(f.Path, []byte("[anthropic]\napi_key = \"sk-ant-api03-abcdefghijklmnop\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.Lookup("anthropic"); !errors.Is(err, ErrInsecurePerms) {
-		t.Fatalf("Lookup err = %v, want ErrInsecurePerms", err)
+	readableByOthers(t, f.Path) // 0644 on Unix; an Everyone ACE on Windows
+	_, _, err := f.Lookup("anthropic")
+	if !errors.Is(err, ErrInsecurePerms) || !strings.Contains(err.Error(), platform.FixPrivateHint(f.Path)) {
+		t.Fatalf("Lookup err = %v, want ErrInsecurePerms with the fix", err)
+	}
+	if strings.Contains(err.Error(), "sk-ant") {
+		t.Fatal("the error quoted the key")
 	}
 	if err := f.Set("openai", "sk-xxxxxxxxxxxxxxxxxxxx"); !errors.Is(err, ErrInsecurePerms) {
 		t.Fatalf("Set err = %v, want ErrInsecurePerms", err)
@@ -84,9 +89,7 @@ func TestSymlinkedCredentialsFileIsRefused(t *testing.T) {
 	if err := os.WriteFile(real, []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(real, f.Path); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, real, f.Path)
 	if _, _, err := f.Lookup("anthropic"); err == nil || !strings.Contains(err.Error(), "regular file") {
 		t.Fatalf("err = %v", err)
 	}

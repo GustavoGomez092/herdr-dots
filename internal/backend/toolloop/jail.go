@@ -10,10 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"golang.org/x/text/cases"
+
+	"herdr-dots/internal/platform"
 )
 
 var (
@@ -191,7 +192,9 @@ func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err 
 	if !ok {
 		return "", "", ErrOutsideRoot
 	}
-	if Denied(lexRel, deny) {
+	// Windows: an alternate data stream (".env::$DATA"), a device name (NUL)
+	// or a trailing dot would reach a file the deny-list can't see.
+	if platform.ReservedPathName(lexRel) || Denied(lexRel, deny) {
 		return "", "", ErrDenied
 	}
 	real, err := filepath.EvalSymlinks(joined)
@@ -277,13 +280,14 @@ func walkInside(rr, rel string) error {
 }
 
 // openVerified opens abs (a path ResolveInRoot returned) for reading and closes
-// the check-to-open race: O_NOFOLLOW stops a symlink swapped in for the last
-// component, and after the open the path must still be its own fully resolved
-// form (so no parent was swapped for a symlink) and name the very file opened.
-// O_NONBLOCK keeps a FIFO swapped in from hanging the run; callers must still
-// require a regular file or directory.
+// the check-to-open race: platform.OpenNoFollow stops a symlink swapped in for
+// the last component (O_NOFOLLOW on Unix; on Windows an Lstat that refuses
+// symlinks and reparse points), and after the open the path must still be its
+// own fully resolved form (so no parent was swapped for a symlink) and name
+// the very file opened. On Unix O_NONBLOCK keeps a FIFO swapped in from
+// hanging the run; callers must still require a regular file or directory.
 func openVerified(abs string) (*os.File, error) {
-	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := platform.OpenNoFollow(abs)
 	if err != nil {
 		return nil, err
 	}

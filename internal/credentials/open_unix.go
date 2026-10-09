@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build unix
 
 package credentials
 
@@ -27,10 +27,4 @@ func openChecked(path string) (*os.File, fs.FileInfo, error) {
 		return nil, nil, err
 	}
 	return fd, st, nil
-}
-
-// ownedByMe reports whether st belongs to the current user.
-func ownedByMe(st fs.FileInfo) bool {
-	sys, ok := st.Sys().(*syscall.Stat_t)
-	return !ok || int(sys.Uid) == os.Getuid()
 }

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"syscall"
 	"time"
 
+	"herdr-dots/internal/platform"
 	"herdr-dots/internal/pricing"
 	"herdr-dots/internal/textutil"
 )
@@ -81,7 +81,7 @@ func (u unreachable) Unwrap() error        { return u.error }
 // connection refused or a timeout. Validation errors (bad key, unknown
 // model) are not.
 func Unreachable(err error) bool {
-	return errors.Is(err, ErrUnreachable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, syscall.ECONNREFUSED)
+	return errors.Is(err, ErrUnreachable) || errors.Is(err, context.DeadlineExceeded) || platform.ConnRefused(err)
 }
 
 // ErrRefused marks a provider safety refusal. It is a run error: it reaches

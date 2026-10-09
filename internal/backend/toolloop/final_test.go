@@ -19,10 +19,8 @@ func TestRootReachingHomeThroughASuffixIsUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	// data/Users is the same directory as tmp/Users (a firmlink stand-in).
-	if err := os.Symlink(filepath.Join(tmp, "Users"), filepath.Join(data, "Users")); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
+	symlinkOrSkip(t, filepath.Join(tmp, "Users"), filepath.Join(data, "Users"))
+	setHome(t, home)
 	if !Unavailable(data) {
 		t.Fatal("a root that reaches home via data/Users/u must be unavailable")
 	}
