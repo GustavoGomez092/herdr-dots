@@ -23,6 +23,13 @@ const (
 // OutcomeCouncil: a council card was created (the entry's Dot is "council").
 const OutcomeCouncil = "council"
 
+// Draft outcomes (Phase 7): a patch card was created (detail: the diffstat),
+// and a patch was applied to the working tree (detail: conflicts, if any).
+const (
+	OutcomeDrafted = "drafted"
+	OutcomeApplied = "applied"
+)
+
 // OutcomeAsked: the main agent asked this dot (or a council, Dot "council")
 // through the Dots MCP server (Phase 5). Detail starts with the severity, or
 // "pass", followed by " · " and the run's cost detail when there is one.

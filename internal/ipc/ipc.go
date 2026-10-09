@@ -56,6 +56,24 @@ type CouncilArgs struct {
 	Request  string   `json:"request,omitempty"` // council_preflight: the popup's id, echoed in Preflight.Request
 }
 
+// Draft commands (Phase 7). Only the Dots pane and the diff viewer send
+// them, after the user confirmed; they are never queries, so the MCP server
+// can't reach them.
+const (
+	CmdDraft        = "draft"         // DraftArgs: start a draft (gate 1 was confirmed)
+	CmdApplyPatch   = "apply_patch"   // CardArgs: apply a patch card to the working tree (gate 2 was confirmed)
+	CmdDiscardPatch = "discard_patch" // CardArgs: delete a patch card's patch, metadata and snapshot ref
+)
+
+// DraftArgs starts a draft by Slug on PaneID. Instruction "" with a
+// FromCardID uses that card's body.
+type DraftArgs struct {
+	PaneID      string `json:"pane_id"`
+	Slug        string `json:"slug"`
+	Instruction string `json:"instruction,omitempty"`
+	FromCardID  string `json:"from_card_id,omitempty"`
+}
+
 type AttachArgs struct {
 	PaneID string   `json:"pane_id"`
 	Slugs  []string `json:"slugs"`

@@ -10,11 +10,20 @@ import (
 // redacted replaces ledger text that looked like it held a secret.
 const redacted = "[possible secret removed]"
 
+// Patch card outcomes (Phase 7).
+const (
+	OutcomeApplied   = "applied"   // applied to the working tree: a finding "Applied patch: …"
+	OutcomeDiscarded = "discarded" // thrown away: a ledger line only, no entry
+)
+
 // RecordOutcome appends a card outcome to the project's ledger and derives a
 // dot-scope entry with no model call (spec §6.4): sent → finding from the
 // card's first sentence, edited → finding from the edited text, dismissed →
-// dismissed. Cards that look like they quote a secret leave a redacted ledger
-// line and no entry. Card text came from a model, so it is sanitized first.
+// dismissed, applied (a patch card) → finding "Applied patch: <first
+// sentence>", discarded (a patch card) → ledger line only: throwing a draft
+// away says nothing about whether the advice was right. Cards that look like
+// they quote a secret leave a redacted ledger line and no entry. Card text
+// came from a model, so it is sanitized first.
 func (s *Store) RecordOutcome(p string, o Outcome) error {
 	if !ValidProjectID(p) {
 		return fmt.Errorf("%w: project id %q", ErrInvalid, p)
@@ -33,6 +42,13 @@ func (s *Store) RecordOutcome(p string, o Outcome) error {
 		kind, text = KindFinding, FirstSentence(o.Edited)
 	case OutcomeDismissed:
 		kind = KindDismissed
+	case OutcomeApplied:
+		kind = KindFinding
+		if text != "" {
+			text = clipRunes("Applied patch: "+text, 300)
+		}
+	case OutcomeDiscarded:
+		text = "" // ledger only
 	default:
 		return fmt.Errorf("%w: outcome %q", ErrInvalid, o.Kind)
 	}

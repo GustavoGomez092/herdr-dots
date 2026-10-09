@@ -56,6 +56,11 @@ func (p Paths) FeedFile() string        { return filepath.Join(p.SessionDir, "fe
 func (p Paths) UsageFile() string       { return filepath.Join(p.SessionDir, "usage.json") }
 func (p Paths) DotsPanesFile() string   { return filepath.Join(p.SessionDir, "dotspanes.json") }
 
+// WorktreesDir holds drafts' transient worktrees (outside every repository);
+// PatchesDir holds drafted patches and their metadata.
+func (p Paths) WorktreesDir() string { return filepath.Join(p.SessionDir, "worktrees") }
+func (p Paths) PatchesDir() string   { return filepath.Join(p.SessionDir, "patches") }
+
 func (p Paths) Ensure() error {
 	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir, p.MemoryDir()} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
