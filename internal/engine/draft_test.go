@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,14 +102,27 @@ func gitTestEnv(t *testing.T) []string {
 
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	out, err := gitTry(t, dir, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// gitTry is gitT for a wait condition that polls while the engine runs git
+// in the same repository: `git worktree list` fails while a concurrent
+// `git worktree prune` removes .git/worktrees ("Invalid path"), which only
+// means "not yet".
+func gitTry(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false",
 		"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "init.defaultBranch=main"}, args...)...)
 	cmd.Env = gitTestEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
+		return "", fmt.Errorf("git %v: %v\n%s", args, err, out)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
 func writeT(t *testing.T, path, body string) {
@@ -576,8 +590,12 @@ func TestEngineStartCleansUpAnInterruptedDraft(t *testing.T) {
 		_, derr := os.Stat(dir)
 		return errors.Is(merr, patchstore.ErrNotFound) && os.IsNotExist(derr)
 	})
+	// The record and directory go first; the ref drop and `git worktree
+	// prune` follow, so git is polled without failing on a list that races
+	// the prune.
 	eventually(t, "ref and worktree metadata gone", func() bool {
-		return r.refs(t) == "" && strings.Count(gitT(t, r.repo, "worktree", "list", "--porcelain"), "worktree ") == 1
+		list, err := gitTry(t, r.repo, "worktree", "list", "--porcelain")
+		return err == nil && r.refs(t) == "" && strings.Count(list, "worktree ") == 1
 	})
 }
 

@@ -62,10 +62,17 @@ func TestAskCouncilReturnsTheDigestWithoutACard(t *testing.T) {
 func TestAskCouncilCountsAsOneAsk(t *testing.T) {
 	r, cb := councilRig(t, func(c *config.Config) { c.MCP.MaxAsksPerTurn = 1 }, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
 	seat(t, r, "security", "frontend")
+	// The seated turn is finished: the engine sees it before the agent asks
+	// in its next turn. Left to Attach's catch-up, it could be seen after the
+	// first ask and start the per-turn count over (the flake seen under load).
+	r.e.processPaneIfIdle(pane)
 	if _, err := askCouncilNow(t, r, "first?"); err != nil {
 		t.Fatal(err)
 	}
 	councilDone(t, r)
+	// Attach's catch-up pass, late on a loaded machine: it finds no new turn,
+	// so the turn the first ask counted in goes on.
+	r.e.processPaneIfIdle(pane)
 	n := cb.total()
 	if _, err := askCouncilNow(t, r, "second?"); !errors.Is(err, ErrAskLimit) {
 		t.Fatalf("got %v", err)
