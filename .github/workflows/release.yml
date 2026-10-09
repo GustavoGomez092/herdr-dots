@@ -1,12 +1,17 @@
 # Herdr Dots release workflow. Written in Phase 10 and never run by it: the
 # developer starts it by pushing a tag (a user gate).
 #
-#   v1.2.3-rc.N  candidate: tests on three OSes, a 10-minute fuzz pass per
-#                target, the six archives built with GoReleaser (nothing
-#                published), and a pull request that commits
-#                release/SHA256SUMS and release/ASSET_ENV for exactly those
-#                archives. internal/version/VERSION must already say 1.2.3.
-#   v1.2.3       publish, tagged on the merged checksum commit: rebuilds the
+#   The tag must equal v<VERSION> (internal/version/VERSION), checked by
+#   scripts/release-kind.sh. A VERSION ending in -rc.N makes the tag a
+#   candidate, a VERSION without a suffix makes it a final publish; any
+#   other tag fails.
+#
+#   v1.0.0-rc.1  candidate (VERSION 1.0.0-rc.1): tests on three OSes, a
+#                10-minute fuzz pass per target, the six archives built with
+#                GoReleaser (nothing published), and a pull request that
+#                commits release/SHA256SUMS and release/ASSET_ENV for exactly
+#                those archives.
+#   v1.0.0       publish (VERSION 1.0.0), tagged on the merged checksum commit: rebuilds the
 #                archives from the same source and settings, refuses to go on
 #                unless they match the committed checksums byte for byte,
 #                signs them with cosign (keyless, GitHub OIDC) and creates a
@@ -39,12 +44,12 @@ jobs:
         shell: bash
         run: |
           version=$(tr -d ' \r\n' < internal/version/VERSION)
-          tag=${GITHUB_REF_NAME#v}
-          case "$tag" in
-            "$version"-rc.*) echo "candidate=true" >> "$GITHUB_OUTPUT" ;;
-            "$version") echo "candidate=false" >> "$GITHUB_OUTPUT" ;;
-            *) echo "tag v$tag does not match VERSION $version"; exit 1 ;;
-          esac
+          kind=$(sh scripts/release-kind.sh "$version" "$GITHUB_REF_NAME")
+          if [ "$kind" = candidate ]; then
+            echo "candidate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "candidate=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   test:
@@ -110,7 +115,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp dist/SHA256SUMS release/SHA256SUMS
-          branch="release/v${{ needs.meta.outputs.version }}-checksums"
+          # The run id keeps a rerun from colliding with an already-pushed branch.
+          branch="release/v${{ needs.meta.outputs.version }}-checksums-${{ github.run_id }}-${{ github.run_attempt }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
