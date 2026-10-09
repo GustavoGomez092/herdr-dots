@@ -36,6 +36,9 @@ type DotState struct {
 	MemoryEntries int  `json:"memory_entries"` // this dot's entries for the pane's project
 	Learning      bool `json:"learning"`       // a memory pass is running
 
+	Next       string `json:"next,omitempty"`       // proactive hint: "research in 6m", "scheduled Mon 09:00", "paused · daily budget"
+	Background string `json:"background,omitempty"` // a background run in flight: "research", "scheduled" or "commit"
+
 	CostUSD     float64 `json:"cost_usd,omitempty"`
 	CostUnknown bool    `json:"cost_unknown,omitempty"` // some runs had no price
 	BudgetUSD   float64 `json:"budget_usd,omitempty"`   // 0 = off
@@ -63,6 +66,8 @@ type Pane struct {
 	Council          *CouncilState      `json:"council,omitempty"`           // a council in progress
 	CouncilPreflight *council.Preflight `json:"council_preflight,omitempty"` // the last preflight, for the popup
 
+	Away *AwayState `json:"away,omitempty"` // research results waiting for the developer to come back
+
 	Drafts []DraftState `json:"drafts,omitempty"` // drafts running for this pane (Phase 7)
 }
 
@@ -79,6 +84,13 @@ type DraftState struct {
 	Slug      string    `json:"slug"`
 	Phase     string    `json:"phase"`
 	StartedAt time.Time `json:"started_at"`
+}
+
+// AwayState is research collected while the developer was away, not yet a
+// digest card (it becomes one on the next turn, focus or critical result).
+type AwayState struct {
+	Since   time.Time `json:"since"`   // the idle period's start
+	Pending int       `json:"pending"` // relevant research results collected
 }
 
 // Council phases (CouncilState.Phase).
@@ -123,6 +135,12 @@ type Snapshot struct {
 	InjectEnabled bool         `json:"inject_enabled"`
 	PausedAll     bool         `json:"paused_all"`
 	WriteEnabled  bool         `json:"write_enabled"` // config write_enabled (Phase 7)
+
+	// Background work today, every session (Phase 8; the pane header shows it
+	// once TodayRuns > 0).
+	TodayUSD       float64 `json:"today_usd"`
+	TodayRuns      int     `json:"today_runs"`
+	DailyBudgetUSD float64 `json:"daily_budget_usd"`
 }
 
 func (s Snapshot) Pane(id string) (Pane, bool) {

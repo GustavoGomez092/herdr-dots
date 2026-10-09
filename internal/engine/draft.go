@@ -166,21 +166,12 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 
 // draftBudgetLocked refuses a draft when the dot's or the pane's budget is
 // spent: a draft counts as one call (and its cost) like any run, and, as for
-// MCP asks (askBlockedLocked), asks and drafts in flight on the pane count as
-// calls already made. Caller holds e.mu (e.mu -> stores).
+// MCP asks (askBlockedLocked), asks, drafts and background runs (Phase 8,
+// ruling P8-R2) in flight on the pane count as calls already made. Caller
+// holds e.mu (e.mu -> stores).
 func (e *Engine) draftBudgetLocked(paneID string, d dots.Dot) error {
 	cfg := e.config()
-	inFlight := 0
-	for k := range e.asking {
-		if k.pane == paneID {
-			inFlight++
-		}
-	}
-	for _, dr := range e.drafts {
-		if dr.pane == paneID && !dr.abandoned {
-			inFlight++
-		}
-	}
+	inFlight := e.inFlightLocked(paneID, key{})
 	if e.d.Usage.Calls(paneID, d.Slug) >= d.Budget.MaxCallsPerSession || OverUSD(e.d.Usage.Cost(paneID, d.Slug), d.Budget.MaxUSDPerSession) ||
 		e.d.Usage.PaneCalls(paneID)+inFlight >= cfg.SessionBudgetCalls || OverUSD(e.d.Usage.PaneCost(paneID), cfg.SessionBudgetUSD) {
 		return fmt.Errorf("%w; resets on a new agent session or press r", ErrBudget)

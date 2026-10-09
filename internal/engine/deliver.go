@@ -171,6 +171,8 @@ func (e *Engine) poll() {
 		e.checkSession(a, p)
 		e.flushAuto(a.PaneID)
 	}
+	e.todayTick()
+	e.inboxTick()
 }
 
 func (e *Engine) dropPane(paneID string) {

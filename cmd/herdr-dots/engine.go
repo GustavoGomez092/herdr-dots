@@ -175,6 +175,11 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
 	if err != nil {
 		return nil, err
 	}
+	daily, err := state.OpenDaily(p.DailyFile()) // shared by every Herdr session
+	if err != nil {
+		return nil, err
+	}
+	daily.Logf = logf
 	home, _ := os.UserHomeDir()
 	backends := newBackendSet(p, configLoaderLogged(p.ConfigFile(), logf), logf)
 	return engine.New(engine.Deps{
@@ -198,6 +203,9 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
 
 		Memory:         memoryStoreFor(p, cfg, logf),
 		ResolveProject: resolveProject,
+
+		Daily: daily,                          // proactive dots: daily runs and dollar budget
+		Inbox: queue.OpenInbox(p.InboxFile()), // scheduled results for unattached projects
 
 		Patches:      patchstore.Open(p.PatchesDir()),
 		WorktreesDir: p.WorktreesDir(),
@@ -281,5 +289,5 @@ func watchHerdr(ctx context.Context, cancel context.CancelFunc, hc herdr.Client,
 // start. Inject comes back when the file is fixed (config.toml reloads at
 // runtime), but no memory store is opened, so memory needs a restart.
 func startupConfigNote(err error) string {
-	return fmt.Sprintf("config: %v (using defaults with inject disabled until the file is fixed; memory stays off until the engine restarts)", err)
+	return fmt.Sprintf("config: %v (using defaults with inject and proactive work disabled until the file is fixed; memory stays off until the engine restarts)", err)
 }

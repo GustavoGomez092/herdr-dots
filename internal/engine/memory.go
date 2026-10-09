@@ -197,7 +197,7 @@ func (e *Engine) touchMemory(mr memRun) {
 // per-reply cap (3 for a review, 5 for a memory pass) is enforced by
 // backend.ParseReply and backend.ParseMemoryOps; it is enforced again here so
 // no backend can get more than its cap into the store from one reply.
-func (e *Engine) applyMemoryOps(paneID string, d dots.Dot, turn int, mr memRun, ops []backend.MemoryOp, att state.Attachment, memoryPass bool) int {
+func (e *Engine) applyMemoryOps(paneID string, d dots.Dot, turn int, mr memRun, ops []backend.MemoryOp, att state.Attachment, memoryPass bool, opts ...memory.ApplyOptions) int {
 	if mr.project == "" || !mr.learn || len(ops) == 0 || !e.memEnabled() {
 		return 0
 	}
@@ -213,7 +213,7 @@ func (e *Engine) applyMemoryOps(paneID string, d dots.Dot, turn int, mr memRun, 
 	var res memory.ApplyResult
 	err := retryLocked(func() error {
 		var err error
-		res, err = e.d.Memory.Apply(mr.project, d.Slug, ops, ev)
+		res, err = e.d.Memory.Apply(mr.project, d.Slug, ops, ev, opts...)
 		return err
 	})
 	for _, why := range res.Rejected {
