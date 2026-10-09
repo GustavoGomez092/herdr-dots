@@ -28,6 +28,7 @@ var commands = map[string]handler{
 	"setup-mcp":  runSetupMCP,
 	"memory":     runMemory,
 	"keys":       runKeys,
+	"mcp":        runMCP,
 }
 
 func usage() error {

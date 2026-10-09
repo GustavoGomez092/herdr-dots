@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,6 +63,7 @@ func ensureEngine(p paths.Paths) error {
 	}
 	defer logf.Close()
 	cmd := exec.Command(exe, "engine")
+	cmd.Env = engineEnv(os.Environ(), p)
 	// Don't inherit the spawner's cwd: dots with an empty attachment cwd would read it.
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		cmd.Dir = home
@@ -75,6 +77,23 @@ func ensureEngine(p paths.Paths) error {
 	}
 	_ = cmd.Process.Release()
 	return waitForSocket(p.EngineSock(), 5*time.Second)
+}
+
+// engineEnv is a detached engine's environment: the caller's, with the
+// plugin dirs and Herdr socket taken from p. The MCP server runs under the
+// agent CLI, whose environment has no HERDR_PLUGIN_* variables, and the
+// engine reads them (paths.FromEnv).
+func engineEnv(env []string, p paths.Paths) []string {
+	out := make([]string, 0, len(env)+3)
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		switch k {
+		case "HERDR_PLUGIN_CONFIG_DIR", "HERDR_PLUGIN_STATE_DIR", "HERDR_SOCKET_PATH":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "HERDR_PLUGIN_CONFIG_DIR="+p.ConfigDir, "HERDR_PLUGIN_STATE_DIR="+p.StateDir, "HERDR_SOCKET_PATH="+p.SocketPath)
 }
 
 func waitForSocket(path string, d time.Duration) error {

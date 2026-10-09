@@ -48,3 +48,14 @@ failed with "missing go.sum entry"; a `go mod tidy` in the temp module fixed it.
 - V2 (Codex `env_vars` forwarding): not live-verified (codex not installed).
 - V3 (Codex `-c mcp_servers.<name>.enabled=false` stops the server): not live-verified (codex not installed).
   The design does not depend on it (Plan decision 17).
+
+## Smoke test: `herdr-dots mcp` over real stdio (Task 10, 2026-10-09)
+
+Built binary, temp config/state dirs, `HERDR_PANE_ID`/`HERDR_SOCKET_PATH` unset. Stdout, exactly two lines:
+
+```
+{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"tools":{"listChanged":true}},"protocolVersion":"2025-11-25","serverInfo":{"name":"herdr-dots","version":"0.4.0"}}}
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"herdr-dots: not running inside a Herdr pane; dots are unavailable here."}],"isError":true}}
+```
+
+`mcp.log`: `started outside a Herdr pane (...) every tool refuses`, `list_dots refused: not inside a Herdr pane`, `stopped: <nil>`.
