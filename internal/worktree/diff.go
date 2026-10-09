@@ -13,6 +13,7 @@ import (
 const (
 	FlagBinary           = "binary"            // a binary file changed
 	FlagMode             = "mode"              // a file mode changed (e.g. made executable)
+	FlagExecutable       = "executable"        // a file became executable (new or chmod +x)
 	FlagSymlink          = "symlink"           // a symlink was added or changed (target inside the repo)
 	FlagSymlinkKept      = "symlink-kept"      // the dot edited an escaping symlink's stand-in; the edit was dropped
 	FlagSubmoduleSkipped = "submodule-skipped" // the repo has submodules; they were not snapshotted
@@ -22,6 +23,7 @@ const (
 type Change struct {
 	Path    string // slash-separated, relative to the repository root
 	Status  string // A, M, D or T (type change)
+	NewSHA  string // blob id of the new content (all zeros when deleted)
 	OldMode string // "000000" when added
 	NewMode string // "000000" when deleted
 	Added   int    // lines; -1 for a binary file
@@ -56,7 +58,10 @@ func (p Patch) Paths() []string {
 // or a worktree-vs-index diff (both would consult the model-written
 // .gitattributes and .git file); every diff passes --no-ext-diff and
 // --no-textconv.
-func Capture(ctx context.Context, g Git, co Checkout, s Snapshot) (Patch, error) {
+//
+// The Git parameter is unused (the draft's own runner, inside co, does the
+// work) and kept so callers need not change.
+func Capture(ctx context.Context, _ Git, co Checkout, s Snapshot) (Patch, error) {
 	kept, err := restoreDefanged(co)
 	if err != nil {
 		return Patch{}, fmt.Errorf("restore symlinks: %w", err)
@@ -64,11 +69,15 @@ func Capture(ctx context.Context, g Git, co Checkout, s Snapshot) (Patch, error)
 	if _, err := co.GitOutput(ctx, "add", "-A", "--", "."); err != nil {
 		return Patch{}, err
 	}
-	base := []string{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color"}
+	// The user's diff.* config must not shape the patch: a fixed a/ b/ prefix
+	// (git apply -p1 reads the paths from the headers) and three lines of
+	// context, whatever diff.noprefix, diff.mnemonicPrefix or diff.context say.
+	base := []string{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color",
+		"--src-prefix=a/", "--dst-prefix=b/", "-U3"}
 	with := func(extra ...string) []string {
 		return append(append(append([]string(nil), base...), extra...), s.Commit, "--")
 	}
-	raw, err := co.GitOutput(ctx, with("--raw", "-z")...)
+	raw, err := co.GitOutput(ctx, with("--raw", "-z", "--no-abbrev")...)
 	if err != nil {
 		return Patch{}, err
 	}
@@ -102,6 +111,9 @@ func Capture(ctx context.Context, g Git, co Checkout, s Snapshot) (Patch, error)
 		}
 		if c.Status == "M" && c.OldMode != c.NewMode {
 			flags[FlagMode] = true
+		}
+		if c.NewMode == "100755" && c.OldMode != "100755" {
+			flags[FlagExecutable] = true
 		}
 	}
 	if len(kept) > 0 {
@@ -142,7 +154,7 @@ func parseRaw(out []byte) ([]Change, error) {
 		if len(parts) != 5 {
 			return nil, fmt.Errorf("unexpected git diff --raw record %q", head)
 		}
-		cs = append(cs, Change{Path: string(fields[i+1]), OldMode: parts[0], NewMode: parts[1], Status: parts[4][:1]})
+		cs = append(cs, Change{Path: string(fields[i+1]), OldMode: parts[0], NewMode: parts[1], NewSHA: parts[3], Status: parts[4][:1]})
 	}
 	return cs, nil
 }

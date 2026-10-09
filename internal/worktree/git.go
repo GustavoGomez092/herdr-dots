@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -54,7 +55,20 @@ type Git struct {
 	// Draft marks the runner for commands inside a draft worktree (set by
 	// WithoutFilters): submodules are ignored by diff and never recursed into.
 	Draft bool
+
+	// LFSSmudge leaves GIT_LFS_SKIP_SMUDGE unset, so the user's own LFS
+	// filter runs. Only Apply uses it: it writes into the user's repository.
+	LFSSmudge bool
+
+	// Config adds config overrides (key, value) through the environment.
+	Config [][2]string
 }
+
+var (
+	// ErrDenied means the patch touches a path the dot may not read or write
+	// (secrets such as .env or id_rsa): Caps.Deny said so.
+	ErrDenied = errors.New("the patch touches a denied path")
+)
 
 // WithoutFilters returns g with every filter driver configured for repo
 // switched off. Use it for every command that runs in a draft worktree: a
@@ -143,6 +157,11 @@ func (g Git) Run(ctx context.Context, dir string, env []string, args ...string) 
 
 // Output runs git in dir and returns its raw stdout.
 func (g Git) Output(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return g.OutputIn(ctx, dir, env, nil, args...)
+}
+
+// OutputIn is Output with stdin fed to git.
+func (g Git) OutputIn(ctx context.Context, dir string, env []string, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, g.timeout())
 	defer cancel()
 	full := []string{"-C", dir,
@@ -159,7 +178,14 @@ func (g Git) Output(ctx context.Context, dir string, env []string, args ...strin
 	if err != nil {
 		return nil, &CmdError{Args: args, Err: err}
 	}
-	cmd.Env = platform.ChildEnv(append(append(gitEnv(g.environ()), g.configEnv()...), env...))
+	base := gitEnv(g.environ())
+	if g.LFSSmudge {
+		base = slices.DeleteFunc(base, func(kv string) bool { return strings.HasPrefix(kv, "GIT_LFS_SKIP_SMUDGE=") })
+	}
+	cmd.Env = platform.ChildEnv(append(append(base, g.configEnv()...), env...))
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	cmd.WaitDelay = 500 * time.Millisecond
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -181,7 +207,7 @@ func (g Git) Output(ctx context.Context, dir string, env []string, args ...strin
 // `-c` arguments: a filter name holding "=" or whitespace would be split or
 // misread on a command line, while a key from the environment is taken whole.
 func (g Git) configEnv() []string {
-	var kv [][2]string
+	kv := append([][2]string(nil), g.Config...)
 	for _, n := range g.NoFilters {
 		for _, k := range []string{"clean", "smudge", "process"} {
 			kv = append(kv, [2]string{"filter." + n + "." + k, ""})

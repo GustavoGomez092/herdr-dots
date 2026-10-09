@@ -54,7 +54,7 @@ func TestCaptureReturnsOnlyTheDotsChanges(t *testing.T) {
 	if strings.Contains(string(p.Diff), "user edit") {
 		t.Fatal("the user's own uncommitted change leaked into the patch")
 	}
-	if err := Validate(p, co.Dir, Caps{MaxBytes: 200000, MaxFiles: 50}); err != nil {
+	if err := Validate(context.Background(), g, co, p, Caps{MaxBytes: 200000, MaxFiles: 50}); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestCaptureFlagsAModeChange(t *testing.T) {
 func TestEmptyDraftIsErrEmptyPatch(t *testing.T) {
 	g := isoGit(t)
 	_, co, p, _ := draftT(t, g, newRepo(t), func(string) {})
-	if err := Validate(p, co.Dir, Caps{}); !errors.Is(err, ErrEmptyPatch) {
+	if err := Validate(context.Background(), g, co, p, Caps{}); !errors.Is(err, ErrEmptyPatch) {
 		t.Fatalf("err %v, want ErrEmptyPatch", err)
 	}
 }
@@ -88,10 +88,10 @@ func TestValidateEnforcesCaps(t *testing.T) {
 		writeFile(t, filepath.Join(dir, "x.txt"), strings.Repeat("line\n", 100))
 		writeFile(t, filepath.Join(dir, "y.txt"), "y\n")
 	})
-	if err := Validate(p, co.Dir, Caps{MaxFiles: 1}); !errors.Is(err, ErrTooLarge) {
+	if err := Validate(context.Background(), g, co, p, Caps{MaxFiles: 1}); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("files cap: %v", err)
 	}
-	if err := Validate(p, co.Dir, Caps{MaxBytes: 100}); !errors.Is(err, ErrTooLarge) {
+	if err := Validate(context.Background(), g, co, p, Caps{MaxBytes: 100}); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("bytes cap: %v", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestValidateRejectsGitDirsEscapesAndSubmodules(t *testing.T) {
 		"a\x1b[31m":        ErrEscape,
 	} {
 		p := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: path, Status: "M", OldMode: "100644", NewMode: "100644"}}}
-		if err := Validate(p, t.TempDir(), Caps{}); !errors.Is(err, want) {
+		if err := Validate(context.Background(), Git{}, Checkout{}, p, Caps{}); !errors.Is(err, want) {
 			t.Errorf("%q: err %v, want %v", path, err, want)
 		}
 	}
@@ -119,13 +119,13 @@ func TestValidateRejectsGitDirsEscapesAndSubmodules(t *testing.T) {
 	// so (Windows); on Unix they are ordinary files.
 	for _, path := range []string{"con.txt", "src/aux.c", "a.txt:stream"} {
 		p := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: path, Status: "M", OldMode: "100644", NewMode: "100644"}}}
-		err := Validate(p, t.TempDir(), Caps{})
+		err := Validate(context.Background(), Git{}, Checkout{}, p, Caps{})
 		if refused := errors.Is(err, ErrEscape); refused != platform.ReservedPathName(path) {
 			t.Errorf("%q: err %v, want refused=%v", path, err, platform.ReservedPathName(path))
 		}
 	}
 	sub := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: "vendor/lib", Status: "M", OldMode: "160000", NewMode: "160000"}}}
-	if err := Validate(sub, t.TempDir(), Caps{}); !errors.Is(err, ErrEscape) {
+	if err := Validate(context.Background(), Git{}, Checkout{}, sub, Caps{}); !errors.Is(err, ErrEscape) {
 		t.Errorf("submodule: %v", err)
 	}
 }
@@ -141,7 +141,7 @@ func TestANewSymlinkPointingOutsideIsRejected(t *testing.T) {
 	if !slices.Contains(p.Flags, FlagSymlink) {
 		t.Fatalf("flags %v", p.Flags)
 	}
-	if err := Validate(p, co.Dir, Caps{}); !errors.Is(err, ErrEscape) || !strings.Contains(err.Error(), "evil") {
+	if err := Validate(context.Background(), g, co, p, Caps{}); !errors.Is(err, ErrEscape) || !strings.Contains(err.Error(), "evil") {
 		t.Fatalf("err %v, want ErrEscape naming evil", err)
 	}
 	if err := os.Remove(evil); err != nil {
@@ -151,7 +151,7 @@ func TestANewSymlinkPointingOutsideIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Validate(p2, co.Dir, Caps{}); err != nil {
+	if err := Validate(context.Background(), g, co, p2, Caps{}); err != nil {
 		t.Fatalf("an in-repo symlink is allowed: %v", err)
 	}
 }
@@ -196,12 +196,12 @@ func TestApplyTouchesOnlyTheWorkingTree(t *testing.T) {
 	repo := newRepo(t)
 	writeFile(t, filepath.Join(repo, "c.txt"), "c staged\n")
 	sh(t, repo, "add", "c.txt")
-	_, _, p, patch := draftT(t, g, repo, func(dir string) {
+	_, _, _, patch := draftT(t, g, repo, func(dir string) {
 		writeFile(t, filepath.Join(dir, "b.txt"), "b fixed\n")
 		writeFile(t, filepath.Join(dir, "new.txt"), "new\n")
 	})
 	before := stateOf(t, repo)
-	conflicts, err := Apply(context.Background(), g, repo, patch, p.Paths())
+	conflicts, err := Apply(context.Background(), g, repo, patch)
 	if err != nil || len(conflicts) != 0 {
 		t.Fatalf("Apply = %v, %v", conflicts, err)
 	}
@@ -223,11 +223,11 @@ func TestApplyTouchesOnlyTheWorkingTree(t *testing.T) {
 func TestApplyMergesWhenTheWorkingTreeMoved(t *testing.T) {
 	g := isoGit(t)
 	repo := newRepo(t)
-	_, _, p, patch := draftT(t, g, repo, func(dir string) {
+	_, _, _, patch := draftT(t, g, repo, func(dir string) {
 		writeFile(t, filepath.Join(dir, "a.txt"), "1\nTWO\n3\n4\n5\n6\n7\n8\n9\n10\n")
 	})
 	writeFile(t, filepath.Join(repo, "a.txt"), "1\n2\n3\n4\n5\n6\n7\n8\nNINE\n10\n") // the agent kept editing
-	conflicts, err := Apply(context.Background(), g, repo, patch, p.Paths())
+	conflicts, err := Apply(context.Background(), g, repo, patch)
 	if err != nil || len(conflicts) != 0 {
 		t.Fatalf("Apply = %v, %v", conflicts, err)
 	}
@@ -239,12 +239,12 @@ func TestApplyMergesWhenTheWorkingTreeMoved(t *testing.T) {
 func TestApplyReportsConflictsWithoutStaging(t *testing.T) {
 	g := isoGit(t)
 	repo := newRepo(t)
-	_, _, p, patch := draftT(t, g, repo, func(dir string) {
+	_, _, _, patch := draftT(t, g, repo, func(dir string) {
 		writeFile(t, filepath.Join(dir, "a.txt"), "1\nTWO\n3\n4\n5\n6\n7\n8\n9\n10\n")
 	})
 	writeFile(t, filepath.Join(repo, "a.txt"), "1\nDEUX\n3\n4\n5\n6\n7\n8\n9\n10\n")
 	before := stateOf(t, repo)
-	conflicts, err := Apply(context.Background(), g, repo, patch, p.Paths())
+	conflicts, err := Apply(context.Background(), g, repo, patch)
 	if err != nil || !slices.Equal(conflicts, []string{"a.txt"}) {
 		t.Fatalf("Apply = %v, %v; want conflicts [a.txt]", conflicts, err)
 	}
@@ -259,11 +259,11 @@ func TestApplyReportsConflictsWithoutStaging(t *testing.T) {
 func TestApplyNeverSilentlyOverwritesAFileTheUserCreated(t *testing.T) {
 	g := isoGit(t)
 	repo := newRepo(t)
-	_, _, p, patch := draftT(t, g, repo, func(dir string) {
+	_, _, _, patch := draftT(t, g, repo, func(dir string) {
 		writeFile(t, filepath.Join(dir, "new.txt"), "from the dot\n")
 	})
 	writeFile(t, filepath.Join(repo, "new.txt"), "the user's own file\n")
-	conflicts, err := Apply(context.Background(), g, repo, patch, p.Paths())
+	conflicts, err := Apply(context.Background(), g, repo, patch)
 	if err != nil || !slices.Equal(conflicts, []string{"new.txt"}) {
 		t.Fatalf("Apply = %v, %v; want a conflict on new.txt", conflicts, err)
 	}
@@ -275,14 +275,14 @@ func TestApplyNeverSilentlyOverwritesAFileTheUserCreated(t *testing.T) {
 func TestApplyIsAllOrNothingOnAHardFailure(t *testing.T) {
 	g := isoGit(t)
 	repo := newRepo(t)
-	_, _, p, patch := draftT(t, g, repo, func(dir string) {
+	_, _, _, patch := draftT(t, g, repo, func(dir string) {
 		writeFile(t, filepath.Join(dir, "b.txt"), "b fixed\n")
 		writeFile(t, filepath.Join(dir, "new.txt"), "from the dot\n")
 	})
 	if err := os.Remove(filepath.Join(repo, "b.txt")); err != nil { // the user deleted the file the patch edits
 		t.Fatal(err)
 	}
-	if _, err := Apply(context.Background(), g, repo, patch, p.Paths()); err == nil {
+	if _, err := Apply(context.Background(), g, repo, patch); err == nil {
 		t.Fatal("editing a file the user deleted must fail")
 	}
 	if _, err := os.Stat(filepath.Join(repo, "new.txt")); !os.IsNotExist(err) {
@@ -294,10 +294,10 @@ func TestHooksNeverRunDuringCaptureAndApply(t *testing.T) {
 	g := isoGit(t)
 	repo := newRepo(t)
 	marker := installMarkerHooks(t, repo)
-	_, _, p, patch := draftT(t, g, repo, func(dir string) {
+	_, _, _, patch := draftT(t, g, repo, func(dir string) {
 		writeFile(t, filepath.Join(dir, "b.txt"), "b fixed\n")
 	})
-	if _, err := Apply(context.Background(), g, repo, patch, p.Paths()); err != nil {
+	if _, err := Apply(context.Background(), g, repo, patch); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(marker); err == nil {
