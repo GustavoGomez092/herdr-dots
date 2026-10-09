@@ -380,7 +380,7 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	}
 	text := c.Body
 	if c.Kind == queue.KindCouncil {
-		text = councilConventionText(c.Body) // the digest starts with a "## " header
+		text = councilConventionText(c) // the digest starts with a "## " header
 	}
 	in := memory.RememberInput{As: as, Dot: c.Dot, Text: text, Reason: reason, Ev: ev}
 	if _, err := e.d.Memory.Remember(pid, in); err != nil {

@@ -1,10 +1,9 @@
 package engine
 
 import (
-	"regexp"
-	"strings"
 	"time"
 
+	"herdr-dots/internal/council"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
@@ -61,19 +60,25 @@ func (e *Engine) recordCouncilOutcomes(c queue.Card, kind string, edited bool) {
 		}
 	}
 	e.mu.Unlock()
+	names := councilMemberNames(c)
 	for _, p := range c.Parts {
-		if p.Failed || strings.TrimSpace(p.Body) == "" {
+		body := council.StripStanceMarkers(p.Body) // no "↳ ADD: " in memory
+		if p.Failed || body == "" {
 			continue
 		}
 		if d, ok := known[p.Dot]; ok && !d.Memory.Enabled {
 			continue
 		}
-		o := memory.Outcome{Dot: p.Dot, Card: c.ID, Kind: kind, Severity: p.Severity, Body: p.Body, Turn: c.Turn, Pane: c.PaneID}
+		o := memory.Outcome{Dot: p.Dot, Card: c.ID, Kind: kind, Severity: p.Severity, Body: body, Turn: c.Turn, Pane: c.PaneID}
 		if attached {
 			o.Session = a.SessionValue
 		}
 		if kind == memory.OutcomeSent && edited {
-			o.Kind, o.Edited = memory.OutcomeEdited, c.Body
+			// The member's own bullet of the edited digest; a member no bullet
+			// names keeps its own answer and records a plain send.
+			if text, ok := council.MemberPoint(c.Body, names, []string{p.DotName, p.Dot}, body); ok {
+				o.Kind, o.Edited = memory.OutcomeEdited, text
+			}
 		}
 		if err := retryLocked(func() error { return e.d.Memory.RecordOutcome(pid, o) }); err != nil {
 			e.memWriteFailed(err)
@@ -84,23 +89,19 @@ func (e *Engine) recordCouncilOutcomes(c queue.Card, kind string, edited bool) {
 	e.broadcast()
 }
 
-// attributionRe is the trailing "(Name, Name)" a digest bullet ends with.
-var attributionRe = regexp.MustCompile(`\s*\([^()]*\)\s*$`)
+// councilMemberNames is every name a digest attribution may use for the
+// card's members: display names and slugs.
+func councilMemberNames(c queue.Card) []string {
+	names := make([]string, 0, 2*len(c.Parts))
+	for _, p := range c.Parts {
+		names = append(names, p.DotName, p.Dot)
+	}
+	return names
+}
 
 // councilConventionText is the text to remember from a council digest: its
-// first bullet, without the "- " marker and the trailing attribution. Headers
-// ("## Must fix") are skipped. A digest without bullets is returned as is.
-func councilConventionText(body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
-			continue
-		}
-		line = strings.TrimSpace(line[2:])
-		if t := strings.TrimSpace(attributionRe.ReplaceAllString(line, "")); t != "" {
-			return t
-		}
-		return line
-	}
-	return body
+// first bullet point, without the list marker and the member attribution
+// (council.FirstPoint). Headers ("## Must fix") are never returned.
+func councilConventionText(c queue.Card) string {
+	return council.FirstPoint(c.Body, councilMemberNames(c))
 }

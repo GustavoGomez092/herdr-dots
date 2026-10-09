@@ -448,7 +448,7 @@ func cardParts(parts []council.Part) []queue.CardPart {
 			cp.Severity, cp.Body = p.Verdict.Severity, textutil.SanitizeModelText(p.Verdict.Message)
 		}
 		if !p.Failed() && p.Reply != "" {
-			cp.Body = strings.TrimSpace(cp.Body + "\n↳ " + strings.ToUpper(p.Stance) + ": " + textutil.SanitizeModelText(p.Reply))
+			cp.Body = strings.TrimSpace(cp.Body + "\n" + council.StanceMarker(p.Stance) + textutil.SanitizeModelText(p.Reply))
 			if cp.Severity == "" {
 				cp.Severity = p.ReplySeverity
 			}

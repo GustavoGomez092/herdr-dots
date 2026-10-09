@@ -105,7 +105,7 @@ func TestDismissedAndEditedCouncilCards(t *testing.T) {
 		return len(s) == 1 && len(f) == 1
 	})
 	c2 := councilCardFor(t, r)
-	const edited = "Move the session token to an httpOnly cookie. Add a spinner to the login form."
+	const edited = "## Must fix\n- Move the session token to an httpOnly cookie (Security)\n## Should fix\n- Add a spinner to the login form (Frontend)"
 	if err := r.e.Edit(c2.ID, edited); err != nil {
 		t.Fatal(err)
 	}
@@ -113,11 +113,104 @@ func TestDismissedAndEditedCouncilCards(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "two edited outcomes", func() bool { return len(ledgerBy(r, memory.OutcomeEdited)) == 2 })
+	want := map[string]string{"security": "Move the session token to an httpOnly cookie", "frontend": "Add a spinner to the login form"}
 	for dot, o := range ledgerBy(r, memory.OutcomeEdited) {
-		if o.Edited != edited || o.Body == "" || o.Body == edited {
+		if o.Edited != want[dot] || o.Body == "" || o.Body == o.Edited {
 			t.Fatalf("%s: edited outcome %+v", dot, o)
 		}
 	}
+}
+
+// Final review item 1: an edited digest gives each member its own bullet as
+// the edited text, never a "## " header and never another member's point.
+func TestEditedCouncilDigestGivesEachMemberItsOwnPoint(t *testing.T) {
+	for name, edited := range map[string]string{
+		"headers":  "## Must fix\n- JWT must move to an httpOnly cookie (Security)\n## Should fix\n- Show a spinner while logging in (Frontend)",
+		"numbered": "## Should fix\n1. Show a spinner while logging in (Frontend)\n2) JWT must move to an httpOnly cookie (security)",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newMemRig(t, memOpts{}, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+			r.attach(t, "security", "frontend")
+			c := councilCardFor(t, r)
+			if err := r.e.Edit(c.ID, edited); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.e.SendCards([]string{c.ID}); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{"security": "JWT must move to an httpOnly cookie", "frontend": "Show a spinner while logging in"}
+			eventually(t, "each member remembers its own edited point", func() bool {
+				for dot, text := range want {
+					es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: dot, Kinds: []memory.Kind{memory.KindFinding}})
+					if len(es) != 1 || es[0].Text != text {
+						return false
+					}
+				}
+				return true
+			})
+			for dot := range want {
+				for _, e := range r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: dot}) {
+					if strings.HasPrefix(e.Text, "## ") {
+						t.Fatalf("%s remembered a header: %+v", dot, e)
+					}
+				}
+			}
+		})
+	}
+}
+
+// Final review item 1: a member that no bullet of the edited digest names
+// records its own part body as sent, not the digest as edited.
+func TestEditedCouncilDigestWithoutTheMembersBulletRecordsSent(t *testing.T) {
+	r := newMemRig(t, memOpts{}, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	r.attach(t, "security", "frontend")
+	c := councilCardFor(t, r)
+	if err := r.e.Edit(c.ID, "## Must fix\n- JWT must move to an httpOnly cookie (Security)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.e.SendCards([]string{c.ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "one edited and one sent outcome", func() bool {
+		return len(ledgerBy(r, memory.OutcomeEdited)) == 1 && len(ledgerBy(r, memory.OutcomeSent)) == 1
+	})
+	if o := ledgerBy(r, memory.OutcomeSent)["frontend"]; o.Body != c.Parts[1].Body || o.Edited != "" {
+		t.Fatalf("frontend outcome %+v", o)
+	}
+	eventually(t, "frontend remembers its own answer", func() bool {
+		es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "frontend", Kinds: []memory.Kind{memory.KindFinding}})
+		return len(es) == 1 && es[0].Text == "The login form has no loading state."
+	})
+}
+
+// Final review item 1: a member that spoke only in round 2 records its reply
+// without the "↳ ADD: " marker.
+func TestRoundTwoOnlyMemberOutcomeHasNoStanceMarker(t *testing.T) {
+	r := newMemRig(t, memOpts{}, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	r.attach(t, "security", "frontend")
+	c, err := r.q.Add(queue.Card{Kind: queue.KindCouncil, Dot: "council", DotName: transcript.CouncilName, Glyph: transcript.CouncilGlyph,
+		PaneID: pane, Turn: 1, Severity: "warn", Mode: "queue", Project: testProject,
+		Body: "## Should fix\n- Add CSRF tokens (Frontend)",
+		Parts: []queue.CardPart{
+			{Dot: "security", DotName: "Security", Glyph: "●", Severity: "warn", Body: "JWT in localStorage.\n↳ OBJECT: cookies need CSRF.", Stance: "object"},
+			{Dot: "frontend", DotName: "Frontend", Glyph: "●", Severity: "warn", Body: "↳ ADD: Add CSRF tokens to the login form.", Stance: "add"},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.e.SendCards([]string{c.ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "two sent outcomes", func() bool { return len(ledgerBy(r, memory.OutcomeSent)) == 2 })
+	for dot, o := range ledgerBy(r, memory.OutcomeSent) {
+		if strings.Contains(o.Body, "↳") {
+			t.Fatalf("%s: outcome body keeps the marker: %q", dot, o.Body)
+		}
+	}
+	eventually(t, "frontend's finding has no marker", func() bool {
+		es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "frontend", Kinds: []memory.Kind{memory.KindFinding}})
+		return len(es) == 1 && es[0].Text == "Add CSRF tokens to the login form."
+	})
 }
 
 func TestChairReadsProjectConventionsOnly(t *testing.T) {
@@ -196,6 +289,8 @@ func TestRememberCouncilCardStoresTheFirstPoint(t *testing.T) {
 	for name, tc := range map[string]struct{ body, want string }{
 		"chair digest": {"## Must fix\n- JWT stored in localStorage (Security, Frontend)\n## Should fix\n- No loading state (Frontend)", "JWT stored in localStorage"},
 		"plain merge":  {"## Must fix\n- JWT in localStorage. (Security)\n\n## Should fix\n- No loading state. (Frontend)", "JWT in localStorage."},
+		"numbered":     {"## Must fix\n1. JWT in localStorage (Security)\n2. No loading state (Frontend)", "JWT in localStorage"},
+		"not a name":   {"## Must fix\n- Check the token expiry (see RFC 7519)", "Check the token expiry (see RFC 7519)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newMemRig(t, memOpts{}, member("Security", dots.ModeQueue))
