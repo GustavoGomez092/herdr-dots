@@ -170,6 +170,14 @@ func (s *Store) Get(id string) (Meta, error) {
 	if m.ID != id {
 		return Meta{}, fmt.Errorf("patch %s metadata names %q", id, m.ID)
 	}
+	// Older records stored the raw summary; its presence means the text was
+	// sensitive. The raw text is never kept: the next rewrite drops it.
+	var legacy struct {
+		Raw string `json:"summary_raw"`
+	}
+	if json.Unmarshal(data, &legacy) == nil && legacy.Raw != "" {
+		m.SummaryHadSecret = true
+	}
 	return m, nil
 }
 

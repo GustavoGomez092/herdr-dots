@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/textutil"
@@ -365,7 +366,18 @@ func patchDetail(c queue.Card, w int) string {
 	}
 	var b strings.Builder
 	if len(c.PatchFlags) > 0 {
-		b.WriteString(style.Dim.Render(trunc("  ["+textutil.SanitizeModelText(strings.Join(c.PatchFlags, "] ["))+"]", max(10, w))) + "\n")
+		line := trunc("  ["+textutil.SanitizeModelText(strings.Join(c.PatchFlags, "] ["))+"]", max(10, w))
+		// The agent/CI flag (kept first by the drafter) is a warning, not dim.
+		lead := "  [" + toolloop.FlagAgentConfig + "]"
+		if c.PatchFlags[0] == toolloop.FlagAgentConfig && strings.HasPrefix(line, lead) {
+			b.WriteString(style.Severity("warn").Render(lead))
+			if rest := line[len(lead):]; rest != "" {
+				b.WriteString(style.Dim.Render(rest))
+			}
+			b.WriteString("\n")
+		} else {
+			b.WriteString(style.Dim.Render(line) + "\n")
+		}
 	}
 	if c.Note != "" {
 		b.WriteString(style.Dim.Render(trunc("  "+strings.ReplaceAll(textutil.SanitizeModelText(c.Note), "\n", " "), max(10, w))) + "\n")

@@ -17,6 +17,8 @@ const FlagAgentConfig = "agent/CI config"
 var AgentConfigGlobs = []string{
 	".github/workflows/**", ".gitlab-ci.yml", ".vscode/tasks.json", ".vscode/settings.json", ".envrc",
 	".gitattributes", ".gitmodules", ".pre-commit-config.yaml", ".husky/**", "Makefile", "package.json", ".npmrc",
+	// Agent instruction files: a change steers the next agent that starts here.
+	"CLAUDE.md", "AGENTS.md", ".cursor/**", ".cursorrules", ".github/copilot-instructions.md", ".windsurfrules",
 }
 
 // AgentConfig reports whether rel (slash-separated, repository-relative) is

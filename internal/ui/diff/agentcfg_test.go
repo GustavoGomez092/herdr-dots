@@ -30,3 +30,14 @@ func TestAgentConfigFilesAreFlaggedInTheListAndTheConfirm(t *testing.T) {
 		t.Fatalf("confirm lacks the agent/CI config warning:\n%s", v)
 	}
 }
+
+func TestAgentInstructionFilesAreFlagged(t *testing.T) {
+	for _, p := range []string{"sub/CLAUDE.md", "AGENTS.md", "sub/dir/agents.md", ".cursor/rules/a.mdc", ".cursorrules", ".github/copilot-instructions.md", ".windsurfrules"} {
+		patch := "diff --git a/" + p + " b/" + p + "\nindex 1111111..2222222 100644\n--- a/" + p + "\n+++ b/" + p + "\n@@ -1 +1 @@\n-a\n+b\n"
+		meta := patchstore.Meta{ID: "0123456789abcdef", Dot: "x", Stat: "1 file", Paths: []string{p}}
+		m := sized(New([]byte(patch), meta, "7", &recCaller{}), 140, 30)
+		if v := send(m, "A").View(); !strings.Contains(v, "Includes: 1 agent/CI config") {
+			t.Errorf("%s not flagged in Includes:\n%s", p, v)
+		}
+	}
+}
