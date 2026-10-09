@@ -27,9 +27,12 @@ const (
 	ReasonGlobs         Reason = "globs"
 	ReasonBudget        Reason = "budget"
 	ReasonSessionBudget Reason = "session_budget"
+	ReasonConsulted     Reason = "consulted" // asked through MCP during these turns (Phase 5)
 )
 
 type FilterInput struct {
+	Consulted bool // the dot was asked through the MCP server during these turns: skip them once
+
 	Dot        dots.Dot
 	Att        state.DotAttachment
 	NewTurns   []transcript.Turn
@@ -63,6 +66,8 @@ func Decide(in FilterInput) Decision {
 		return Decision{Reason: ReasonObserve}
 	case !in.Dot.Trigger.OnTurn:
 		return Decision{Reason: ReasonOff}
+	case in.Consulted:
+		return Decision{Reason: ReasonConsulted}
 	}
 	var turns []transcript.Turn
 	for _, t := range in.NewTurns {

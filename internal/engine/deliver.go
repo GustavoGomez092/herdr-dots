@@ -170,6 +170,10 @@ func (e *Engine) dropPane(paneID string) {
 	}
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)
+	// After the attachment is gone: in-flight MCP asks end with ErrPaneClosed
+	// and nothing can re-mark the dead pane.
+	e.cancelAsks(paneID)
+	e.forgetAsks(paneID)
 	e.broadcast()
 }
 
