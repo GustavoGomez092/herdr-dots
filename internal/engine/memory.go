@@ -317,6 +317,10 @@ func (e *Engine) spawnOutcome(c queue.Card, kind string) {
 }
 
 func (e *Engine) recordOutcome(c queue.Card, kind, orig string, edited bool) {
+	if c.Kind == queue.KindCouncil {
+		e.recordCouncilOutcomes(c, kind, edited) // one outcome per contributing member (council_memory.go)
+		return
+	}
 	e.mu.Lock()
 	d, known := e.dots[c.Dot]
 	e.mu.Unlock()
@@ -359,6 +363,9 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	if !ok {
 		return fmt.Errorf("card %s: %w", cardID, queue.ErrNotFound)
 	}
+	if c.Kind == queue.KindCouncil && as != memory.AsConvention {
+		return errors.New("a council card can only be remembered as a project convention (c)")
+	}
 	ev := memory.Evidence{Pane: c.PaneID, Turn: c.Turn, Card: c.ID}
 	pid := c.Project
 	if a, ok := e.d.Attachments.Get(c.PaneID); ok {
@@ -371,7 +378,11 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	if pid == "" && as != memory.AsGlobal {
 		return fmt.Errorf("card %s: its project is unknown", cardID)
 	}
-	in := memory.RememberInput{As: as, Dot: c.Dot, Text: c.Body, Reason: reason, Ev: ev}
+	text := c.Body
+	if c.Kind == queue.KindCouncil {
+		text = councilConventionText(c.Body) // the digest starts with a "## " header
+	}
+	in := memory.RememberInput{As: as, Dot: c.Dot, Text: text, Reason: reason, Ev: ev}
 	if _, err := e.d.Memory.Remember(pid, in); err != nil {
 		return err
 	}
