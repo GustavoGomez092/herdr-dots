@@ -150,14 +150,38 @@ func TestOllamaDownAndModelMissingHints(t *testing.T) {
 		t.Fatalf("down: %v", err)
 	}
 	up, _ := newBackend(t, &fake{})
-	if err := up.CheckModel(context.Background(), "mistral"); err == nil || !strings.Contains(err.Error(), "ollama pull mistral") {
+	if err := up.CheckModel(context.Background(), backend.Request{Model: "mistral"}); err == nil || !strings.Contains(err.Error(), "ollama pull mistral") {
 		t.Fatalf("missing: %v", err)
 	}
-	if err := up.CheckModel(context.Background(), "llama3"); err != nil {
+	if err := up.CheckModel(context.Background(), backend.Request{Model: "llama3"}); err != nil {
 		t.Fatalf("llama3 matches llama3:latest: %v", err)
 	}
-	if ids, err := up.Models(context.Background()); err != nil || len(ids) != 2 {
+	if ids, err := up.Models(context.Background(), backend.Request{}); err != nil || len(ids) != 2 {
 		t.Fatalf("%v %v", ids, err)
+	}
+}
+
+// Final review item 2: CheckModel and Models ask the dot's own server, and a
+// server that refuses the connection is marked unreachable.
+func TestCheckModelAndModelsUseTheDotsBaseURL(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	down := srv.URL
+	srv.Close()
+	up := (&fake{}).server(t)
+	b := New(backend.Options{Provider: config.ProviderConfig{BaseURL: down}})
+	b.getenv = func(string) string { return "" }
+	if err := b.CheckModel(context.Background(), backend.Request{Model: "llama3", BaseURL: up.URL}); err != nil {
+		t.Fatalf("remote base_url: %v", err)
+	}
+	if ids, err := b.Models(context.Background(), backend.Request{BaseURL: up.URL}); err != nil || len(ids) != 2 {
+		t.Fatalf("models %v %v", ids, err)
+	}
+	err := b.CheckModel(context.Background(), backend.Request{Model: "llama3"})
+	if !backend.Unreachable(err) || !strings.Contains(err.Error(), down) {
+		t.Fatalf("the provider URL is down: %v (unreachable %v)", err, backend.Unreachable(err))
+	}
+	if err := b.CheckModel(context.Background(), backend.Request{Model: "mistral", BaseURL: up.URL}); backend.Unreachable(err) {
+		t.Fatalf("a missing model is a validation error: %v", err)
 	}
 }
 

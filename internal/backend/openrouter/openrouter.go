@@ -112,16 +112,19 @@ type (
 	}
 )
 
-func (b *Backend) Check(ctx context.Context) error {
+func (b *Backend) Check(ctx context.Context) error { return b.check(ctx, backend.Request{}) }
+
+// check validates the key at r's endpoint.
+func (b *Backend) check(ctx context.Context, r backend.Request) error {
 	c, err := b.client()
 	if err != nil {
 		return err
 	}
-	_, err = c.Do(ctx, "GET", b.base(backend.Request{})+"/key", nil, nil)
+	_, err = c.Do(ctx, "GET", b.base(r)+"/key", nil, nil)
 	return mapErr(err, "")
 }
 
-func (b *Backend) Models(ctx context.Context) ([]string, error) {
+func (b *Backend) Models(ctx context.Context, r backend.Request) ([]string, error) {
 	c, err := b.client()
 	if err != nil {
 		return nil, err
@@ -131,7 +134,7 @@ func (b *Backend) Models(ctx context.Context) ([]string, error) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if _, err := c.Do(ctx, "GET", b.base(backend.Request{})+"/models", nil, &out); err != nil {
+	if _, err := c.Do(ctx, "GET", b.base(r)+"/models", nil, &out); err != nil {
 		return nil, mapErr(err, "")
 	}
 	ids := make([]string, 0, len(out.Data))
@@ -141,14 +144,15 @@ func (b *Backend) Models(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-func (b *Backend) CheckModel(ctx context.Context, model string) error {
+func (b *Backend) CheckModel(ctx context.Context, r backend.Request) error {
+	model := r.Model
 	if model == "" {
 		return errors.New("openrouter needs a model, e.g. anthropic/claude-opus-5-5")
 	}
-	if err := b.Check(ctx); err != nil {
+	if err := b.check(ctx, r); err != nil {
 		return err
 	}
-	ids, err := b.Models(ctx)
+	ids, err := b.Models(ctx, r)
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -75,7 +76,8 @@ func (b *Backend) Check(ctx context.Context) error {
 	return mapErr(pager.Err(), key, "")
 }
 
-func (b *Backend) CheckModel(ctx context.Context, model string) error {
+func (b *Backend) CheckModel(ctx context.Context, r backend.Request) error {
+	model := r.Model
 	if model == "" {
 		return errors.New("openai-api needs a model: set [backend] model")
 	}
@@ -87,7 +89,7 @@ func (b *Backend) CheckModel(ctx context.Context, model string) error {
 	return mapErr(err, key, model)
 }
 
-func (b *Backend) Models(ctx context.Context) ([]string, error) {
+func (b *Backend) Models(ctx context.Context, _ backend.Request) ([]string, error) {
 	c, key, err := b.client()
 	if err != nil {
 		return nil, err
@@ -275,7 +277,11 @@ func mapErr(err error, key, model string) error {
 			return fmt.Errorf("openai rejected the request (%d): %s", code, detail)
 		}
 	}
-	return errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	msg := errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return backend.MarkUnreachable(msg)
+	}
+	return msg
 }
 
 // providerText is provider-written text made safe for errors: the key

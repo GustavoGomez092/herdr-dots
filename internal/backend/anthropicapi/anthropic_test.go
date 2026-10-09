@@ -354,13 +354,13 @@ func TestCheckModelsAndMissingKey(t *testing.T) {
 	if err := b.Check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.CheckModel(context.Background(), ""); err != nil {
+	if err := b.CheckModel(context.Background(), backend.Request{Model: ""}); err != nil {
 		t.Fatalf("default model: %v", err)
 	}
-	if err := b.CheckModel(context.Background(), "claude-nope"); err == nil || !strings.Contains(err.Error(), `model "claude-nope" not available`) {
+	if err := b.CheckModel(context.Background(), backend.Request{Model: "claude-nope"}); err == nil || !strings.Contains(err.Error(), `model "claude-nope" not available`) {
 		t.Fatalf("404: %v", err)
 	}
-	ids, err := b.Models(context.Background())
+	ids, err := b.Models(context.Background(), backend.Request{})
 	if err != nil || len(ids) != 2 || ids[0] != "claude-opus-5-5" {
 		t.Fatalf("models %v %v", ids, err)
 	}

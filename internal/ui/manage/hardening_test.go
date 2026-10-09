@@ -20,7 +20,7 @@ func newProvModel(store *fakeKeys, test func(context.Context, string) error) tea
 func TestEditorErrorsAreRedacted(t *testing.T) {
 	const leaked = "sk-ant-abcdef123456789"
 	d := Deps{Caller: &fakeCaller{}, DotsDir: t.TempDir(),
-		CheckDot: func(context.Context, dots.Dot) error { return errors.New("401 for " + leaked) },
+		CheckDot: func(context.Context, dots.Dot) (string, error) { return "", errors.New("401 for " + leaked) },
 		NewDot: func() dots.Dot {
 			d := dots.New("")
 			d.Backend = dots.BackendSpec{Kind: dots.KindAnthropicAPI, Model: "x", Args: []string{}}
@@ -145,7 +145,7 @@ func TestPastedKeyIsTrimmed(t *testing.T) {
 }
 
 func TestStaleModelsErrorAndRepeatedCtrlSpace(t *testing.T) {
-	d := Deps{Caller: &fakeCaller{}, Models: func(context.Context, string) ([]string, error) {
+	d := Deps{Caller: &fakeCaller{}, Models: func(context.Context, string, string) ([]string, error) {
 		return []string{"m1"}, nil
 	}, NewDot: func() dots.Dot {
 		d := dots.New("")

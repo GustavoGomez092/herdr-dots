@@ -200,10 +200,10 @@ func TestCheckAndModels(t *testing.T) {
 	if err := b.Check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.CheckModel(context.Background(), "qwen/qwen3-coder"); err != nil {
+	if err := b.CheckModel(context.Background(), backend.Request{Model: "qwen/qwen3-coder"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.CheckModel(context.Background(), "nope/x"); err == nil {
+	if err := b.CheckModel(context.Background(), backend.Request{Model: "nope/x"}); err == nil {
 		t.Fatal("unknown model")
 	}
 	bad := New(backend.Options{Creds: staticCreds{"openrouter": "sk-or-v1-wrongwrongwrong"}, Provider: b.o.Provider})
@@ -212,6 +212,19 @@ func TestCheckAndModels(t *testing.T) {
 	}
 	if _, err := New(backend.Options{}).Run(context.Background(), req()); !errors.Is(err, credentials.ErrNoCredentials) {
 		t.Fatal("no creds")
+	}
+}
+
+// Final review item 2: CheckModel and Models use the dot's base_url.
+func TestCheckModelAndModelsUseTheDotsBaseURL(t *testing.T) {
+	srv := (&fake{}).server(t)
+	b := New(backend.Options{Creds: staticCreds{"openrouter": testKey}, Provider: config.ProviderConfig{BaseURL: "http://127.0.0.1:1/api/v1"}})
+	r := backend.Request{Model: "qwen/qwen3-coder", BaseURL: srv.URL + "/api/v1"}
+	if err := b.CheckModel(context.Background(), r); err != nil {
+		t.Fatalf("dot base_url: %v", err)
+	}
+	if ids, err := b.Models(context.Background(), r); err != nil || len(ids) != 2 {
+		t.Fatalf("models %v %v", ids, err)
 	}
 }
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -50,6 +52,20 @@ func TestRegistryKeepsV1ConstructorAndAddsKinds(t *testing.T) {
 		}
 	}()
 	Register("fake-api", func(o Options) (Backend, error) { return fakeAPI{}, nil })
+}
+
+// Final review item 2: only "never answered" counts as unreachable.
+func TestUnreachable(t *testing.T) {
+	base := errors.New("Ollama isn't running at http://gpu:11434")
+	if m := MarkUnreachable(base); !Unreachable(m) || m.Error() != base.Error() || !errors.Is(m, base) {
+		t.Fatalf("marked: %v", m)
+	}
+	if !Unreachable(fmt.Errorf("timed out: %w", context.DeadlineExceeded)) || !Unreachable(fmt.Errorf("x: %w", syscall.ECONNREFUSED)) {
+		t.Fatal("timeout and connection refused are unreachable")
+	}
+	if Unreachable(errors.New(`model "x" not available to this key`)) || Unreachable(nil) || MarkUnreachable(nil) != nil {
+		t.Fatal("validation errors are not")
+	}
 }
 
 func TestProviderFor(t *testing.T) {

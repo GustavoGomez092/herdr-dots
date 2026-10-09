@@ -3,10 +3,13 @@ package openaiapi
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/config"
 )
 
 // Final review item 7: a 4xx carries the provider's message and param,
@@ -26,6 +29,19 @@ func TestBadRequestShowsMessageAndParam(t *testing.T) {
 	}
 	if strings.Contains(s, "TESTKEY") || strings.ContainsAny(s, "\x1b") || len([]rune(s)) > 420 {
 		t.Fatalf("not redacted, sanitized and clipped (%d runes): %q", len([]rune(s)), s)
+	}
+}
+
+// Final review item 2: a refused connection is "unreachable" (the editor
+// saves with a warning), and the key never shows.
+func TestConnectionRefusedIsUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close()
+	b := New(backend.Options{Creds: staticCreds{"openai": testKey}, Provider: config.ProviderConfig{BaseURL: url + "/v1"}})
+	err := b.CheckModel(context.Background(), backend.Request{Model: "gpt-6-sol"})
+	if !backend.Unreachable(err) || strings.Contains(err.Error(), "TESTKEY") {
+		t.Fatalf("err = %v (unreachable %v)", err, backend.Unreachable(err))
 	}
 }
 

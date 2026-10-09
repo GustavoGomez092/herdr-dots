@@ -34,12 +34,12 @@ type Deps struct {
 	Project func(target string) (memory.Project, error) // the target pane's project when the snapshot lacks it; may be nil
 
 	// Phase 4 (all optional).
-	CheckDot  func(ctx context.Context, d dots.Dot) error              // runs on save instead of Check: key + model
-	Models    func(ctx context.Context, kind string) ([]string, error) // ctrl+space model picker
-	Estimate  func(d dots.Dot) string                                  // editor cost line
-	Keys      KeyStore                                                 // Providers screen
-	TestKey   func(ctx context.Context, provider string) error         // Providers screen "t"
-	OllamaURL string                                                   // shown on the ollama row
+	CheckDot  func(ctx context.Context, d dots.Dot) (warn string, err error)    // runs on save instead of Check: key + model; warn = saved unchecked
+	Models    func(ctx context.Context, kind, baseURL string) ([]string, error) // ctrl+space model picker (the dot's base_url, if any)
+	Estimate  func(d dots.Dot) string                                           // editor cost line
+	Keys      KeyStore                                                          // Providers screen
+	TestKey   func(ctx context.Context, provider string) error                  // Providers screen "t"
+	OllamaURL string                                                            // shown on the ollama row
 }
 
 type SnapshotMsg view.Snapshot
@@ -51,6 +51,7 @@ type (
 	savedMsg   struct {
 		slug  string
 		isNew bool
+		warn  string // the save check couldn't reach the provider
 	}
 	deletedMsg  struct{ name, slug string }
 	reloadedMsg struct{}
@@ -187,6 +188,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case savedMsg:
 		m.scr, m.form, m.saving = scrLibrary, nil, false
 		m.status = "saved " + msg.slug
+		if msg.warn != "" {
+			m.status += " · " + msg.warn
+		}
 		if m.target != "" && msg.isNew {
 			// Pre-check a dot just created here; an edited dot keeps its state,
 			// so ⏎ never attaches something the user only edited.
@@ -385,13 +389,14 @@ func (m Model) newForm(d dots.Dot, isNew bool) *Form {
 	return f
 }
 
-// fetchModels loads ctrl+space choices for kind.
-func (m Model) fetchModels(kind string) tea.Cmd {
+// fetchModels loads ctrl+space choices for kind from the dot's base_url (if
+// it sets one).
+func (m Model) fetchModels(kind, baseURL string) tea.Cmd {
 	list := m.d.Models
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		ids, err := list(ctx, kind)
+		ids, err := list(ctx, kind, baseURL)
 		return modelsMsg{kind: kind, ids: ids, err: err}
 	}
 }
@@ -401,7 +406,7 @@ func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+@", "ctrl+ ":
 		if m.form.OnModel() && !m.saving && !m.fetching && !m.form.NextModel() && m.d.Models != nil {
 			m.fetching = true
-			return m, m.fetchModels(m.form.Kind())
+			return m, m.fetchModels(m.form.Kind(), m.form.BaseURL())
 		}
 		return m, nil
 	case "esc":
@@ -436,10 +441,13 @@ func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		warn := ""
 		if checkDot != nil {
-			if err := checkDot(ctx, d); err != nil {
+			w, err := checkDot(ctx, d)
+			if err != nil {
 				return formErrMsg{errors.New(credentials.Redact(err.Error()))}
 			}
+			warn = credentials.Redact(w)
 		} else if err := check(ctx, d.Backend.Kind); err != nil {
 			return formErrMsg{err}
 		}
@@ -453,7 +461,7 @@ func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
 		if slug == "" {
 			slug = dots.Slugify(d.Name)
 		}
-		return savedMsg{slug: slug, isNew: isNew}
+		return savedMsg{slug: slug, isNew: isNew, warn: warn}
 	}
 }
 

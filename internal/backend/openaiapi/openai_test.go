@@ -222,13 +222,13 @@ func TestCheckAndModels(t *testing.T) {
 	if err := b.Check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.CheckModel(context.Background(), "gpt-6-sol"); err != nil {
+	if err := b.CheckModel(context.Background(), backend.Request{Model: "gpt-6-sol"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.CheckModel(context.Background(), "gpt-nope"); err == nil || !strings.Contains(err.Error(), "not available") {
+	if err := b.CheckModel(context.Background(), backend.Request{Model: "gpt-nope"}); err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Fatalf("err = %v", err)
 	}
-	if ids, err := b.Models(context.Background()); err != nil || len(ids) != 1 {
+	if ids, err := b.Models(context.Background(), backend.Request{}); err != nil || len(ids) != 1 {
 		t.Fatalf("%v %v", ids, err)
 	}
 	if _, err := backend.NewWith(backend.KindOpenAIAPI, backend.Options{}); err != nil {

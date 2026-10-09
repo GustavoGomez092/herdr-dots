@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"syscall"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -86,8 +87,9 @@ func (b *Backend) Check(ctx context.Context) error {
 	return mapErr(err, key, "")
 }
 
-// CheckModel confirms model is available to this key.
-func (b *Backend) CheckModel(ctx context.Context, model string) error {
+// CheckModel confirms r.Model (or the default) is available to this key.
+func (b *Backend) CheckModel(ctx context.Context, r backend.Request) error {
+	model := r.Model
 	if model == "" {
 		model = DefaultModel
 	}
@@ -100,7 +102,7 @@ func (b *Backend) CheckModel(ctx context.Context, model string) error {
 }
 
 // Models lists the model ids this key can use.
-func (b *Backend) Models(ctx context.Context) ([]string, error) {
+func (b *Backend) Models(ctx context.Context, _ backend.Request) ([]string, error) {
 	c, key, err := b.client()
 	if err != nil {
 		return nil, err
@@ -264,7 +266,11 @@ func mapErr(err error, key, model string) error {
 			return fmt.Errorf("anthropic rejected the request (%d): %s", code, clip(credentials.Redact(apierr.Error(), key), 300))
 		}
 	}
-	return errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	msg := errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return backend.MarkUnreachable(msg)
+	}
+	return msg
 }
 
 func clip(s string, n int) string {
