@@ -3,13 +3,14 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
 
 func TestLoadMissingFileGivesDefaults(t *testing.T) {
 	c, err := Load(filepath.Join(t.TempDir(), "nope.toml"))
-	if err != nil || c != Default() {
+	if err != nil || !reflect.DeepEqual(c, Default()) {
 		t.Fatalf("got %+v %v", c, err)
 	}
 }
@@ -42,7 +43,7 @@ func TestLoadBadTOMLReturnsDefaultsWithInjectOffAndError(t *testing.T) {
 	c, err := Load(p)
 	want := Default()
 	want.InjectEnabled, want.MemoryEnabled = false, false
-	if err == nil || c != want {
+	if err == nil || !reflect.DeepEqual(c, want) {
 		t.Fatalf("want defaults with inject and memory off + error, got %+v %v", c, err)
 	}
 }
@@ -79,5 +80,46 @@ func TestCouncilDefaultsAndClamps(t *testing.T) {
 	c, _ = Load(p)
 	if c.Council.MaxMembers != 16 || c.Council.Rounds != 1 {
 		t.Fatalf("clamped %+v", c.Council)
+	}
+}
+
+func TestPhase4SettingsLoad(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	body := `session_budget_usd = 2.5
+tool_deny_globs = ["**/fixtures/private/**", "[bad"]
+[providers.anthropic]
+api_key_env = "WORK_ANTHROPIC"
+[providers.ollama]
+base_url = "http://10.0.0.5:11434"
+[providers.openrouter.extra_headers]
+"X-Title" = "Herdr Dots"
+`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SessionBudgetUSD != 2.5 || c.Provider("anthropic").APIKeyEnv != "WORK_ANTHROPIC" ||
+		c.Provider("ollama").BaseURL != "http://10.0.0.5:11434" || c.Provider("openrouter").ExtraHeaders["X-Title"] != "Herdr Dots" {
+		t.Fatalf("config %+v", c)
+	}
+	if len(c.ToolDenyGlobs) != 1 || c.ToolDenyGlobs[0] != "**/fixtures/private/**" {
+		t.Fatalf("invalid globs are dropped: %v", c.ToolDenyGlobs)
+	}
+	if c.Provider("openai").BaseURL != "" {
+		t.Fatal("absent provider is the zero value")
+	}
+}
+
+func TestNegativeDollarBudgetIsOff(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	_ = os.WriteFile(p, []byte("session_budget_usd = -3\n"), 0o600)
+	if c, _ := Load(p); c.SessionBudgetUSD != 0 {
+		t.Fatalf("got %v", c.SessionBudgetUSD)
+	}
+	if Default().SessionBudgetUSD != 0 {
+		t.Fatal("dollar budgets are off by default")
 	}
 }
