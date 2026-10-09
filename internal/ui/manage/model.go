@@ -517,6 +517,7 @@ func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	switch m.scr {
 	case scrEditor:
+		m.form.SetHeight(m.height)
 		v := m.form.View(m.width)
 		if m.saving {
 			v += "\n" + style.Dim.Render("saving…")

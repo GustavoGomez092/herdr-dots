@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -48,6 +49,9 @@ type Form struct {
 	models   []string              // ctrl+space choices for the current kind
 	modelsOf string                // kind the choices belong to
 	modelIdx int
+	now      func() time.Time  // the cron preview's clock; nil = time.Now
+	height   int               // screen height for scrolling (SetHeight); 0 = unknown
+	problems map[string]string // field label -> validation message, set by View
 }
 
 func textField(label, v string) field {
@@ -107,6 +111,7 @@ func NewForm(d dots.Dot, isNew bool) *Form {
 		withKinds(choiceField("Refusal fallbacks", dots.FallbackModes, fallbackLabel(d.Backend.Fallbacks)), dots.KindAnthropicAPI),
 		textField("Budget ($/session, 0 = off)", strconv.FormatFloat(d.Budget.MaxUSDPerSession, 'f', -1, 64)),
 	}}
+	f.fields = append(f.fields, proactiveFields(d)...) // Phase 8 (form_proactive.go)
 	f.setFocus(0)
 	return f
 }
@@ -366,6 +371,9 @@ func (f *Form) Dot() (dots.Dot, error) {
 	if d.Budget.MaxUSDPerSession, err = strconv.ParseFloat(usd, 64); err != nil {
 		return d, fmt.Errorf("%s must be a number like 0.50", f.fields[iBudgetUSD].label)
 	}
+	if err := f.applyProactive(&d); err != nil {
+		return d, err
+	}
 	if f.isNew {
 		d.Slug = dots.Slugify(d.Name)
 	}
@@ -379,9 +387,14 @@ func (f *Form) View(width int) string {
 		title = "NEW DOT"
 	}
 	b.WriteString(style.Title.Render(title) + "\n\n")
+	f.refreshProblems()
+	fieldsStart, focusStart, focusEnd := strings.Count(b.String(), "\n"), -1, -1
 	for i, fl := range f.fields {
 		if !f.visible(i) {
 			continue
+		}
+		if i == f.focus {
+			focusStart = strings.Count(b.String(), "\n")
 		}
 		label := fmt.Sprintf("%-24s", fl.label)
 		if i == f.focus {
@@ -402,7 +415,20 @@ func (f *Form) View(width int) string {
 			v = fl.input.View()
 		}
 		b.WriteString(label + " " + v + "\n")
+		if n := f.proactiveNote(fl.label); n != "" {
+			for _, line := range strings.Split(n, "\n") {
+				if strings.HasPrefix(line, "  ! ") {
+					b.WriteString(style.Err.Render(line) + "\n")
+				} else {
+					b.WriteString(style.Dim.Render(line) + "\n")
+				}
+			}
+		}
+		if i == f.focus {
+			focusEnd = strings.Count(b.String(), "\n") - 1
+		}
 	}
+	fieldsEnd := strings.Count(b.String(), "\n")
 	if f.estimate != nil {
 		if d, err := f.Dot(); err == nil {
 			if line := f.estimate(d); line != "" {
@@ -419,5 +445,5 @@ func (f *Form) View(width int) string {
 	}
 	b.WriteString("\n" + style.Dim.Render(help))
 	_ = width
-	return b.String()
+	return f.fit(b.String(), fieldsStart, fieldsEnd, focusStart, focusEnd)
 }
