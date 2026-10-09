@@ -190,9 +190,13 @@ func newRigFull(t *testing.T, opt func(*Deps), eng func(*Engine), ds ...dots.Dot
 	return r
 }
 
+// eventually waits for cond. The deadline is generous because drafts and
+// proactive runs shell out to git, which is slow on a loaded machine (the
+// Phase 7 draft tests timed out under load at 3 s); a passing test never
+// waits for it.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

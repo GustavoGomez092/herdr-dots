@@ -69,6 +69,11 @@ func OpenFeed(path string) (*Feed, error) {
 	if st, err := os.Stat(path); err == nil && st.Size() > feedRotateBytes {
 		_ = os.Rename(path, path+".1")
 	}
+	// The feed quotes model output: an older file made with a looser mode
+	// becomes owner-only (O_CREATE's 0600 only applies to new files).
+	if st, err := os.Stat(path); err == nil && st.Mode().Perm()&0o077 != 0 {
+		_ = os.Chmod(path, 0o600)
+	}
 	file, err := os.Open(path)
 	if err == nil {
 		sc := bufio.NewScanner(file)
@@ -116,6 +121,9 @@ func (f *Feed) Append(e FeedEntry) error {
 
 // Recent returns up to n entries for a pane, oldest first.
 func (f *Feed) Recent(paneID string, n int) []FeedEntry {
+	if n <= 0 {
+		return nil
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	list := f.recent[paneID]

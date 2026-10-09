@@ -21,6 +21,19 @@ import (
 
 var ErrExists = errors.New("a dot with this name already exists")
 
+// ErrBadSlug refuses a slug that is not a plain file name in the dots
+// directory ("../x", "a/b", ""). Slugs reach Load, Save and Delete from the
+// manage popup and the CLI.
+var ErrBadSlug = errors.New("invalid dot name")
+
+// validSlug reports a slug that names a file directly inside the dots
+// directory: no separator, no NUL, no drive or stream colon, and a local
+// file name (filepath.IsLocal also refuses Windows device names). Files the
+// developer named by hand (My_Dot.toml) keep working.
+func validSlug(slug string) bool {
+	return slug != "" && !strings.ContainsAny(slug, "/\\:\x00") && filepath.IsLocal(slug+".toml")
+}
+
 type LoadError struct {
 	File string // base name, e.g. "security.toml"
 	Line int    // 0 when not a parse error
@@ -92,6 +105,9 @@ func LoadAll(dir string) ([]Dot, []LoadError) {
 }
 
 func Load(dir, slug string) (Dot, error) {
+	if !validSlug(slug) {
+		return Dot{}, fmt.Errorf("%w: %q", ErrBadSlug, slug)
+	}
 	d, err := decode(path(dir, slug))
 	if err != nil {
 		return Dot{}, err
@@ -107,6 +123,9 @@ func Save(dir string, d Dot, create bool) error {
 	}
 	if create || d.Slug == "" {
 		d.Slug = Slugify(d.Name)
+	}
+	if !validSlug(d.Slug) {
+		return fmt.Errorf("%w: %q", ErrBadSlug, d.Slug)
 	}
 	p := path(dir, d.Slug)
 	if create {
@@ -272,4 +291,9 @@ func insertPurpose(tomlStr, purpose string) string {
 	return strings.Join(append(lines, PurposeBlock(purpose)), "\n")
 }
 
-func Delete(dir, slug string) error { return os.Remove(path(dir, slug)) }
+func Delete(dir, slug string) error {
+	if !validSlug(slug) {
+		return fmt.Errorf("%w: %q", ErrBadSlug, slug)
+	}
+	return os.Remove(path(dir, slug))
+}

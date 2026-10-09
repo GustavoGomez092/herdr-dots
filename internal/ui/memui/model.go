@@ -379,6 +379,10 @@ func (m Model) keysConfirmApprove(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "not approved"
 		return m, nil
 	}
+	if !m.approveFits() {
+		m.status = "not approved: the popup is too small to show the whole proposal"
+		return m, nil
+	}
 	e := m.approve
 	ref, pid, seen := e.Ref(), m.pidOf(e), e.Text
 	return m, m.mutateSaying(func(st *memory.Store) (string, error) {
@@ -440,6 +444,26 @@ func wrap(s string, w int) []string {
 		lines = append(lines, string(cur))
 	}
 	return lines
+}
+
+// approveTail is the lines View adds under the approve screen: a blank line,
+// the y prompt and the footer.
+const approveTail = 3
+
+// screenWidth is the width View lays out for.
+func (m Model) screenWidth() int {
+	if m.width <= 0 {
+		return 80
+	}
+	return m.width
+}
+
+// approveFits reports whether the whole approve screen fits the popup. A
+// taller view would have its top lines (who proposed it, the kind, the
+// paths) cut by the terminal, so approving is refused until it fits. An
+// unknown height (no WindowSizeMsg yet) fits.
+func (m Model) approveFits() bool {
+	return m.height <= 0 || len(m.approveScreen(m.screenWidth()))+approveTail <= m.height
 }
 
 // approveScreen is the full proposal: who proposed it, its kind, its paths
@@ -728,10 +752,7 @@ func (m Model) list(w int) (lines []string, cur int) {
 }
 
 func (m Model) View() string {
-	w := m.width
-	if w <= 0 {
-		w = 80
-	}
+	w := m.screenWidth()
 	var head strings.Builder
 	who := clean(m.d.DotName)
 	if who == "" {
@@ -762,7 +783,11 @@ func (m Model) View() string {
 		sc, _, _, want := m.forgetAllTarget()
 		tail.WriteString(fmt.Sprintf("\n%s Type %q and press enter:\n%s\n", style.Title.Render("Forget ALL "+string(sc)+" memory?"), want, m.input.View()))
 	case modeConfirmApprove:
-		tail.WriteString("\ny approve · any other key cancels\n")
+		if m.approveFits() {
+			tail.WriteString("\ny approve · any other key cancels\n")
+		} else {
+			tail.WriteString("\nany key cancels\n")
+		}
 	case modeFilter:
 		tail.WriteString("\n/" + m.input.View() + "\n")
 	case modeEdit:
@@ -788,7 +813,15 @@ func (m Model) View() string {
 
 	lines, cur := m.list(w)
 	if m.mode == modeConfirmApprove {
+		// The approve screen replaces the header: it has its own title, and
+		// every line of the popup is needed for the proposal.
+		head.Reset()
 		lines, cur = m.approveScreen(w), 0
+		if !m.approveFits() {
+			need := len(lines) + approveTail
+			lines = append([]string{style.Title.Render("APPROVE " + clean(m.approve.Ref().String()) + "?")},
+				wrap(fmt.Sprintf("Too small to show the whole proposal (needs %d lines, has %d). Enlarge the popup to approve.", need, m.height), w)...)
+		}
 	} else if len(m.rows) == 0 && m.loadErr == "" {
 		lines = []string{style.Dim.Render("No memory here yet. Press n to add an entry.")}
 	}

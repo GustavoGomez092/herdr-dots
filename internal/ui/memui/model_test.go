@@ -450,10 +450,21 @@ func TestApproveShowsTheFullProposalAndNeedsY(t *testing.T) {
 	if strings.Contains(m.View(), "y approve") {
 		t.Fatalf("esc closes the confirm screen:\n%s", m.View())
 	}
-	// A short popup never cuts the proposal's text.
+	// A popup too short for the whole proposal refuses to approve (P2-R9):
+	// the terminal would cut the top lines (who proposed it, kind, paths).
 	short, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 8})
-	if got := strings.Join(strings.Fields(press(short, "a").View()), " "); !strings.Contains(got, long) {
-		t.Fatalf("a short screen cut the proposal:\n%s", press(short, "a").View())
+	sv := press(short, "a").View()
+	if !strings.Contains(sv, "Too small to show the whole proposal") || strings.Contains(sv, "y approve") || strings.Count(sv, "\n") >= 8 {
+		t.Fatalf("a too-small popup must say so and fit:\n%s", sv)
+	}
+	press(short, "a", "y")
+	if e, _ := st.Get(pid, ref); e.Status != memory.StatusProposed || n != 0 {
+		t.Fatal("y in a popup too small for the proposal must not approve")
+	}
+	// Enlarging the popup while the confirm screen is open shows it whole.
+	grown, _ := press(short, "a").Update(tea.WindowSizeMsg{Width: 60, Height: 40})
+	if got := strings.Join(strings.Fields(grown.View()), " "); !strings.Contains(got, long) || !strings.Contains(grown.View(), "y approve") {
+		t.Fatalf("after growing, the whole proposal shows:\n%s", grown.View())
 	}
 	press(m, "a", "y")
 	if e, _ := st.Get(pid, ref); e.Status != memory.StatusActive || n != 1 {
