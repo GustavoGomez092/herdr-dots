@@ -24,6 +24,9 @@ type Deps struct {
 	Notify  func() // tells the engine memory changed; may be nil
 }
 
+// errChanged stops approve/pin when the stored text is no longer the text on screen.
+var errChanged = errors.New("this entry changed since it was listed; review it again")
+
 // BackMsg asks the parent to close the memory screen.
 type BackMsg struct{}
 
@@ -292,9 +295,15 @@ func (m Model) keysBrowse(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "only proposals need approval"
 			return m, nil
 		}
-		ref, pid := e.Ref(), m.pidOf(e)
+		ref, pid, seen := e.Ref(), m.pidOf(e), e.Text
 		return m, m.mutate("approved "+ref.String(), func(st *memory.Store) error {
-			_, err := st.Update(pid, ref, func(x *memory.Entry) error { x.Status = memory.StatusActive; return nil })
+			_, err := st.Update(pid, ref, func(x *memory.Entry) error {
+				if x.Text != seen {
+					return errChanged
+				}
+				x.Status = memory.StatusActive
+				return nil
+			})
 			return err
 		})
 	case "p":
@@ -302,13 +311,19 @@ func (m Model) keysBrowse(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		ref, pid, pin := e.Ref(), m.pidOf(e), !e.Pinned
+		ref, pid, pin, seen := e.Ref(), m.pidOf(e), !e.Pinned, e.Text
 		label := "pinned "
 		if !pin {
 			label = "unpinned "
 		}
 		return m, m.mutate(label+ref.String(), func(st *memory.Store) error {
-			_, err := st.Update(pid, ref, func(x *memory.Entry) error { x.Pinned = pin; return nil })
+			_, err := st.Update(pid, ref, func(x *memory.Entry) error {
+				if x.Text != seen {
+					return errChanged
+				}
+				x.Pinned = pin
+				return nil
+			})
 			return err
 		})
 	case "x":
@@ -465,7 +480,7 @@ func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("kind must be one of %v", memory.Kinds)
 			return m, nil
 		}
-		if found, what := memory.ScanSecrets(text); found && !m.secretOK {
+		if found, what := memory.ScanSecrets(text + " " + strings.Join(paths, " ")); found && !m.secretOK {
 			m.secretOK = true
 			m.status = fmt.Sprintf("this looks like a secret (%s): ctrl+s again to save anyway, esc to cancel", what)
 			return m, nil
@@ -475,7 +490,7 @@ func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			ref, pid := *m.editRef, m.editPid
 			return m, m.mutate("saved "+ref.String(), func(st *memory.Store) error {
 				_, err := st.Update(pid, ref, func(x *memory.Entry) error {
-					x.Text, x.Kind, x.Paths = text, kind, paths
+					x.Text, x.Kind, x.Paths, x.Source = text, kind, paths, memory.SourceUser
 					return nil
 				})
 				return err
@@ -539,7 +554,7 @@ func (m Model) row(e memory.Entry) string {
 // cursor is on.
 func (m Model) list(w int) (lines []string, cur int) {
 	counts := make([]int, len(sections))
-	for _, e := range m.rows {
+	for _, e := range m.entries {
 		counts[sectionOf(e)]++
 	}
 	last := -1

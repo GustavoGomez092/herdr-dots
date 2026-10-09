@@ -323,6 +323,50 @@ func TestSelectedRowStaysOnScreenInAShortPopup(t *testing.T) {
 	}
 }
 
+func TestEditMakesTheEntryTheDevelopers(t *testing.T) {
+	st, n := seed(t), 0
+	press(open(st, "security", &n), "e", "ctrl+s")
+	e, _ := st.Get(pid, memory.Ref{Scope: memory.ScopeDot, Dot: "security", ID: "m1"})
+	if e.Source != memory.SourceUser {
+		t.Fatalf("an edited entry must be owned by the developer, got %q", e.Source)
+	}
+}
+
+func TestApproveAndPinRefuseTextThatChangedOnDisk(t *testing.T) {
+	for _, k := range []string{"a", "p"} {
+		st, n := seed(t), 0
+		m := open(st, "", &n) // p:m1 is the proposal on screen
+		ref := memory.Ref{Scope: memory.ScopeProject, ID: "m1"}
+		if _, err := st.Update(pid, ref, func(x *memory.Entry) error { x.Text = "A different convention the developer never saw"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		m = press(m, k)
+		e, _ := st.Get(pid, ref)
+		if e.Status != memory.StatusProposed || e.Pinned || n != 0 || !strings.Contains(m.View(), "changed") {
+			t.Fatalf("%s: acted on unseen text (status %s, pinned %v, notified %d):\n%s", k, e.Status, e.Pinned, n, m.View())
+		}
+	}
+}
+
+func TestProposalCountIgnoresTheFilter(t *testing.T) {
+	st, n := seed(t), 0
+	if _, err := st.Add(pid, memory.Entry{Scope: memory.ScopeProject, Dot: "frontend", Kind: memory.KindConvention, Text: "Second proposal about hooks", Source: memory.SourceModel, Status: memory.StatusProposed}); err != nil {
+		t.Fatal(err)
+	}
+	m := press(open(st, "", &n), "/", "hooks", "enter")
+	if v := m.View(); !strings.Contains(v, "PROPOSALS (2)") || strings.Contains(v, "Components live") {
+		t.Fatalf("the header counts all proposals while the filter hides rows:\n%s", v)
+	}
+}
+
+func TestSecretInPathsNeedsASecondSave(t *testing.T) {
+	st, n := seed(t), 0
+	m := press(open(st, "security", &n), "n", "harmless text", "tab", "tab", "token = AbCdEf123456GhIj", "ctrl+s")
+	if len(entries(t, st, memory.ScopeDot, "security")) != 2 || !strings.Contains(m.View(), "looks like a secret") {
+		t.Fatalf("a secret in the paths must warn:\n%s", m.View())
+	}
+}
+
 func TestNoProjectNoDotShowsWhy(t *testing.T) {
 	m := New(Deps{Store: seed(t)})
 	if !strings.Contains(run(m, m.Init()).View(), "no project") {
