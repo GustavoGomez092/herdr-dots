@@ -173,14 +173,11 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 	if err != nil {
 		return backend.Result{}, err
 	}
-	var tools []toolloop.Tool
-	lim := toolloop.WithDeny(b.o.Deny)
-	wantTools := r.RepoRead && r.Cwd != "" && r.Pass != backend.PassMemory
-	if wantTools {
-		tools = toolloop.RepoTools(r.Cwd, lim)
-	}
+	// A draft (Phase 7) also gets write_file and edit_file, jailed to the
+	// worktree, and a larger tool budget; reviews and memory passes don't.
+	tools, lim, note := toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))
 	system := backend.SystemPrompt(r)
-	if note := toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, len(tools) > 0); note != "" {
+	if note != "" {
 		system += "\n" + note + "\n"
 	}
 	cr := chatRequest{

@@ -187,8 +187,13 @@ const minToolRoom = 64
 // errContextFull ends a run whose tool results no longer fit num_ctx.
 var errContextFull = errors.New("ollama: context window full (raise context_window)")
 
-// noteFor is the repo-tools note the system prompt carries (toolloop.Note).
+// noteFor is the repo-tools note the system prompt carries, as
+// toolloop.Select picks it: WriteNote for a draft with tools, else
+// toolloop.Note. FitPrompt sizes the prompt with it.
 func noteFor(r backend.Request, tools bool) string {
+	if tools && backend.WriteMode(r) {
+		return toolloop.WriteNote
+	}
 	return toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, tools)
 }
 
@@ -254,7 +259,8 @@ func FitPrompt(r backend.Request, window int, tools bool) (backend.Request, bool
 	budget := promptBudget(r, window)
 	extra := EstimateTokens(noteFor(r, tools))
 	if tools {
-		d := defsTokens(toolDefs(toolloop.RepoTools(r.Cwd, toolloop.DefaultLimits())))
+		ts, _, _ := toolloop.Select(r.Cwd, true, backend.WriteMode(r), toolloop.DefaultLimits()) // a draft's write tools count too
+		d := defsTokens(toolDefs(ts))
 		if d == 0 {
 			d = toolSchemaFallback
 		}
@@ -301,17 +307,15 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 	if window <= 0 {
 		window = backend.DefaultContextWindow
 	}
-	var tools []toolloop.Tool
-	lim := toolloop.WithDeny(b.o.Deny)
-	if r.RepoRead && r.Cwd != "" && r.Pass != backend.PassMemory {
-		tools = toolloop.RepoTools(r.Cwd, lim)
-	}
+	// A draft (Phase 7) also gets write_file and edit_file, jailed to the
+	// worktree, and a larger tool budget; reviews and memory passes don't.
+	tools, lim, note := toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))
 	r, trimmed := FitPrompt(r, window, len(tools) > 0)
 	if trimmed {
 		b.logf("ollama: %s prompt trimmed to fit num_ctx %d", textutil.SanitizeModelText(r.DotName), window)
 	}
 	system := backend.SystemPrompt(r)
-	if note := noteFor(r, len(tools) > 0); note != "" {
+	if note != "" {
 		system += "\n" + note + "\n"
 	}
 	base := b.BaseURL(r)
