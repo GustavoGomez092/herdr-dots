@@ -53,6 +53,7 @@ type Card struct {
 	Status    Status    `json:"status"`
 	Error     string    `json:"error,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	Project   string    `json:"project,omitempty"` // memory project of the pane at creation
 }
 
 // keepTerminal bounds the file: only the most recent sent/dismissed cards stay.
