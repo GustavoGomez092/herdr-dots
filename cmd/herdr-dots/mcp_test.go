@@ -205,7 +205,7 @@ func TestEngineEnvSetsThePluginDirs(t *testing.T) {
 }
 
 func TestDispatchKnowsTheMCPCommands(t *testing.T) {
-	for _, name := range []string{"mcp"} { // setup-mcp joins when Task 6 merges
+	for _, name := range []string{"mcp", "setup-mcp"} {
 		if _, ok := commands[name]; !ok {
 			t.Errorf("%s is not routed", name)
 		}
