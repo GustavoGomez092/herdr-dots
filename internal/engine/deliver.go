@@ -188,6 +188,7 @@ func (e *Engine) poll() {
 	e.todayTick()
 	e.inboxTick()
 	e.scheduleTick()
+	e.commitTick()
 }
 
 func (e *Engine) dropPane(paneID string) {

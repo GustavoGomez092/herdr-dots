@@ -60,7 +60,9 @@ type Deps struct {
 type key struct{ pane, slug string }
 
 type runOpts struct {
-	ask bool // MCP ask_dot (ask.go): feed "asked", status consulted, no card, no cooldown
+	origin string // Phase 8: a background card's origin (state.RunCommit) and header label
+	label  string
+	ask    bool // MCP ask_dot (ask.go): feed "asked", status consulted, no card, no cooldown
 
 	// Council members (council.go) only.
 	noForce bool                        // summon semantics, but the member may pass ("nothing from my side")
@@ -148,18 +150,24 @@ type Engine struct {
 	plan     map[string]time.Time  // scheduled dot -> its next slot (schedule.go)
 	schedOff bool                  // a schedule tick found proactive work or memory off (schedule.go)
 
+	heads       map[key]headSeen // on_commit dot on a pane -> the HEAD it last saw (commits.go)
+	commitAt    time.Time        // last HEAD check
+	commitBusy  bool             // a HEAD check is running
+	commitAgain bool             // a HEAD check skipped a dot whose review was queued: check again when it ends
+
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
 	wg     sync.WaitGroup
 	closed bool
 }
 
-// spawn runs f in a tracked goroutine; after Wait it is a no-op.
-func (e *Engine) spawn(f func()) {
+// spawn runs f in a tracked goroutine; after Wait it is a no-op. It reports
+// whether f was started.
+func (e *Engine) spawn(f func()) bool {
 	e.wmu.Lock()
 	if e.closed {
 		e.wmu.Unlock()
-		return
+		return false
 	}
 	e.wg.Add(1)
 	e.wmu.Unlock()
@@ -167,6 +175,7 @@ func (e *Engine) spawn(f func()) {
 		defer e.wg.Done()
 		f()
 	}()
+	return true
 }
 
 // Wait blocks until every background goroutine has exited. Cancel the context
@@ -215,6 +224,7 @@ func New(d Deps) *Engine {
 		toasted:  map[string]string{},
 		idle:     map[string]*idleState{},
 		plan:     map[string]time.Time{},
+		heads:    map[key]headSeen{},
 		drafts:   map[string]*draftRun{},
 		applying: map[string]bool{},
 		gens:     map[string]uint64{},
@@ -882,6 +892,16 @@ func (e *Engine) finishRun(k key) {
 
 // route turns a relevant verdict into a card according to the dot's mode.
 func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o runOpts) {
+	c, mode := e.routeCard(paneID, d, turn, v, o)
+	if _, err := e.d.Queue.Add(c); err != nil {
+		e.d.Logf("queue add: %v", err)
+		return
+	}
+	e.routed(paneID, d, v, mode)
+}
+
+// routeCard is the card route adds for a verdict, and its delivery mode.
+func (e *Engine) routeCard(paneID string, d dots.Dot, turn int, v backend.Verdict, o runOpts) (queue.Card, dots.Mode) {
 	mode := d.Delivery.Mode
 	if o.summon || mode == dots.ModeObserve {
 		mode = dots.ModeQueue
@@ -891,14 +911,16 @@ func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o
 	}
 	att, _ := e.d.Attachments.Get(paneID)
 	c := queue.Card{Dot: d.Slug, DotName: d.Name, Glyph: d.Glyph, PaneID: paneID, Turn: turn,
-		Severity: v.Severity, Body: v.Message, Mode: string(mode), Project: att.ProjectID}
+		Severity: v.Severity, Body: v.Message, Mode: string(mode), Project: att.ProjectID, Origin: o.origin, Label: o.label}
 	if mode == dots.ModeInject {
 		c.Status = queue.StatusAuto
 	}
-	if _, err := e.d.Queue.Add(c); err != nil {
-		e.d.Logf("queue add: %v", err)
-		return
-	}
+	return c, mode
+}
+
+// routed follows a card route added: the toast, the pending count, and the
+// flush of an auto card.
+func (e *Engine) routed(paneID string, d dots.Dot, v backend.Verdict, mode dots.Mode) {
 	if mode == dots.ModeSuggest && (v.Severity == "warn" || v.Severity == "critical") {
 		e.notify(d, firstLine(v.Message))
 	}
