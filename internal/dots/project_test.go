@@ -1,6 +1,7 @@
 package dots
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -92,6 +93,48 @@ func TestLoadProjectRefusesUnknownKeysLinksBigFilesAndBadNames(t *testing.T) {
 		if !strings.Contains(msgs[file], want) {
 			t.Errorf("%s: got %q, want it to mention %q", file, msgs[file], want)
 		}
+	}
+}
+
+// A repository can't make a scan read without bound: at most
+// MaxProjectFiles files (the first by name) and MaxProjectBytes in all; the
+// rest is one error that says how many were skipped.
+func TestReadProjectFilesIsBounded(t *testing.T) {
+	root := t.TempDir()
+	big := a11yTOML + "# " + strings.Repeat("x", MaxProjectFileBytes-len(a11yTOML)-8) + "\n"
+	for i := range MaxProjectFiles + 6 {
+		writeProjectDot(t, root, fmt.Sprintf("f%03d.toml", i), big)
+	}
+	writeProjectDot(t, root, "README.md", "not a dot") // not counted
+	files, bad := ReadProjectFiles(root)
+	if len(files) != MaxProjectFiles || files[0].Base != "f000" || files[MaxProjectFiles-1].Base != "f063" {
+		t.Fatalf("%d files", len(files))
+	}
+	total := 0
+	for _, f := range files {
+		total += len(f.Data)
+	}
+	if total > MaxProjectBytes || MaxProjectBytes != MaxProjectFiles*MaxProjectFileBytes {
+		t.Fatalf("read %d bytes, cap %d", total, MaxProjectBytes)
+	}
+	if len(bad) != 1 || bad[0].File != ".herdr-dots/dots" || !strings.Contains(bad[0].Err.Error(), "6 more files not read") {
+		t.Fatalf("bad %v", bad)
+	}
+}
+
+// A directory with more entries than one read lists stops early and says so.
+func TestReadProjectFilesStopsListingAHugeDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeProjectDot(t, root, "a.toml", a11yTOML)
+	dir := filepath.Join(root, ".herdr-dots", "dots")
+	for i := range maxProjectDirEntries {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("n%04d.txt", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, bad := ReadProjectFiles(root)
+	if len(files) > 1 || len(bad) != 1 || bad[0].File != ".herdr-dots/dots" || !strings.Contains(bad[0].Err.Error(), "or more files not read") {
+		t.Fatalf("files %d, bad %v", len(files), bad)
 	}
 }
 

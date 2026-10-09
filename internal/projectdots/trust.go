@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"time"
@@ -26,9 +27,14 @@ import (
 // trustVersion is written into trusted.json; newer files are refused.
 const trustVersion = 1
 
+// projectIDRe is a memory project id (memory.ResolveProject, ruling 11): g-
+// and the first 16 hex digits of the root commit, or p- and 16 of a path hash.
+var projectIDRe = regexp.MustCompile(`^[gp]-[0-9a-f]{16}$`)
+
 var (
 	ErrCorrupt = errors.New("trusted.json is unreadable: fix or delete it (every project dot stays untrusted until then)")
 	ErrLocked  = errors.New("trusted.json is locked by another process")
+	ErrNewer   = errors.New("trusted.json was written by a newer herdr-dots: upgrade (every project dot stays untrusted until then)")
 )
 
 // TrustEntry is one trusted file. The key is (Project, Rel, SHA256): the
@@ -71,8 +77,8 @@ func plainErr(err error) error {
 }
 
 // load reads the trust file and returns its raw bytes with the parsed doc.
-// A missing file is an empty store; a file that doesn't parse, or that a
-// newer version wrote, is ErrCorrupt (nothing is trusted).
+// A missing file is an empty store. A file that doesn't parse is ErrCorrupt
+// and one a newer version wrote is ErrNewer; either way nothing is trusted.
 func (t *TrustStore) load() (trustDoc, []byte, error) {
 	data, err := os.ReadFile(t.Path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -82,8 +88,11 @@ func (t *TrustStore) load() (trustDoc, []byte, error) {
 		return trustDoc{}, nil, fmt.Errorf("trusted.json: %w", plainErr(err))
 	}
 	var doc trustDoc
-	if err := json.Unmarshal(data, &doc); err != nil || doc.Version < 1 || doc.Version > trustVersion {
+	if err := json.Unmarshal(data, &doc); err != nil || doc.Version < 1 {
 		return trustDoc{}, data, ErrCorrupt
+	}
+	if doc.Version > trustVersion {
+		return trustDoc{}, data, ErrNewer
 	}
 	return doc, data, nil
 }
@@ -91,6 +100,29 @@ func (t *TrustStore) load() (trustDoc, []byte, error) {
 func (t *TrustStore) read() (trustDoc, error) {
 	doc, _, err := t.load()
 	return doc, err
+}
+
+// snapshot is one read of the store: the doc a scan checks every file
+// against, and the stamp of the bytes it came from ("none" without a file).
+func (t *TrustStore) snapshot() (trustDoc, string, error) {
+	doc, raw, err := t.load()
+	stamp := "none"
+	if raw != nil {
+		stamp = Hex(Sum(raw))
+	}
+	return doc, stamp, err
+}
+
+// find reports whether this exact content of project/rel is trusted, and
+// the capabilities granted with it.
+func (d trustDoc) find(project, rel string, sum [32]byte) (bool, []string) {
+	h := Hex(sum)
+	for _, e := range d.Entries {
+		if e.Project == project && e.Rel == rel && e.SHA256 == h {
+			return true, slices.Clone(e.Capabilities)
+		}
+	}
+	return false, nil
 }
 
 // List returns every trust entry, newest first.
@@ -110,18 +142,14 @@ func (t *TrustStore) Check(project, rel string, sum [32]byte) (bool, []string, e
 	if err != nil {
 		return false, nil, err
 	}
-	h := Hex(sum)
-	for _, e := range doc.Entries {
-		if e.Project == project && e.Rel == rel && e.SHA256 == h {
-			return true, slices.Clone(e.Capabilities), nil
-		}
-	}
-	return false, nil, nil
+	ok, caps := doc.find(project, rel, sum)
+	return ok, caps, nil
 }
 
 // mutate applies fn to the store under its lock and replaces the file
 // atomically (0600). A corrupt file is never overwritten: a copy is kept
-// aside as trusted.json.corrupt and the change fails with ErrCorrupt.
+// aside as trusted.json.corrupt and the change fails with ErrCorrupt. A
+// newer file is left alone (ErrNewer).
 func (t *TrustStore) mutate(fn func(*trustDoc)) error {
 	timeout := t.LockTimeout
 	if timeout <= 0 {
@@ -165,8 +193,8 @@ func (t *TrustStore) mutate(fn func(*trustDoc)) error {
 // project must be a memory project id (ruling 11), so trust given in one
 // repository never applies to another.
 func (t *TrustStore) Trust(project, rel, path string, sum [32]byte, caps []string) error {
-	if dots.ProjectTag(project) == "" || rel == "" {
-		return errors.New("trust needs a project and a file")
+	if !projectIDRe.MatchString(project) || rel == "" {
+		return errors.New("trust needs a project id (g- or p- and 16 hex digits) and a file")
 	}
 	if err := dots.CheckCapabilities(caps); err != nil {
 		return err
@@ -195,13 +223,4 @@ func (t *TrustStore) Revoke(project, rel string) (bool, error) {
 		found = len(d.Entries) != n
 	})
 	return found, err
-}
-
-// stamp fingerprints the trust file's content.
-func (t *TrustStore) stamp() string {
-	data, err := os.ReadFile(t.Path)
-	if err != nil {
-		return "none"
-	}
-	return Hex(Sum(data))
 }

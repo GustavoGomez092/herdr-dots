@@ -37,6 +37,14 @@ var ProjectDir = filepath.Join(".herdr-dots", "dots")
 // MaxProjectFileBytes caps one project dot file.
 const MaxProjectFileBytes = 64 << 10
 
+// MaxProjectFiles caps the project dot files one read looks at, and
+// MaxProjectBytes the bytes it reads, so a repository shipping thousands of
+// files can't exhaust memory or make every poll slow.
+const (
+	MaxProjectFiles = 64
+	MaxProjectBytes = MaxProjectFiles * MaxProjectFileBytes
+)
+
 var (
 	projectBaseRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	projectTagRe  = regexp.MustCompile(`^[0-9a-f]{8}$`)
@@ -101,7 +109,10 @@ type ProjectFile struct {
 
 // ReadProjectFiles reads root/.herdr-dots/dots/*.toml. Symlinked directories
 // or files, files over MaxProjectFileBytes and names that can't become a slug
-// are refused with a LoadError. A missing directory is not an error.
+// are refused with a LoadError. A missing directory is not an error. It reads
+// at most MaxProjectFiles files (the first by name) and MaxProjectBytes in
+// all, listing at most maxProjectDirEntries entries; what it skips is one
+// LoadError for the directory that says how many files were not read.
 func ReadProjectFiles(root string) ([]ProjectFile, []LoadError) {
 	dir := filepath.Join(root, ProjectDir)
 	relDir := filepath.ToSlash(ProjectDir)
@@ -117,18 +128,25 @@ func ReadProjectFiles(root string) ([]ProjectFile, []LoadError) {
 			return nil, []LoadError{{File: rel, Err: errors.New("must be a directory, not a link or a file")}}
 		}
 	}
-	ents, err := os.ReadDir(dir)
+	ents, truncated, err := listProjectDir(dir)
 	if err != nil {
 		return nil, []LoadError{{File: relDir, Err: err}}
 	}
+	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
+	skipped := 0
+	if len(ents) > MaxProjectFiles {
+		skipped, ents = len(ents)-MaxProjectFiles, ents[:MaxProjectFiles]
+	}
 	var out []ProjectFile
 	var bad []LoadError
+	total := 0
 	for _, e := range ents {
-		base, ok := strings.CutSuffix(e.Name(), ".toml")
-		if !ok || e.IsDir() {
+		base, _ := strings.CutSuffix(e.Name(), ".toml")
+		rel := filepath.ToSlash(filepath.Join(ProjectDir, e.Name()))
+		if total+MaxProjectFileBytes > MaxProjectBytes {
+			skipped++ // unreachable with today's caps; keeps the total bounded if they change
 			continue
 		}
-		rel := filepath.ToSlash(filepath.Join(ProjectDir, e.Name()))
 		if !projectBaseRe.MatchString(base) || len(base) > 64 {
 			bad = append(bad, LoadError{File: rel, Err: errors.New("file name must be lowercase letters, digits and single dashes (at most 64)")})
 			continue
@@ -143,10 +161,50 @@ func ReadProjectFiles(root string) ([]ProjectFile, []LoadError) {
 			bad = append(bad, LoadError{File: rel, Err: err})
 			continue
 		}
+		total += len(data)
 		out = append(out, ProjectFile{Base: base, Path: p, Rel: rel, Data: data})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Base < out[j].Base })
+	switch {
+	case truncated:
+		bad = append(bad, LoadError{File: relDir, Err: fmt.Errorf("%d or more files not read: the directory has over %d entries, and at most %d project dots are read", skipped, maxProjectDirEntries, MaxProjectFiles)})
+	case skipped > 0:
+		bad = append(bad, LoadError{File: relDir, Err: fmt.Errorf("%d more files not read: at most %d project dots are read", skipped, MaxProjectFiles)})
+	}
 	return out, bad
+}
+
+// maxProjectDirEntries bounds how many directory entries one read lists.
+const maxProjectDirEntries = 4096
+
+// listProjectDir returns the *.toml entries of dir that aren't directories,
+// listing at most maxProjectDirEntries entries in batches (never the whole
+// directory at once); truncated reports that it stopped early.
+func listProjectDir(dir string) (ents []fs.DirEntry, truncated bool, err error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	seen := 0
+	for {
+		batch, err := f.ReadDir(256)
+		for _, e := range batch {
+			if seen == maxProjectDirEntries {
+				return ents, true, nil
+			}
+			seen++
+			if strings.HasSuffix(e.Name(), ".toml") && !e.IsDir() {
+				ents = append(ents, e)
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return ents, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+	}
 }
 
 // readCapped reads at most limit bytes of the regular file at path. It opens
