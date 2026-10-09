@@ -27,13 +27,18 @@ var DefaultDeny = []string{
 	".git/**", "**/secrets/**", ".netrc", "*.kdbx",
 	"credentials", "credentials.toml", "credentials.json", "*.pfx", "*.jks", "*.keystore",
 	".npmrc", ".pypirc", ".pgpass", ".htpasswd",
+	"id_dsa*", "**/.ssh/**", "**/.gnupg/**", "**/.aws/**", "**/.config/gh/**", "**/.kube/config",
+	"**/.docker/config.json", ".git-credentials", "*.tfstate", "*.tfstate.*", "*_history", "*.ppk", "**/.netrc",
 }
 
 // Denied reports whether rel (slash-separated, relative to the root) matches a
 // deny glob, at the root or in any subdirectory. Unmatchable globs are skipped.
+// Matching ignores case (macOS volumes are case-insensitive, so ".ENV" opens
+// ".env"); over-denying is the safe side.
 func Denied(rel string, globs []string) bool {
-	rel = strings.TrimPrefix(filepath.ToSlash(rel), "./")
+	rel = strings.ToLower(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
 	for _, g := range globs {
+		g = strings.ToLower(g)
 		if ok, _ := doublestar.Match(g, rel); ok {
 			return true
 		}
@@ -102,10 +107,15 @@ func ResolveInRoot(root, p string, deny []string) (abs, rel string, err error) {
 	}
 	real, err := filepath.EvalSymlinks(joined)
 	if err != nil {
+		// A symlink leaving the root must read the same whether or not its
+		// target exists: no existence oracle outside the project.
+		if werr := walkInside(rr, lexRel); werr != nil {
+			return "", "", werr
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			return "", "", fmt.Errorf("no such file: %s", lexRel)
 		}
-		return "", "", err
+		return "", "", fmt.Errorf("cannot resolve %s", lexRel)
 	}
 	rel, ok = within(rr, real)
 	if !ok {
@@ -140,4 +150,52 @@ func openVerified(abs string) (*os.File, error) {
 		return nil, ErrOutsideRoot
 	}
 	return f, nil
+}
+
+// walkInside resolves rel under the real root one component at a time, without
+// touching anything outside it. It returns ErrOutsideRoot when a symlink on the
+// way points out of the root, and nil when every step stays inside (the caller
+// then reports its own error).
+func walkInside(rr, rel string) error {
+	queue := strings.Split(rel, "/")
+	cur := rr
+	for links := 0; len(queue) > 0; {
+		part := queue[0]
+		queue = queue[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		next := filepath.Join(cur, part)
+		if _, ok := within(rr, next); !ok {
+			return ErrOutsideRoot
+		}
+		fi, err := os.Lstat(next)
+		if err != nil {
+			return nil
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		if links++; links > 40 {
+			return nil
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return nil
+		}
+		var tgt string
+		if filepath.IsAbs(target) {
+			tgt = filepath.Clean(target)
+		} else {
+			tgt = filepath.Join(cur, target)
+		}
+		r, ok := within(rr, tgt)
+		if !ok {
+			return ErrOutsideRoot
+		}
+		queue = append(strings.Split(r, "/"), queue...)
+		cur = rr
+	}
+	return nil
 }

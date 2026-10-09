@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,6 +15,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
@@ -61,6 +64,31 @@ const SystemNote = `REPO TOOLS: you may call read_file, grep and list_files to r
 // FinalNudge is sent with the last tool results when the tool budget is spent.
 const FinalNudge = "Tool budget exhausted; answer now with the JSON object only."
 
+// NoToolsNote replaces SystemNote when RepoTools returns no tools.
+const NoToolsNote = "REPO TOOLS: unavailable for this pane (its working directory is too broad to read safely). Answer from the conversation alone."
+
+// Unavailable reports whether root is too broad for repo tools: "/", the
+// user's home directory, or any ancestor of it. A pane started in $HOME would
+// otherwise expose dotfiles and credentials the deny-list can't enumerate.
+func Unavailable(root string) bool {
+	rr, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false // a missing root yields tools that fail, never a panic
+	}
+	if rr == string(filepath.Separator) {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	if h, err := filepath.EvalSymlinks(home); err == nil {
+		home = h
+	}
+	_, inside := within(rr, home) // home is rr or below rr
+	return inside
+}
+
 const truncMarker = "\n[truncated: result cap reached]"
 
 func capBytes(s string, n int) string {
@@ -84,8 +112,12 @@ func obj(props map[string]any, required ...string) map[string]any {
 }
 
 // RepoTools returns read_file, grep and list_files jailed to root. A root
-// that doesn't exist yields tools that always fail (never a panic).
+// that doesn't exist yields tools that always fail (never a panic); a root of
+// "/", the home directory or an ancestor of it yields no tools (see Unavailable).
 func RepoTools(root string, lim Limits) []Tool {
+	if Unavailable(root) {
+		return nil
+	}
 	r := repo{root: root, lim: lim}
 	return []Tool{
 		{
@@ -157,7 +189,7 @@ func (r repo) readFile(ctx context.Context, raw json.RawMessage) (string, error)
 	if st.Size() > r.lim.MaxFileBytes {
 		return "", fmt.Errorf("%s is too large (%d bytes)", rel, st.Size())
 	}
-	br := bufio.NewReader(f)
+	br := bufio.NewReaderSize(f, 64<<10)
 	head, _ := br.Peek(8000)
 	if isBinary(head) {
 		return "", fmt.Errorf("%s is a binary file", rel)
@@ -168,12 +200,17 @@ func (r repo) readFile(ctx context.Context, raw json.RawMessage) (string, error)
 		limit = r.lim.MaxReadLines
 	}
 	var b strings.Builder
-	sc := bufio.NewScanner(br)
-	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	n, shown := 0, 0
-	for sc.Scan() {
+	for {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
+		}
+		text, long, err := readLine(br)
+		if err != nil {
+			if err != io.EOF {
+				return "", fmt.Errorf("read %s: %v", rel, err)
+			}
+			break
 		}
 		n++
 		if n < offset {
@@ -183,7 +220,10 @@ func (r repo) readFile(ctx context.Context, raw json.RawMessage) (string, error)
 			fmt.Fprintf(&b, "[more lines follow: call read_file with offset %d]\n", n)
 			break
 		}
-		fmt.Fprintf(&b, "%6d\t%s\n", n, sc.Text())
+		if long {
+			text += " [line too long, truncated]"
+		}
+		fmt.Fprintf(&b, "%6d\t%s\n", n, text)
 		shown++
 	}
 	if shown == 0 {
@@ -248,16 +288,17 @@ func (r repo) grepFile(abs, rel string, re *regexp.Regexp, b *strings.Builder, m
 	if err != nil || !st.Mode().IsRegular() || st.Size() > r.lim.MaxFileBytes {
 		return false
 	}
-	br := bufio.NewReader(f)
+	br := bufio.NewReaderSize(f, 64<<10)
 	if head, _ := br.Peek(8000); isBinary(head) {
 		return false
 	}
-	sc := bufio.NewScanner(br)
-	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	line := 0
-	for sc.Scan() {
+	for {
+		t, _, err := readLine(br)
+		if err != nil {
+			return false
+		}
 		line++
-		t := sc.Text()
 		if !re.MatchString(t) {
 			continue
 		}
@@ -270,7 +311,46 @@ func (r repo) grepFile(abs, rel string, re *regexp.Regexp, b *strings.Builder, m
 			return true
 		}
 	}
-	return false
+}
+
+// maxLineBytes bounds how much of one line is kept; the rest is read and
+// dropped so a minified file can't hide the lines after it.
+const maxLineBytes = 8 << 10
+
+// readLine returns the next line (without its newline), clipped to
+// maxLineBytes on a UTF-8 boundary, and whether it was clipped. It returns
+// io.EOF after the last line.
+func readLine(br *bufio.Reader) (string, bool, error) {
+	var buf []byte
+	long, got := false, false
+	for {
+		part, more, err := br.ReadLine()
+		if err != nil {
+			if got && err == io.EOF {
+				break
+			}
+			return "", false, err
+		}
+		got = true
+		if room := maxLineBytes - len(buf); room > 0 {
+			if len(part) > room {
+				part, long = part[:room], true
+			}
+			buf = append(buf, part...)
+		} else if len(part) > 0 {
+			long = true
+		}
+		if !more {
+			break
+		}
+	}
+	if long {
+		// Drop a rune cut in half by the clip.
+		for i := 0; i < utf8.UTFMax && len(buf) > 0 && !utf8.Valid(buf[max(0, len(buf)-utf8.UTFMax):]); i++ {
+			buf = buf[:len(buf)-1]
+		}
+	}
+	return string(buf), long, nil
 }
 
 func (r repo) listFiles(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -328,6 +408,16 @@ func (r repo) files(ctx context.Context) ([]string, error) {
 	}
 	out := list[:0]
 	for _, f := range list {
+		// git's answer is not trusted: every entry must exist under the root.
+		if filepath.IsAbs(f) {
+			continue
+		}
+		if _, ok := within(rr, filepath.Join(rr, f)); !ok {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(rr, f)); err != nil {
+			continue
+		}
 		if !Denied(f, r.lim.Deny) {
 			out = append(out, f)
 		}
@@ -336,12 +426,21 @@ func (r repo) files(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// gitFiles runs git with hooks and fsmonitor disabled: a repo's own config
-// must never make a read-only dot execute a program.
+// gitFiles runs git pinned to <root>/.git and <root> as the work tree, with
+// hooks and fsmonitor disabled and no inherited GIT_* overrides: a repo's own
+// config (core.worktree, fsmonitor) must never redirect the listing or make a
+// read-only dot execute a program. Without <root>/.git it errors, and the
+// caller walks instead.
 func gitFiles(ctx context.Context, root string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-		"-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	gitDir := filepath.Join(root, ".git")
+	if fi, err := os.Lstat(gitDir); err != nil || !fi.IsDir() {
+		return nil, errors.New("not a git work tree root")
+	}
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
+		"--git-dir="+gitDir, "--work-tree="+root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	cmd.Dir = root
+	cmd.Env = gitEnv(os.Environ())
+	cmd.WaitDelay = 500 * time.Millisecond
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
 	if err := cmd.Run(); err != nil {
@@ -354,6 +453,27 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 		}
 	}
 	return files, nil
+}
+
+// gitEnv filters env for a git child: no HERDR_*/Claude session variables
+// (the CleanEnv set) and none of the GIT_* variables that would override the
+// pinned git dir or the config. (A local copy: internal/backend imports this
+// package, and memory's filter is unexported.)
+func gitEnv(env []string) []string {
+	out := make([]string, 0, len(env)+3)
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "HERDR_") || strings.HasPrefix(name, "GIT_CONFIG") || strings.HasPrefix(name, "CLAUDE_CODE_") {
+			continue
+		}
+		switch name {
+		case "CLAUDECODE", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
 }
 
 const walkCap = 50000
