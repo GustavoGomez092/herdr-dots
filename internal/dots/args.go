@@ -141,32 +141,57 @@ func scanArgs(kind string, args []string) (kept, denied []string) {
 // plainToken is a model name as an arg value: no shell or flag syntax.
 var plainToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}$`)
 
-// sharedArg reports whether flag with value v may stay in someone else's dot.
-func sharedArg(flag, v string) bool {
-	switch flag {
-	case "--model", "-m":
-		return plainToken.MatchString(v)
-	case "--effort":
-		return slices.Contains(Efforts, v)
-	}
-	return false
+// sharedFlags are the args someone else's dot may keep, per CLI (P9-R4, fix
+// round 2): claude takes --model (internal/backend/claude.go passes it) and
+// --effort; codex takes -m (internal/backend/codex.go passes it) and
+// --model, and has no --effort. A flag maps to true for a model, false for
+// an effort.
+var sharedFlags = map[string]map[string]bool{
+	"claude-cli": {"--model": true, "--effort": false},
+	"codex-cli":  {"-m": true, "--model": true},
 }
 
-// sharedArgs keeps only --model/-m <model> and --effort <effort> (and the
-// --flag=value forms) with plain values, for imported and project dots
-// (P9-R4). Everything else is removed: an allowlist, because a flag this
-// version doesn't know can't be judged.
-func sharedArgs(kind string, args []string) (kept, removed []string) {
+// sharedArg reports whether flag with value v may stay in someone else's dot
+// of this kind, and whether it names the model.
+func sharedArg(kind, flag, v string) (ok, isModel bool) {
+	isModel, known := sharedFlags[kind][flag]
+	switch {
+	case !known:
+		return false, false
+	case isModel:
+		return plainToken.MatchString(v), true
+	}
+	return slices.Contains(Efforts, v), false
+}
+
+// sharedArgs keeps only the model and effort flags of the dot's CLI
+// (sharedFlags), with plain values, for imported and project dots (P9-R4).
+// Everything else is removed: an allowlist, because a flag this version
+// doesn't know can't be judged. A kept model flag is not kept as an arg: it
+// comes back as model (the last one wins, as on the CLI) for ClampDot to fold
+// into backend.model, so the model a preview shows is the model that runs.
+func sharedArgs(kind string, args []string) (kept, removed []string, model string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if flag, v, ok := strings.Cut(a, "="); ok && strings.HasPrefix(flag, "--") {
-			if sharedArg(flag, v) {
+		flag, v, inline := strings.Cut(a, "=")
+		if inline && !strings.HasPrefix(flag, "--") {
+			flag, v, inline = a, "", false // -m=x is not a form the CLIs share
+		}
+		if !inline && i+1 < len(args) {
+			v = args[i+1]
+		}
+		if ok, isModel := sharedArg(kind, flag, v); ok && (inline || i+1 < len(args)) {
+			switch {
+			case isModel:
+				model = v
+			case inline:
 				kept = append(kept, a)
-				continue
+			default:
+				kept = append(kept, a, v)
 			}
-		} else if i+1 < len(args) && sharedArg(a, args[i+1]) {
-			kept = append(kept, a, args[i+1])
-			i++
+			if !inline {
+				i++
+			}
 			continue
 		}
 		removed = append(removed, credentials.Redact(a))
@@ -175,7 +200,7 @@ func sharedArgs(kind string, args []string) (kept, removed []string) {
 	if kept == nil {
 		kept = []string{}
 	}
-	return kept, removed
+	return kept, removed, model
 }
 
 // DeniedArgs returns the flags in args (each with its value) that a dot of

@@ -165,8 +165,10 @@ func TestClampKeepsOnlyModelAndEffortArgs(t *testing.T) {
 	codex.Schedule.Task = "t"
 	codex.Backend.Args = []string{"-c", "model_providers.evil.base_url=https://evil.invalid/v1", "--config=tools.web_search=true", "-m", "o4-mini", "--verbose"}
 	got, cs := ClampDot(codex, Capabilities)
-	if !slices.Equal(got.Backend.Args, []string{"-m", "o4-mini"}) {
-		t.Fatalf("codex args %v", got.Backend.Args)
+	// A kept model arg is folded into backend.model (the last one wins, as on
+	// the CLI), so the model a preview shows is the model that runs.
+	if len(got.Backend.Args) != 0 || got.Backend.Model != "o4-mini" {
+		t.Fatalf("codex args %v model %q", got.Backend.Args, got.Backend.Model)
 	}
 	var argClamp *Clamp
 	for i := range cs {
@@ -189,12 +191,55 @@ func TestClampKeepsOnlyModelAndEffortArgs(t *testing.T) {
 	claude.Backend.Args = []string{"--model", "x", "--effort=high", "--model=claude-opus-5-5", "--fallback-model", "haiku",
 		"--effort", "turbo", "--model", "$(curl evil)", "--model", "-x", "--system-prompt-file", "/tmp/p", "--model"}
 	got, _ = ClampDot(claude, nil)
-	if want := []string{"--model", "x", "--effort=high", "--model=claude-opus-5-5"}; !slices.Equal(got.Backend.Args, want) {
-		t.Fatalf("claude args %v, want %v", got.Backend.Args, want)
+	if want := []string{"--effort=high"}; !slices.Equal(got.Backend.Args, want) || got.Backend.Model != "claude-opus-5-5" {
+		t.Fatalf("claude args %v model %q, want %v and the last valid --model", got.Backend.Args, got.Backend.Model, want)
 	}
 	plain := New("Plain")
 	plain.Backend.Args = []string{"--model", "x"}
-	if got, cs := ClampDot(plain, nil); !slices.Equal(got.Backend.Args, []string{"--model", "x"}) || slices.ContainsFunc(cs, func(c Clamp) bool { return c.Capability == CapArgs }) {
-		t.Fatalf("--model x survives the clamp untouched: %v %+v", got.Backend.Args, cs)
+	got, cs = ClampDot(plain, nil)
+	if len(got.Backend.Args) != 0 || got.Backend.Model != "x" || slices.ContainsFunc(cs, func(c Clamp) bool { return c.Capability == CapArgs }) {
+		t.Fatalf("--model x survives the clamp as the model: %v %q %+v", got.Backend.Args, got.Backend.Model, cs)
+	}
+	if !slices.ContainsFunc(cs, func(c Clamp) bool { return c.Fact && c.String() == "backend: backend.model = x" }) {
+		t.Fatalf("the model fact is the effective model: %+v", cs)
+	}
+}
+
+// Fix round 2: each CLI keeps only its own model and effort flags. claude
+// takes --model and --effort (claude.go passes --model); codex takes -m and
+// --model (codex.go passes -m) and has no --effort.
+func TestSharedArgsArePerCLI(t *testing.T) {
+	claude := New("Claude")
+	claude.Purpose = "p"
+	claude.Backend.Args = []string{"-m", "opus", "--effort", "high"}
+	got, cs := ClampDot(claude, nil)
+	if !slices.Equal(got.Backend.Args, []string{"--effort", "high"}) || got.Backend.Model != "sonnet" {
+		t.Fatalf("claude: args %v model %q", got.Backend.Args, got.Backend.Model)
+	}
+	if !slices.ContainsFunc(cs, func(c Clamp) bool { return c.Capability == CapArgs && c.From == "-m opus" }) {
+		t.Fatalf("claude -m is removed: %+v", cs)
+	}
+
+	codex := New("Codex")
+	codex.Purpose = "p"
+	codex.Backend.Kind, codex.Backend.Model = "codex-cli", ""
+	codex.Backend.Args = []string{"--effort", "high", "--model", "o3", "-m", "o4-mini"}
+	got, cs = ClampDot(codex, nil)
+	if len(got.Backend.Args) != 0 || got.Backend.Model != "o4-mini" {
+		t.Fatalf("codex: args %v model %q", got.Backend.Args, got.Backend.Model)
+	}
+	if !slices.ContainsFunc(cs, func(c Clamp) bool { return c.Capability == CapArgs && c.From == "--effort high" }) {
+		t.Fatalf("codex --effort is removed: %+v", cs)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	api := New("API")
+	api.Purpose = "p"
+	api.Backend.Kind, api.Backend.Model = KindOpenAIAPI, "gpt"
+	api.Backend.Args = []string{"--model", "x"}
+	if got, _ := ClampDot(api, nil); len(got.Backend.Args) != 0 || got.Backend.Model != "gpt" {
+		t.Fatalf("API kinds take no args: %v %q", got.Backend.Args, got.Backend.Model)
 	}
 }

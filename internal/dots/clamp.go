@@ -127,9 +127,13 @@ func ClampDot(d Dot, keep []string) (Dot, []Clamp) {
 		clamp(CapBaseURL, "backend.base_url", fmt.Sprintf("%q", d.Backend.BaseURL), "")
 		d.Backend.BaseURL = ""
 	}
-	if kept, removed := sharedArgs(d.Backend.Kind, d.Backend.Args); len(removed) > 0 {
+	args, removed, model := sharedArgs(d.Backend.Kind, d.Backend.Args)
+	if len(removed) > 0 {
 		out = append(out, Clamp{Capability: CapArgs, Field: "backend.args", From: strings.Join(removed, " "), To: "(removed)"})
-		d.Backend.Args = kept
+	}
+	d.Backend.Args = args
+	if model != "" {
+		d.Backend.Model = model // a kept --model/-m overrides it on the CLI anyway
 	}
 	attached := func(p string) bool { return p == ScheduleAttached }
 	if abs := slices.DeleteFunc(slices.Clone(d.Schedule.Projects), attached); len(abs) > 0 {
@@ -149,7 +153,8 @@ func ClampDot(d Dot, keep []string) (Dot, []Clamp) {
 		out = append(out, Clamp{Capability: CapBudget, Field: "budget.max_usd_per_session", From: from, To: money(SharedMaxUSDPerSession)})
 		d.Budget.MaxUSDPerSession = SharedMaxUSDPerSession
 	}
-	model := d.Backend.Model
+	// The effective model: no model arg is left to override it.
+	model = d.Backend.Model
 	if model == "" {
 		model = "(default)"
 	}

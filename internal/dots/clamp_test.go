@@ -31,7 +31,7 @@ func TestClampDotTurnsEveryRiskyCapabilityOff(t *testing.T) {
 		got.Research.Web || got.Schedule.Cron != "" || got.Trigger.OnCommit || got.Backend.BaseURL != "" {
 		t.Fatalf("not clamped: %+v", got)
 	}
-	if !slices.Equal(got.Backend.Args, []string{"--model", "x"}) {
+	if len(got.Backend.Args) != 0 || got.Backend.Model != "x" { // the kept --model x is folded into backend.model
 		t.Fatalf("args %v", got.Backend.Args)
 	}
 	var caps []string
@@ -84,7 +84,7 @@ func TestKeepRestoresOnlyTheNamedCapability(t *testing.T) {
 		}
 	}
 	all, _ := ClampDot(riskyDot(), Capabilities)
-	if len(all.Backend.Args) != 2 {
+	if len(all.Backend.Args) != 0 || all.Backend.Model != "x" {
 		t.Fatal("keeping everything still removes denied args")
 	}
 }
@@ -156,7 +156,7 @@ func TestClampCapsTheBudgetAndReportsBackendFacts(t *testing.T) {
 	if want := []string{"budget: budget.max_calls_per_session 500 → 40", "budget: budget.max_usd_per_session 50 → 2"}; !slices.Equal(budget, want) {
 		t.Errorf("budget clamps %q, want %q", budget, want)
 	}
-	if want := []string{"backend: backend.kind = claude-cli", "backend: backend.model = sonnet"}; !slices.Equal(facts, want) {
+	if want := []string{"backend: backend.kind = claude-cli", "backend: backend.model = x"}; !slices.Equal(facts, want) {
 		t.Errorf("facts %q, want %q", facts, want)
 	}
 	if d.Budget.MaxCallsPerSession != 500 {

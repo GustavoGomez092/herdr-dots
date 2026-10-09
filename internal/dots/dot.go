@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -177,7 +178,9 @@ func (d Dot) Validate() error {
 	default:
 		add("origin %q must be %s, %s or %s", d.Origin, OriginUser, OriginTemplate, OriginImport)
 	}
-	if n := utf8.RuneCountInString(d.Glyph); n < 1 || n > 2 {
+	// 1-2 visible characters; an emoji's joiners and variation selectors
+	// don't count, but the whole glyph stays short.
+	if n := glyphWidth(d.Glyph); n < 1 || n > 2 || utf8.RuneCountInString(d.Glyph) > 8 {
 		add("glyph must be 1-2 characters")
 	}
 	if !slices.Contains(BackendKinds, d.Backend.Kind) {
@@ -218,15 +221,18 @@ func (d Dot) Validate() error {
 // multilineKeys may hold newlines and tabs (CRLF line ends too).
 var multilineKeys = []string{"purpose", "schedule.task"}
 
-// textErrors refuses control and bidi characters in every string of the dot
-// (P9-R5): names, glyphs, models and the rest reach the terminal, where an
-// escape can rewrite the screen or the clipboard (OSC 52) and bidi controls
-// make a preview read differently from what runs. Research topics and the
-// schedule task keep their own control-character messages (Phase 8).
+// textErrors refuses control, bidi and invisible characters in every string
+// of the dot (P9-R5, fix round 2): names, glyphs, models and the rest reach
+// the terminal, where an escape can rewrite the screen or the clipboard (OSC
+// 52); bidi controls make a preview read differently from what runs; and
+// invisible format characters (zero-width spaces, tag characters, ...) can
+// hide instructions in a purpose that reaches the system prompt. Research
+// topics and the schedule task keep their own control-character messages
+// (Phase 8).
 func textErrors(d Dot) []error {
 	var errs []error
-	if unsafeText(d.Slug, false) || hasBidi(d.Slug) {
-		errs = append(errs, fmt.Errorf("slug %q must not contain control or bidi characters", d.Slug))
+	if unsafeText(d.Slug, false) || hiddenText(d.Slug, false) {
+		errs = append(errs, fmt.Errorf("slug %q must not contain control, bidi or invisible characters", d.Slug))
 	}
 	seen := map[string]bool{}
 	eachString(reflect.ValueOf(d), "", func(key, s string) {
@@ -238,19 +244,41 @@ func textErrors(d Dot) []error {
 			s = strings.ReplaceAll(s, "\r\n", "\n")
 		}
 		phase8 := key == "research.topics" || key == "schedule.task"
-		if hasBidi(s) || (!phase8 && unsafeText(s, multiline)) {
+		if hiddenText(s, key == "glyph") || (!phase8 && unsafeText(s, multiline)) {
 			seen[key] = true
-			errs = append(errs, fmt.Errorf("%s must not contain control or bidi characters", key))
+			errs = append(errs, fmt.Errorf("%s must not contain control, bidi or invisible characters", key))
 		}
 	})
 	return errs
 }
 
-// hasBidi reports a bidirectional formatting character: embeddings and
-// overrides (U+202A-202E), isolates (U+2066-2069) and marks (U+200E, U+200F,
-// U+061C).
-func hasBidi(s string) bool {
+// emojiJoiner reports the zero-width joiner and the text/emoji variation
+// selectors, which build an emoji glyph and are allowed there only.
+func emojiJoiner(r rune) bool { return r == 0x200D || r == 0xFE0E || r == 0xFE0F }
+
+// hiddenText reports a character that doesn't show as itself: every format
+// character (Unicode Cf: the bidi controls U+202A-202E, U+2066-2069, U+200E,
+// U+200F and U+061C, zero-width spaces and joiners, the BOM, tag characters
+// U+E0000-E007F, soft hyphens, ...), the line and paragraph separators
+// U+2028/2029, and variation selectors. In a glyph, a ZWJ and the emoji
+// variation selectors are allowed.
+func hiddenText(s string, glyph bool) bool {
 	return strings.ContainsFunc(s, func(r rune) bool {
-		return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) || r == 0x200E || r == 0x200F || r == 0x061C
+		if emojiJoiner(r) {
+			return !glyph
+		}
+		return unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029
 	})
+}
+
+// glyphWidth counts a glyph's visible characters: runes other than a ZWJ
+// or an emoji variation selector.
+func glyphWidth(g string) int {
+	n := 0
+	for _, r := range g {
+		if !emojiJoiner(r) {
+			n++
+		}
+	}
+	return n
 }
