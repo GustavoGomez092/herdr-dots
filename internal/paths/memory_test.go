@@ -98,3 +98,57 @@ func TestDiscoverWithoutHerdrExplains(t *testing.T) {
 		t.Fatalf("want a config-dir hint, got %v", err)
 	}
 }
+
+func TestDiscoverRejectsRelativePointer(t *testing.T) {
+	root := t.TempDir()
+	cfg := filepath.Join(root, "config")
+	os.MkdirAll(cfg, 0o700)
+	// Write a relative path to the state pointer
+	os.WriteFile(filepath.Join(cfg, ".state-dir"), []byte("relative/path\n"), 0o600)
+	run := func(context.Context, string, ...string) (string, error) {
+		return cfg + "\n", nil
+	}
+	_, err := discover(env(nil), run)
+	if err == nil || !strings.Contains(err.Error(), "not absolute") {
+		t.Fatalf("want error about not absolute, got %v", err)
+	}
+}
+
+func TestDiscoverRejectsRelativeConfigDir(t *testing.T) {
+	run := func(context.Context, string, ...string) (string, error) {
+		return "relative/config\n", nil
+	}
+	_, err := discover(env(nil), run)
+	if err == nil || !strings.Contains(err.Error(), "relative") {
+		t.Fatalf("want error about relative path, got %v", err)
+	}
+}
+
+func TestDiscoverRejectsRelativeStateDir(t *testing.T) {
+	run := func(context.Context, string, ...string) (string, error) {
+		return "", nil
+	}
+	_, err := discover(env(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": "/c", "HERDR_PLUGIN_STATE_DIR": "relative/state"}), run)
+	if err == nil || !strings.Contains(err.Error(), "not absolute") || !strings.Contains(err.Error(), "HERDR_PLUGIN_STATE_DIR") {
+		t.Fatalf("want error about HERDR_PLUGIN_STATE_DIR not absolute, got %v", err)
+	}
+}
+
+func TestDiscoverCleansAbsolutePathWithDotDot(t *testing.T) {
+	root := t.TempDir()
+	cfg := filepath.Join(root, "config")
+	state := filepath.Join(root, "state")
+	os.MkdirAll(cfg, 0o700)
+	os.MkdirAll(state, 0o700)
+	// Test that paths with .. in them are cleaned
+	p, err := discover(env(map[string]string{
+		"HERDR_PLUGIN_CONFIG_DIR": filepath.Join(cfg, "a", "..", "b", "..", "."),
+		"HERDR_PLUGIN_STATE_DIR":  filepath.Join(state, "sub", ".."),
+	}), nil)
+	if err != nil {
+		t.Fatalf("discover with .. in absolute paths: %v", err)
+	}
+	if p.ConfigDir != cfg || p.StateDir != state {
+		t.Fatalf("paths not cleaned: cfg=%s (want %s), state=%s (want %s)", p.ConfigDir, cfg, p.StateDir, state)
+	}
+}

@@ -63,17 +63,35 @@ func discover(getenv func(string) string, run CommandRunner) (Paths, error) {
 		if c == "" {
 			return Paths{}, errors.New("`herdr plugin config-dir` printed nothing")
 		}
+		if !filepath.IsAbs(c) {
+			return Paths{}, fmt.Errorf("`herdr plugin config-dir` returned a relative path: %s", c)
+		}
+	} else {
+		if !filepath.IsAbs(c) {
+			return Paths{}, fmt.Errorf("HERDR_PLUGIN_CONFIG_DIR is not absolute: %s", c)
+		}
 	}
+	c = filepath.Clean(c)
+
 	if s == "" {
 		b, err := os.ReadFile(filepath.Join(c, StatePointer))
 		if err != nil {
-			return Paths{}, fmt.Errorf("the plugin state dir is unknown: open Herdr once with herdr-dots enabled, or set HERDR_PLUGIN_STATE_DIR (%v)", err)
+			return Paths{}, fmt.Errorf("the plugin state dir is unknown: open Herdr once with herdr-dots enabled, or set HERDR_PLUGIN_STATE_DIR (%w)", err)
 		}
 		s = firstLine(string(b))
 		if s == "" {
 			return Paths{}, fmt.Errorf("%s is empty: set HERDR_PLUGIN_STATE_DIR", filepath.Join(c, StatePointer))
 		}
+		if !filepath.IsAbs(s) {
+			return Paths{}, fmt.Errorf("%s is not absolute: %s", filepath.Join(c, StatePointer), s)
+		}
+	} else {
+		if !filepath.IsAbs(s) {
+			return Paths{}, fmt.Errorf("HERDR_PLUGIN_STATE_DIR is not absolute: %s", s)
+		}
 	}
+	s = filepath.Clean(s)
+
 	return New(c, s, h), nil
 }
 
