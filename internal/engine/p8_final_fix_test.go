@@ -143,6 +143,55 @@ func TestDotPausedWhileQueuedDoesNotRun(t *testing.T) {
 	}
 }
 
+// A research or commit run whose dot is detached mid-run ends like one whose
+// pane closed: no card, no feed line, no charge to the pane. A scheduled run
+// whose dot was detached goes to the project's inbox instead.
+func TestDetachedDotMidRunDeliversNothing(t *testing.T) {
+	for _, kind := range []string{state.RunResearch, state.RunCommit, state.RunScheduled} {
+		t.Run(kind, func(t *testing.T) {
+			sec, fe := dot("Security", dots.ModeQueue), dot("Frontend", dots.ModeQueue)
+			r := newProRig(t, proOpts{}, sec, fe)
+			r.attach(t, "security", "frontend")
+			r.be.set(proResult("warn", "Session cookie lacks HttpOnly."))
+			open := holdAll(t, r)
+			done := make(chan struct{})
+			j := paneJob(r, fe)
+			j.kind, j.label = kind, kind
+			switch kind {
+			case state.RunResearch:
+				j.deliver = r.e.addAway
+			case state.RunCommit:
+				j.deliver = r.e.deliverCommit
+			}
+			j.done = func() { close(done) }
+			r.e.spawn(func() { r.e.runBackground(j) })
+			eventually(t, "the run is out", func() bool { return r.be.n() == 1 })
+			if err := r.e.Detach(pane, "frontend"); err != nil {
+				t.Fatal(err)
+			}
+			open()
+			<-done
+			if c := r.usage.Calls(pane, "frontend"); c != 0 {
+				t.Errorf("a detached dot's run was charged to the pane: %d calls", c)
+			}
+			for _, fe := range r.feed.Recent(pane, 50) {
+				if fe.Dot == "frontend" {
+					t.Errorf("a detached dot's run wrote a feed line on the pane: %+v", fe)
+				}
+			}
+			for _, c := range r.q.All() {
+				if c.PaneID == pane && c.Dot == "frontend" {
+					t.Errorf("a detached dot's run made a card on the pane: %+v", c)
+				}
+			}
+			inbox, _ := r.inbox.List(testProject)
+			if want := map[bool]int{true: 1, false: 0}[kind == state.RunScheduled]; len(inbox) != want {
+				t.Errorf("inbox %+v, want %d card(s)", inbox, want)
+			}
+		})
+	}
+}
+
 // The other way round: turn reviews use the same in-flight count, so an ask
 // of another dot in flight over a 1-call budget stops the turn review.
 func TestTurnReviewCountsAnAskInFlight(t *testing.T) {

@@ -328,7 +328,7 @@ func (e *Engine) deliverCommit(j bgJob, v backend.Verdict) {
 	e.mu.Unlock()
 	switch {
 	case gone:
-		e.d.Logf("dot %s: %s ended after pane %s closed; dropped", j.dot.Slug, j.label, j.paneID)
+		e.d.Logf("dot %s: %s ended after pane %s closed or the dot was detached; dropped", j.dot.Slug, j.label, j.paneID)
 	case err != nil:
 		e.d.Logf("queue add: %v", err)
 	default:

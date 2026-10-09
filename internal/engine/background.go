@@ -400,7 +400,7 @@ func (e *Engine) bgFeed(j *bgJob, outcome, detail string) bool {
 	if e.bgPaneGoneLocked(*j) {
 		if j.kind != state.RunScheduled {
 			e.mu.Unlock()
-			e.d.Logf("dot %s: %s ended after pane %s closed; dropped", j.dot.Slug, j.label, j.paneID)
+			e.d.Logf("dot %s: %s ended after pane %s closed or the dot was detached; dropped", j.dot.Slug, j.label, j.paneID)
 			return false
 		}
 		j.paneID, j.session, j.turn, j.paused = "", "", 0, false
@@ -413,15 +413,18 @@ func (e *Engine) bgFeed(j *bgJob, outcome, detail string) bool {
 	return true
 }
 
-// bgPaneGoneLocked reports whether a job's pane closed, or its id now names
-// a new attachment (the generation changed, as for Phase 7 drafts), since the
-// job was built. Caller holds e.mu (e.mu -> stores).
+// bgPaneGoneLocked reports whether a job's pane closed, its id now names a
+// new attachment (the generation changed, as for Phase 7 drafts), or the
+// job's dot was detached from it, since the job was built. A detached dot is
+// treated like a closed pane everywhere this is checked (charge, feed,
+// card): a research or commit run ends with nothing, a scheduled run goes to
+// the project's inbox. Caller holds e.mu (e.mu -> stores).
 func (e *Engine) bgPaneGoneLocked(j bgJob) bool {
 	if j.paneID == "" {
 		return false
 	}
-	_, ok := e.d.Attachments.Get(j.paneID)
-	return !ok || e.gens[j.paneID] != j.gen
+	a, ok := e.d.Attachments.Get(j.paneID)
+	return !ok || e.gens[j.paneID] != j.gen || a.Find(j.dot.Slug) == nil
 }
 
 // bgPausedLocked is whether j's dot is paused on j's pane now, read from the
@@ -433,10 +436,7 @@ func (e *Engine) bgPausedLocked(j bgJob) bool {
 		return j.paused
 	}
 	a, _ := e.d.Attachments.Get(j.paneID)
-	if da := a.Find(j.dot.Slug); da != nil {
-		return da.Paused
-	}
-	return j.paused
+	return a.Find(j.dot.Slug).Paused // not gone: the dot is attached
 }
 
 func (e *Engine) bgPaneGone(j bgJob) bool {
@@ -457,7 +457,7 @@ func (e *Engine) keepPane(j *bgJob, when string) bool {
 		j.paneID, j.session, j.turn, j.paused = "", "", 0, false
 		return true
 	}
-	e.d.Logf("dot %s: %s %s after pane %s closed; dropped", j.dot.Slug, j.label, when, j.paneID)
+	e.d.Logf("dot %s: %s %s after pane %s closed or the dot was detached; dropped", j.dot.Slug, j.label, when, j.paneID)
 	return false
 }
 
