@@ -94,8 +94,9 @@ type Engine struct {
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
 	// MCP state (ask.go), guarded by mu; created lazily.
-	consulted map[key]bool // asked since the pane's last processed turn
-	asks      *askLimiter  // per-pane ask limits; its own leaf lock
+	consulted map[key]bool                                // asked since the pane's last processed turn
+	asks      *askLimiter                                 // per-pane ask limits; its own leaf lock
+	askRuns   map[string]map[*struct{}]context.CancelFunc // in-flight asks by pane
 
 	// Council state (council.go), guarded by mu; maps are created lazily.
 	councils     map[string]*councilRun       // by pane: the council in progress
@@ -638,6 +639,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	}
 	defer func() { <-e.sem }()
 
+	var prev string // the status before this run's "thinking", restored when an ask is cancelled
 	if o.memoryPass {
 		if !e.memOn(d) {
 			return // memory was turned off after the pass was scheduled
@@ -645,6 +647,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		e.setLearning(k, true)
 		defer e.setLearning(k, false)
 	} else {
+		prev = e.statusOf(k)
 		e.setStatus(k, view.StatusThinking)
 	}
 	att, _ := e.d.Attachments.Get(paneID)
@@ -684,12 +687,19 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 			// stopping: not the dot's failure, and maybe no pane to show it.
 			// A real timeout is DeadlineExceeded and still fails below.
 			e.d.Logf("dot %s on %s: run cancelled: %v", d.Slug, paneID, err)
+			if o.ask {
+				e.restoreStatus(k, prev)
+			}
 			return
 		}
 		e.runFailed(k, d, turn, err)
 		return
 	}
 	sinkRes, sinkErr = res, nil
+	if o.ask && base.Err() != nil {
+		e.restoreStatus(k, prev) // the agent gave up or the engine stopped: learn and log nothing
+		return
+	}
 	e.touchMemory(mem)
 	_ = e.d.Attachments.Update(paneID, func(a *state.Attachment) {
 		if da := a.Find(d.Slug); da != nil {
@@ -718,7 +728,8 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, false)
 	if o.ask {
 		if base.Err() != nil {
-			return // the agent gave up or the engine stopped: write nothing more
+			e.restoreStatus(k, prev)
+			return
 		}
 		e.feed(paneID, d.Slug, turn, state.OutcomeAsked, askDetail(d, res))
 		e.setStatus(k, view.StatusConsulted)
@@ -807,6 +818,23 @@ func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o
 	if mode == dots.ModeInject {
 		e.flushAuto(paneID)
 	}
+}
+
+func (e *Engine) statusOf(k key) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.status[k]
+}
+
+// restoreStatus puts back the status a cancelled ask replaced, unless
+// something else has set a new one meanwhile.
+func (e *Engine) restoreStatus(k key, prev string) {
+	e.mu.Lock()
+	if e.status[k] == view.StatusThinking {
+		e.status[k] = prev
+	}
+	e.mu.Unlock()
+	e.broadcast()
 }
 
 func (e *Engine) setStatus(k key, s string) {

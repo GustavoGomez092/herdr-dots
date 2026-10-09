@@ -151,15 +151,54 @@ func (e *Engine) forgetAsks(paneID string) {
 
 // markConsulted makes the dot skip the turn it was asked in (Decide's
 // ReasonConsulted, cleared by processPaneLocked).
-func (e *Engine) markConsulted(paneID string, slugs ...string) {
+func (e *Engine) markConsulted(paneID string, slugs ...string) bool {
 	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.d.Attachments.Get(paneID); !ok { // lock order e.mu -> stores
+		return false // a closed pane keeps no entries
+	}
 	if e.consulted == nil {
 		e.consulted = map[key]bool{}
 	}
 	for _, s := range slugs {
 		e.consulted[key{paneID, s}] = true
 	}
+	return true
+}
+
+// cancelAsks ends the pane's in-flight asks (its pane closed).
+func (e *Engine) cancelAsks(paneID string) {
+	e.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(e.askRuns[paneID]))
+	for _, c := range e.askRuns[paneID] {
+		cancels = append(cancels, c)
+	}
 	e.mu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+}
+
+// trackAsk registers an in-flight ask so a closing pane can cancel it.
+func (e *Engine) trackAsk(paneID string, cancel context.CancelFunc) (untrack func()) {
+	id := new(struct{})
+	e.mu.Lock()
+	if e.askRuns == nil {
+		e.askRuns = map[string]map[*struct{}]context.CancelFunc{}
+	}
+	if e.askRuns[paneID] == nil {
+		e.askRuns[paneID] = map[*struct{}]context.CancelFunc{}
+	}
+	e.askRuns[paneID][id] = cancel
+	e.mu.Unlock()
+	return func() {
+		e.mu.Lock()
+		delete(e.askRuns[paneID], id)
+		if len(e.askRuns[paneID]) == 0 {
+			delete(e.askRuns, paneID)
+		}
+		e.mu.Unlock()
+	}
 }
 
 // askable returns the attached dot if it may be asked now: not paused, and
@@ -215,15 +254,11 @@ func (e *Engine) Ask(ctx context.Context, paneID, slug, question string, include
 	if err != nil {
 		return ipc.AskResult{}, err
 	}
-	// Only the limits come from [mcp]; which tools exist is the mcp
-	// command's business, not the engine's.
-	if err := e.limiter().take(paneID, e.config().MCP.Normalized()); err != nil {
-		return ipc.AskResult{}, err
-	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(e.ctx, cancel) // an engine shutdown ends the ask
 	defer stop()
+	defer e.trackAsk(paneID, cancel)() // a closing pane ends it too
 	var turns []transcript.Turn
 	if includeTurns {
 		att, _ := e.d.Attachments.Get(paneID)
@@ -232,6 +267,12 @@ func (e *Engine) Ask(ctx context.Context, paneID, slug, question string, include
 			return ipc.AskResult{}, fmt.Errorf("read conversation: %w", err)
 		}
 		turns = tail(ts, d.Context.Turns)
+	}
+	// The slot is used only now: a refusal or a failed read costs none. Only
+	// the limits come from [mcp]; which tools exist is the mcp command's
+	// business, not the engine's.
+	if err := e.limiter().take(paneID, e.config().MCP.Normalized()); err != nil {
+		return ipc.AskResult{}, err
 	}
 	type outcome struct {
 		res backend.Result
@@ -245,18 +286,17 @@ func (e *Engine) Ask(ctx context.Context, paneID, slug, question string, include
 	select {
 	case out = <-got:
 	case <-runCtx.Done():
-		return ipc.AskResult{}, fmt.Errorf("%s: %w", d.Name, runCtx.Err())
+		return ipc.AskResult{}, e.askEnded(paneID, d, runCtx)
 	}
 	if out.err != nil {
 		return ipc.AskResult{}, fmt.Errorf("%s failed: %s", d.Name, errText(errors.New(credentials.Redact(out.err.Error()))))
 	}
 	if runCtx.Err() != nil {
-		return ipc.AskResult{}, fmt.Errorf("%s: %w", d.Name, runCtx.Err())
+		return ipc.AskResult{}, e.askEnded(paneID, d, runCtx)
 	}
-	if _, ok := e.d.Attachments.Get(paneID); !ok {
+	if !e.markConsulted(paneID, slug) {
 		return ipc.AskResult{}, ErrPaneClosed
 	}
-	e.markConsulted(paneID, slug)
 	v := out.res.Verdict
 	model := out.res.Model
 	if model == "" {
@@ -265,6 +305,15 @@ func (e *Engine) Ask(ctx context.Context, paneID, slug, question string, include
 	return ipc.AskResult{Slug: slug, Name: d.Name, Relevant: v.Relevant, Severity: v.Severity,
 		Message: mcpText(v.Message), CostUSD: out.res.CostUSD,
 		CostKnown: out.res.CostKnown, Model: model}, nil
+}
+
+// askEnded is the error of an ask whose context ended: the pane closing is
+// ErrPaneClosed, anything else (hangup, shutdown) the context's error.
+func (e *Engine) askEnded(paneID string, d dots.Dot, runCtx context.Context) error {
+	if _, ok := e.d.Attachments.Get(paneID); !ok {
+		return ErrPaneClosed
+	}
+	return fmt.Errorf("%s: %w", d.Name, runCtx.Err())
 }
 
 // mcpText is model text on its way to the main agent, which gets it without

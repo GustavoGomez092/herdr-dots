@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
@@ -412,10 +415,112 @@ func TestAskReturnsOnCancelAndWritesNothingAfterwards(t *testing.T) {
 	if f := mcpAskedFeed(r, "security"); len(f) != 0 {
 		t.Fatalf("a cancelled ask logged %+v", f)
 	}
+	if st := mcpDotStatus(r, "security"); st == view.StatusThinking {
+		t.Fatalf("a cancelled ask left the dot %q", st)
+	}
 	r.e.mu.Lock()
 	n := len(r.e.consulted)
 	r.e.mu.Unlock()
 	if n != 0 {
 		t.Fatal("a cancelled ask consulted the dot")
+	}
+}
+
+// A cancelled ask applies no memory ops and logs no "learned" line.
+func TestCancelledAskLearnsNothing(t *testing.T) {
+	r := newMemRig(t, memOpts{}, dot("Security", dots.ModeQueue))
+	r.be.set(backend.Result{Verdict: backend.Verdict{Severity: "info"}, Remember: []backend.MemoryOp{
+		{Op: "add", Scope: "dot", Kind: "note", Text: "The team prefers zod over hand-written validators."},
+	}})
+	r.be.gate = make(chan struct{})
+	r.attach(t, "security")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.e.Ask(ctx, pane, "security", "q", false)
+		done <- err
+	}()
+	eventually(t, "the run is in flight", func() bool { return r.be.n() == 1 })
+	cancel()
+	<-done
+	close(r.be.gate)
+	eventually(t, "the run is charged", func() bool { return r.e.d.Usage.Calls(pane, "security") == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if r.hasFeed(state.OutcomeLearned, "learned") {
+		t.Fatal("a cancelled ask logged a learned line")
+	}
+	if es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "security"}); len(es) != 0 {
+		t.Fatalf("a cancelled ask stored memory: %+v", es)
+	}
+}
+
+// flakyReader fails its reads while bad is set.
+type flakyReader struct {
+	fakeReader
+	bad atomic.Bool
+}
+
+func (f *flakyReader) Turns(ctx context.Context) ([]transcript.Turn, error) {
+	if f.bad.Load() {
+		return nil, errors.New("transcript unreadable")
+	}
+	return f.fakeReader.Turns(ctx)
+}
+
+// Only a run uses an ask slot: a failed transcript read does not.
+func TestFailedTurnReadDoesNotUseAnAskSlot(t *testing.T) {
+	fr := &flakyReader{}
+	fr.bad.Store(true)
+	r := newMemRig(t, memOpts{reader: func(state.Attachment) transcript.Reader { return fr }}, dot("Security", dots.ModeQueue))
+	r.attach(t, "security")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i := range 4 {
+		if _, err := r.e.Ask(ctx, pane, "security", "q", true); err == nil || !strings.Contains(err.Error(), "read conversation") {
+			t.Fatalf("read %d: %v", i+1, err)
+		}
+	}
+	fr.bad.Store(false)
+	for i := range 3 {
+		if _, err := r.e.Ask(ctx, pane, "security", "q", true); err != nil {
+			t.Fatalf("ask %d after failed reads: %v", i+1, err)
+		}
+	}
+}
+
+// A closing pane cancels its in-flight asks and leaves no consulted entry or
+// ask counter behind.
+func TestClosingThePaneCancelsInFlightAsks(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue))
+	r.attach(t, "security")
+	gate := make(chan struct{})
+	r.be.gate = gate
+	var once sync.Once
+	open := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(open) // a failed assertion must not leave the run blocked
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.e.Ask(context.Background(), pane, "security", "q", false)
+		done <- err
+	}()
+	eventually(t, "the run is in flight", func() bool { return r.be.n() == 1 })
+	r.e.dropPane(pane)
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrPaneClosed) {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Ask did not end when its pane closed")
+	}
+	open()
+	eventually(t, "the run is charged", func() bool { return r.usage.Calls(pane, "security") == 1 })
+	time.Sleep(50 * time.Millisecond)
+	r.e.markConsulted(pane, "security")
+	r.e.mu.Lock()
+	n := len(r.e.consulted)
+	r.e.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a dead pane holds %d consulted entries", n)
 	}
 }
