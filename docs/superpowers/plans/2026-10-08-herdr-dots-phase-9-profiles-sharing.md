@@ -11,13 +11,15 @@
 **Spec:** `docs/superpowers/specs/2026-10-08-herdr-dots-phase-9-profiles-sharing-design.md`, approved with the amendments in `docs/superpowers/decisions/2026-10-08-phase-decisions.md` (ruling 3: this phase is in scope; ruling 11: project identity is the git root commit; ruling 17: project dots are supported with content-hash trust and risky capabilities are clamped on import). This plan replaces the outline `docs/superpowers/plans/drafts/2026-10-08-herdr-dots-phase-9-profiles-sharing-outline.md`.
 
 **Preconditions (check before Task 1; stop and report if any fails):**
-- Phases 2–8 are merged into the base branch and `internal/version/version.go` says `0.8.0`. Phases 2 and 3 are partly built at the time of writing; Phases 4–8 are planned. Code in this plan was compile-checked against v1 + Phase 2 + the Phase 3 code at HEAD `2eb4c25`, with stand-ins for the later-phase names it uses (listed below). Where a later phase's real name differs, rename it in the one place this plan uses it.
-- **Phase 3 (council):** `dots.ReservedSlug`; `runOpts.noForce` (council member runs) and `runOpts.sink`; member runs still go through `runDot`, and their `flagged`/`pass` feed lines are written inside `runDot`.
-- **Phase 4 (API backends):** `dots.BackendSpec.BaseURL` (TOML `base_url`); `backend.Result.CostUSD` and `backend.Result.CostKnown`; `credentials.Redact(string) string`.
-- **Phase 5 (MCP server):** `engine.askable(paneID, slug string) (dots.Dot, error)`, `engine.ErrNotAttached`, `(*Engine) AskCouncil`, `(*Engine) startCouncil(ctx, paneID, question string, slugs []string, result func(...)) (*councilRun, error)` (nil slugs = every eligible attached dot, and an explicit list goes through the same eligibility rules), `runOpts.ask`.
-- **Phase 6 (Windows):** `lockfile.Acquire` works on every OS; `paths.Ensure` secures each directory with `platform.SecureDir`; `platformtest.AssertPrivateFile(t testing.TB, path string)` and `platformtest.AssertPrivateDir`; the portability guard `TestProductCodeHasNoUnixOnlyCalls` (this plan adds no OS-specific code).
-- **Phase 7 (write-capable dots, planned in parallel; names from its spec §4.2 and its draft):** `dots.Dot.Capabilities CapabilitySpec{Write bool; WriteTimeoutSeconds, MaxPatchBytes, MaxFiles int}` (TOML `[capabilities]`, `write`) with `dots.DefaultCapabilities()` (draft file `internal/dots/capabilities.go`); drafts run in `(*Engine) runDraft` (draft file `internal/engine/draft.go`), not `runDot`; `ApplyPatch` and `DiscardPatch` call `spawnOutcome(c, memory.OutcomeApplied)` / `spawnOutcome(c, memory.OutcomeDiscarded)`.
-- **Phase 8 (proactive dots, planned in parallel; names from its spec §4.2 and its draft):** `dots.Dot.Research ResearchSpec{Enabled bool; …; Web bool; …}` (TOML `[research]` `enabled`, `web`), `dots.Dot.Schedule ScheduleSpec{Cron string; …}` (TOML `[schedule]` `cron`), `dots.TriggerSpec.OnCommit bool` (TOML `[trigger]` `on_commit`); research, scheduled and commit runs go through `(*Engine) runBackground(j bgJob)` (draft file `internal/engine/background.go`) with `j.kind` one of `state.RunResearch`, `RunScheduled`, `RunCommit` (`"research"`, `"scheduled"`, `"commit"`).
+- Phases 2–8 are merged into the base branch, **including Phase 8's Task 16** (`internal/version/version.go` says `0.8.0`, `cmd/herdr-dots/memwire_test.go` has `TestVersionIsPhaseEight`, and the README has Phase 8's status block and `### Proactive dots (0.8.0)` section) and Phase 8's final fix wave. This plan was reconciled against `feat/dots-v1` at `c4d3827` (every Phase 8 code task merged, version still 0.7.0): every task was replayed in wave order and passed `gofmt -l internal cmd`, `go vet`, `go test -race ./...`, the Linux build, the Windows build and vet, and `GOOS=windows go test -c`; Task 12 was replayed on top of a simulation of Phase 8 Task 16's version and README edits. If Phase 8's fix wave moved a line a Find block quotes, make the same change by hand: every block shows the exact lines to add, and anchors are whole lines or symbols.
+- **Names this plan uses from Phases 2–8 (all verified at `c4d3827`):**
+  - Phase 2: `memory.Store.mutate`, `insert` (results `inserted`, `merged`, Phase 8's `yielded`), `dotFor`, `prepare`, `Candidates`, `ScanSecrets`, `ExecGit` (through `platform.CommandContext` and `ChildEnv`), `ResolveProject`; `engine.suppressedBy`, `spawnOutcomeOf` (`spawnOutcome` wraps it); `cmd/herdr-dots` `memoryStoreFor`, `resolveProject`, `splitCSV`.
+  - Phase 3: `dots.ReservedSlug`; `runOpts.noForce`, `sink`; `queue.KindCouncil`, `Card.Parts`; `startCouncil(ctx, paneID, question, slugs, result, admit)` applies its eligibility rules to an explicit list (`councilPlan` → `Preflight.Select`).
+  - Phase 4: `dots.BackendSpec.BaseURL`; `backend.Result.CostUSD`, `CostKnown`; `engine.deltaOf`, `redactErr`, `costDetail`, `withCost`; `credentials.Redact(s string, known ...string) string` (variadic: called, never assigned to a `func(string) string`), which covers provider keys and GitHub, AWS, Slack, Stripe, GitLab and URL credentials.
+  - Phase 5: `engine.askable` (`ask.go`), `AskCouncil` (`ask_council.go`), `ErrNotAttached`, `runOpts.ask`, `state.OutcomeAsked`, `memory.SourceAgent` (memui and `author` have its case).
+  - Phase 6: `lockfile.Acquire`; `platform.SecureDir` in `paths.Ensure`; `platformtest.AssertPrivateFile`/`AssertPrivateDir`/`Abs`; `style.Sym`; the portability guard.
+  - Phase 7: `dots.CapabilitySpec{Write, WriteTimeoutSeconds, MaxPatchBytes, MaxFiles}` in `internal/dots/capabilities.go`, `DefaultCapabilities()`, `CanWrite`; `engine.runDraft`, `patchSent` (records "sent" itself), `ApplyPatch`/`DiscardPatch` → `spawnOutcomeOf(…, memory.OutcomeApplied|OutcomeDiscarded, secret)`; patchstore `Meta.Summary` (redacted) and `SummaryHadSecret`; `view.LibraryDot.Write`/`WriteTimeoutSeconds`; the write-tool AST guard `TestOnlyDraftsAskForWriteTools` (no assignment to a `.Write` field outside `internal/engine/draft.go`, exactly one `req.Pass = backend.PassResearch` in `background.go`).
+  - Phase 8: `dots.ResearchSpec{Enabled, Web, Topics, …}`, `ScheduleSpec{Cron, Task, Projects, CatchUpHours}`, `TriggerSpec.OnCommit`, `ScheduleAttached`, `Dot.Proactive()`; `engine.runBackground(j bgJob)` (`j.kind` = `state.RunResearch|RunScheduled|RunCommit`), `bgFeed`, `bgFailed`, `keepPane`, `e.plan`, `e.gens`; `queue.KindDigest` (Dot `"away"`, one part per dot); `dropPane` orphans cards under `e.mu`; `config.ProactiveEnabled` on the fail-closed line; `ReloadDots` resets `e.plan`.
 - `GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...` passes on the base.
 
 ## Global Constraints
@@ -25,10 +27,12 @@
 Phase 9 constraints:
 - **The product is NOT done after Phase 9.** The version becomes `0.9.0` (`internal/version/version.go` and `herdr-plugin.toml`). Never call the project done, finished, complete or ready in code, docs, commits or reports; feature complete is defined only by Phase 10's final checklist. The README keeps "scaffold … not done" and the roadmap keeps Phase 2 marked **VITAL**.
 - **Phase 2 memory is VITAL and this phase must respect it:** memory text goes only in the USER prompt (`backend.UserPrompt`); model writes keep the op rules (project scope proposed until approved, models never write dismissed, preference or global entries); only outcome and user entries suppress repeats; secrets are scanned (`memory.ScanSecrets`) on every path that stores or exports memory.
-- **Shared content is someone else's work** (binding decision #17 and the Phase 2 final review): imported dots and untrusted or partly trusted project dots run with `delivery.mode` inject, `capabilities.write`, `capabilities.mcp`, `research.enabled`, `research.web`, `schedule.cron`, `trigger.on_commit` and `backend.base_url` turned off until the developer keeps each one, and denied backend args (`dots.DeniedArgs`) are always removed. Imported memory is labelled "imported", never "developer"; it never suppresses repeats; imported project memory stays out of prompts until approved.
+- **Shared content is someone else's work** (binding decision #17 and the Phase 2 final review): imported dots and untrusted or partly trusted project dots run with `delivery.mode` inject, `capabilities.write`, `capabilities.mcp`, `research.enabled`, `research.web`, `schedule.cron`, `trigger.on_commit` and `backend.base_url` turned off until the developer keeps each one, and denied backend args (`dots.DeniedArgs`) and absolute `schedule.projects` paths are always removed. Imported memory is labelled "imported", never "developer"; it never suppresses repeats; **every imported entry (dot and project scope) lands proposed** and stays out of prompts until approved (Plan decision 26). An untrusted or changed project dot never runs, in a turn review or in the background (Plan decision 30).
 - Trust is per file content (SHA-256 of the exact bytes parsed) and per project (git root commit, ruling 11). Any change makes a file untrusted again and pauses attached copies.
 - Exports never contain credentials, history or global memory; memory in exports passes the secret scanner; imports never overwrite an existing dot.
-- History stays on this machine and holds only 300-rune excerpts, sanitized (`textutil.SanitizeModelText`) and redacted (`credentials.Redact`).
+- History stays on this machine and holds only 300-rune excerpts, sanitized (`textutil.SanitizeModelText`, which strips bidi controls) and redacted (`credentials.Redact`, the history store's default). It is cross-session safe: a per-file lock, atomic trims, `0600` files.
+- **Write tools stay in drafts** (Phase 7's AST guard): no Phase 9 code assigns to a `.Write` field or builds a `backend.Request` with `Write`/`Pass`; `dots.ClampDot` rebuilds `CapabilitySpec` instead (Plan decision 25).
+- **Every child process goes through `platform.CommandContext`/`ChildEnv`** (the portability guard): Phase 9 runs git only through Phase 2's `memory.ExecGit` (`ResolveRoot`), and fetches packs with `net/http`.
 - Model text is sanitized before display, storage or delivery (`textutil.SanitizeModelText`, `style.Clean`).
 - **Engine lock order:** paneLock → e.mu → stores; dmu → e.mu/stores. No history, trust, project-file, git or network I/O under paneLock, e.mu or dmu. Background work goes through `e.spawn` (drained by `Engine.Wait`).
 - **UI rule:** never act on an unseen selection. Import and trust previews show every word (purpose, every memory entry, every capability) in a scrolling view, and `y` is refused until the end has been on screen. Selections are by slug, never by row index after a refresh.
@@ -37,7 +41,7 @@ Phase 9 constraints:
 - **Live steps:** only `herdr --session dots-test`; never `herdr plugin link` (global); never type Claude slash commands such as `/model` into panes; snapshot and diff `~/.claude/settings.json` around every live run; never touch `~/.config/herdr/config.toml` (read only) or the user's sessions.
 - Codex is not installed on this machine: nothing in this phase is Codex-specific; Codex paths stay "documented-format, not live-verified".
 - **No outward-facing action:** no push, remote tag, publish, license or rename (user gates).
-- Every task's verification runs, from the repo root: `gofmt -l .` (prints nothing), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...`, `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...`. Tests never touch the real `STATE_DIR`, `CONFIG_DIR` or Herdr; use `t.TempDir()`.
+- Every task's verification runs, from the repo root: `gofmt -l internal cmd` (prints nothing), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...`, `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...`, and `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p9-win/" <the task's packages>`. Tests never touch the real `STATE_DIR`, `CONFIG_DIR` or Herdr; use `t.TempDir()`.
 
 All earlier Global Constraints still apply (v1 through Phase 8): plugin id `herdr-dots`; module `herdr-dots`; dots are read-only outside Phase 7's explicit draft runs; child environments are stripped (`backend.CleanEnv`); keys never reach logs, the feed, snapshots, IPC, memory, history or argv; default delivery mode `queue`.
 
@@ -48,12 +52,12 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 1. **Project slugs are `proj--<file base>--<8 hex of the project id>`, shown as `proj:<file base>`.** The spec's `proj:<slug>` contains a colon, which Windows refuses in file names (history files, memory scope files) and memory's slug check refuses outright. `Slugify` never produces `--`, so no user dot can take a project slug; the 8 hex characters (from the git root commit, ruling 11) make the same file name in two repositories two different dots, so one global dot map keeps working and every later-phase lookup (`e.dots[slug]` in council, MCP, drafts, schedules) needs no change. `dots.DisplaySlug` gives the short form for people; IPC and files use the engine slug. `Validate` reserves the `proj--` prefix for `Origin == "project"`.
 2. **Trust key is (project id, path relative to the root, SHA-256), not the absolute path (spec S8).** Ruling 11 makes clones and worktrees of one repository one project; the same bytes at the same place in any of them are the same thing the developer reviewed. A fork with identical bytes is the same content, so sharing trust with it is safe. The absolute path is kept in the entry for display. A trust file that can't be parsed leaves every project dot untrusted and is never overwritten (`ErrCorrupt`).
 3. **Project dots need a git repository with commits (V2 answered).** Path identities (no git, no commits, shallow clones) have no stable project id, so they get no project dots. `engine.resolveRoot` accepts only `g-` ids.
-4. **The clamp table is `dots.ClampDot`, one function for imports and project dots** (spec S5 plus binding decision #17): `inject` (`delivery.mode` → `queue`), `write` (Phase 7 `capabilities.write`), `mcp` (new `capabilities.mcp`, default true so existing dots keep working; enforced in Phase 5's `askable` and `AskCouncil`), `research` and `web` (Phase 8 `research.enabled`, `research.web`), `schedule` (Phase 8 `schedule.cron` → `""`), `commit` (Phase 8 `trigger.on_commit`), `base_url` (Phase 4 `backend.base_url`, which would send prompts and, for OpenRouter, the API key to another host). Denied backend args are removed with `dots.SafeArgs` and can't be kept (`args`). If Phase 7 or 8 renamed a field, the rename happens in `ClampDot` and its test only.
+4. **The clamp table is `dots.ClampDot`, one function for imports and project dots** (spec S5 plus binding decision #17; decision 27 adds the non-keepable `projects` clamp): `inject` (`delivery.mode` → `queue`), `write` (Phase 7 `capabilities.write`), `mcp` (new `capabilities.mcp`, default true so existing dots keep working; enforced in Phase 5's `askable` and `AskCouncil`), `research` and `web` (Phase 8 `research.enabled`, `research.web`), `schedule` (Phase 8 `schedule.cron` → `""`), `commit` (Phase 8 `trigger.on_commit`), `base_url` (Phase 4 `backend.base_url`, which would send prompts and, for OpenRouter, the API key to another host). Denied backend args are removed with `dots.SafeArgs` and can't be kept (`args`). If Phase 7 or 8 renamed a field, the rename happens in `ClampDot` and its test only.
 5. **Unknown keys are refused in packs and project dot files** (`dots.DecodeStrict`, `dotpack.Parse`): a capability this version doesn't know can't be clamped. User dot files keep today's lenient decoding.
 6. **Provenance and trust of shared content (the Phase 2 final review item).** Today `memory.author` labels `source = import` entries "developer". From this phase:
    - a. Imported entries render as `(imported)`: conventions and decisions as `convention (imported): …`, every other kind with a trailing ` (imported)`. The intro line is unchanged, so existing prompts and tests stay byte-identical.
    - b. Imported entries never suppress repeats: `suppressedBy` skips `source = import` for dismissed entries as well as findings (only outcome and user entries suppress, as Phase 2 requires).
-   - c. Imported project entries land `proposed` even with `memory_auto_approve_project`, attributed to the importing dot, and stay out of every prompt (even that dot's) until approved; approval keeps `source = import`, so the label stays. The developer makes an entry their own by editing it in the memory browser, which already sets `source = user`.
+   - c. Imported project entries land `proposed` even with `memory_auto_approve_project`, attributed to the importing dot, and stay out of every prompt (even that dot's) until approved; approval keeps `source = import`, so the label stays. The developer makes an entry their own by editing it in the memory browser, which already sets `source = user`. *(Extended by decision 26: imported dot-scope entries land proposed too.)*
    - d. Imported entries never carry the exporter's evidence (session, pane, turn, card) or pin, and never get the developer's +5 retrieval score.
    - e. Packs carry only convention, decision, finding, dismissed and note entries of dot and project scope; preferences (personal) and global memory never travel. Entries that look like secrets are refused on import, with no `--force`.
    - f. The memory browser marks imported rows `(imported)` and its approval screen says `proposed by <dot> (imported from a dot pack)`.
@@ -73,9 +77,21 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 18. **Pack format:** a header comment, `[pack]`, `[dot]` with `purpose` as a multi-line string before the first `[dot.` table, then `[[memory]]` (scope, kind, text, paths); entries over 500 runes are refused; `exported_at` is whole seconds.
 19. **Export secrets:** the whole dot (name, purpose, backend args and URL) and every memory entry are scanned. The CLI has `--force`. The popup lists what matched by position (`purpose`, `memory 2`) and offers ctrl+e to export without the flagged memory entries, the bulk form of the spec's per-entry exclusion; a secret in the dot itself must be removed first.
 20. **Import confirmation:** the CLI prints the full preview and needs `--yes` (or `y` at a terminal); a name collision always needs `--as`. The popup needs the preview read to the end, and `n` renames.
-21. **Templates:** Accessibility, Performance, Docs, Internationalization, Dependency Auditor, API Design and Data Privacy (14 in total). Three manage tests navigated templates by position; they now pick by name (`pickTemplate`).
+21. **Templates:** Accessibility, Performance, Docs, Internationalization, Dependency Auditor, API Design and Data Privacy (14 in total). Four manage tests navigated templates by position (three in `model_test.go`, and Phase 7's `TestSavingReservesALine` in `form_harden_test.go`); they now pick by name (`pickTemplate`).
 22. **Shared text helpers** `style.Clean` and `style.Wrap` (new file `internal/ui/style/text.go`) serve the profile and the previews; memui keeps its own.
 23. **Out of scope, unchanged:** committed project memory (V3, decision O4 a: recorded as a user question), registries and marketplaces, syncing memory, analytics leaving the machine.
+24. **(reconciled) History redacts by default.** `credentials.Redact` is variadic (`Redact(s string, known ...string)`), so the old wiring `hs.Redact = credentials.Redact` did not compile. `history.Store.Redact` is now an optional override and a nil one means `credentials.Redact`, which covers provider keys and GitHub, AWS, Slack, Stripe, GitLab and URL credentials; a caller that forgets to wire anything still never writes a key. `historyStoreFor` is just `history.Open(p.HistoryDir())`. New test `TestDefaultRedactionNeverStoresKeys` (keys and a bidi control never reach the file).
+25. **(reconciled) `ClampDot` never assigns to `.Write`.** Phase 7's write-tool guard (`TestOnlyDraftsAskForWriteTools`) refuses any assignment to a `.Write` field outside `internal/engine/draft.go`, and `d.Capabilities.Write = false` failed it. `ClampDot` rebuilds the struct (`readOnly(c)`), and `TestClampKeepsEveryOtherCapabilityField` fails if a field added later is dropped. Task 2's test step also runs the guard.
+26. **(reconciled) Every imported memory entry lands proposed, dot scope included** (amends spec S10 and decision 6c). An imported dot-scope `dismissed` line ("never flag SQL injection") would otherwise reach the dot's prompt unreviewed and silence it. Phase 2's `prepare` allowed proposals in project scope only; it now also allows them for `scope = dot, source = import`, and nothing else changes: `eligible` and `Candidates` already keep dot-scope proposals out of prompts and suppression candidates, and the memory browser's `a` and `herdr-dots memory approve` approve any proposal by ref. After approval the entry keeps `source = import`, so it is still labelled and still never suppresses (Task 7's test now approves the entry first). CLI and popup texts say every imported entry waits for approval. New test `TestOnlyImportsProposeDotMemory`.
+27. **(reconciled) Phase 8's free text and paths in shared dots.** `ClampDot` always removes absolute `schedule.projects` paths (new non-keepable clamp `CapProjects`): they name directories on the author's machine, or a guess at yours, and keeping `schedule` never keeps them. `dotpack.Export` also scans `research.topics` and `schedule.task` for secrets, since they travel in the pack. `dotpack.Fetch` reports the final URL with any `user:password` masked (`URL.Redacted`). New tests `TestClampRemovesAbsoluteScheduleProjects`, the proactive-text case in `TestExportRefusesSecretsUnlessForced`, and `TestProactiveAndWriteFieldsStayOffUntilGranted` (Task 5).
+28. **(reconciled) History hooks follow the merged code.** Resolutions hook into Phase 7's `spawnOutcomeOf` (which `spawnOutcome`, `ApplyPatch` and `DiscardPatch` call), plus `deliver` for inject cards (`injected`) and Phase 7's `patchSent` path (`sent`, which records its memory outcome without `spawnOutcome`). A council card or an away digest (Phase 8, Dot `"away"`) resolves for each dot that contributed a part, never for `council`/`away`. Run cost provenance follows Phase 4's `deltaOf`. An MCP ask (feed outcome `asked`) is recorded as `flagged` or `pass` so the stats count it. `runBackground` opens its trace once every gate has passed and the slot is claimed, and marks a record only where `bgFeed` wrote the feed line; a draft or a research/commit job whose pane closed ends without a record, as it ends without a feed line. Error marks use `redactErr`. New tests `TestDraftRunAndPatchOutcomesAreRecorded`, `TestScheduledRunIsRecorded`, `TestMultiDotCardsResolveForEachContributor`; `TestBackgroundKindsAreHistoryKinds` moved into Step 1.
+29. **(reconciled) `dropPane` (Phase 8) orphans cards under `e.mu`.** Task 7 reads `Queue.Pending(paneID)` in the same section, right before `OrphanPane` (`e.mu → stores`), and spawns the `orphaned` resolutions after the unlock; Task 9 also forgets the pane's repository there (`paneRoots`), so a reused pane id is scanned again.
+30. **(reconciled) An untrusted or changed project dot never runs, in the background either.** Phase 8's jobs and Phase 3's council members carry a copy of the dot, so a run queued before its file changed could still start. `runDot` (after it takes a run slot) and `runBackground` (before it claims a slot) call `projectDotGone(d)`: a project dot no longer loaded exactly as it was (`reflect.DeepEqual` with `e.dots`) is skipped with a log line and no record. Proactive scheduling itself only sees `e.dots`, which holds trusted, clamped project dots. `scanRoot` also drops the schedule plans of a repository's dots when its files or trust change, so a newly granted or changed cron is planned afresh. New test `TestARevokedProjectDotsQueuedRunNeverStarts`.
+31. **(reconciled) The MCP clamp in Phase 5's real files.** `askable` lives in `ask.go` and ends `return d, err` after the blocked check; the `capabilities.mcp` check goes right before that return. `AskCouncil` lives in `ask_council.go`; it now passes the non-empty list of MCP-allowed members when any attached dot lacks the capability (`startCouncil` applies its eligibility rules to an explicit list through `councilPlan`'s `Preflight.Select`), and its doc comment says so.
+32. **(reconciled) Previews show Phase 8's text.** The popup's trust preview and `herdr-dots dots trust` show the whole file (research topics, a schedule task, backend args and any key a later field adds are prompt-bearing or risky, and trust covers every byte); import previews (CLI and popup) add research topics, the schedule task and backend args next to the purpose. Task 11's trust test scrolls further for the longer preview.
+33. **(reconciled) Phase 7 and 8 snapshot fields.** `Snapshot` keeps Phase 7's `Write`/`WriteTimeoutSeconds` on library entries, and project library entries fill them from the clamped dot (so a write grant shows); `view.Snapshot.PaneProjects` goes after Phase 8's daily fields; `config.ProjectDotsEnabled` is turned off on Phase 7/8's combined fail-closed lines. The manage popup keeps Phase 4's providers screen and `K providers` help; `memDeletedMsg` is Phase 2's `{name, del}`. The profile's memory line counts Phase 8's research and question kinds, and its ellipses go through Phase 6's `style.Sym`.
+34. **(reconciled) Task 12 against the post-Phase-8 README.** The version pin moves first (`TestVersionIsPhaseEight` → `TestVersionIsPhaseNine`, test first), the manifest edit anchors on `name`/`version` (a bare `version = "0.8.0"` also matches `min_herdr_version`), and the six README edits anchor on Phase 8 Task 16's status block, `### Proactive dots (0.8.0)`, its last `## Files`, privacy and known-gaps lines, and its `| 9–10 |` roadmap row. The roadmap spec is not edited: its phase table has no status column, and Phases 2–8 left it alone. The wording check is Phase 8's.
+35. **(reconciled) Verification.** `gofmt -l internal cmd` replaces `gofmt -l .`; the Windows build, vet and `go test -c` join every task's checks (Phase 6 and 8 practice). Every prose-only edit of the old plan ("add after it", "replace every …", "add imports") became a Find/Replace block or an explicit import line, so the plan can be replayed mechanically.
 
 ## Review Focus
 
@@ -85,9 +101,9 @@ The five inputs the spec implies but its test list doesn't exercise, most likely
 2. **A trusted project dot edited (same size, same second) by a teammate's commit while attached, or edited between the preview and `y`.** Expect the attached copy paused with one toast, the edited file untrusted, and a trust request for stale bytes refused. Tests: `TestAnyEditRevokesTrustAndChangesTheStamp` (Task 5), `TestEditedTrustedDotIsPausedWithAToast`, `TestTrustRefusesAFileChangedSinceReview` (Task 9).
 3. **An import from a URL that redirects to a 50 MB file or to `http://`.** Expect a refusal naming the reason, the final URL shown for a good redirect. Test: `TestFetchHTTPSOnlyCappedAndReportsTheFinalURL` (Task 6).
 4. **Importing "Security" when you already have a Security dot.** Expect a request for a new name and the original untouched. Tests: `TestExportImportRoundTripNeverOverwrites` (Task 10), `TestImportPreviewCollisionRenameAndClamps` (Task 11).
-5. **A pack's memory treated as the developer's own.** Expect `(imported)` labels, no suppression from an imported "don't raise this", and imported project memory out of prompts until approved. Tests: `TestImportedMemoryIsLabelledNeverDeveloper`, `TestImportedProposalsStayOutOfPrompts` (Task 4), `TestImportedDismissedMemoryNeverSuppresses` (Task 7).
+5. **A pack's memory treated as the developer's own.** Expect `(imported)` labels, no suppression from an imported "don't raise this" (even once approved), and every imported entry, dot scope included, out of prompts until approved. Tests: `TestImportedMemoryIsLabelledNeverDeveloper`, `TestImportedProposalsStayOutOfPrompts`, `TestOnlyImportsProposeDotMemory` (Task 4), `TestImportedDismissedMemoryNeverSuppresses` (Task 7).
 
-Also covered: an inject card resolved before its run record (`TestResolutionWrittenBeforeItsRunStillJoins`, Task 1), a busy month (`BenchmarkStats30d`, `TestTrimKeepsTheNewestLinesAndTheirResolutions`, Task 1), and a malformed config (`TestProjectDotsSwitch`, Task 9).
+Also covered: an inject card resolved before its run record (`TestResolutionWrittenBeforeItsRunStillJoins`, Task 1), keys in model text (`TestDefaultRedactionNeverStoresKeys`, Task 1), a busy month (`BenchmarkStats30d`, `TestTrimKeepsTheNewestLinesAndTheirResolutions`, Task 1), a repository dot asking for Phase 7 and 8 powers (`TestProactiveAndWriteFieldsStayOffUntilGranted`, Task 5; `TestClampRemovesAbsoluteScheduleProjects`, Task 2), a project dot revoked while a run was queued (`TestARevokedProjectDotsQueuedRunNeverStarts`, Task 9), drafts, patches, scheduled runs and digests in history (`TestDraftRunAndPatchOutcomesAreRecorded`, `TestScheduledRunIsRecorded`, `TestMultiDotCardsResolveForEachContributor`, Task 7), and a malformed config (`TestProjectDotsSwitch`, Task 9).
 
 ---
 
@@ -108,29 +124,29 @@ Each task runs in its own git worktree branched from the wave's base (the base b
 | 9 | Engine project dots, trust IPC, MCP clamp, wiring | Task 2, Task 5, Task 7 | 3 |
 | 10 | `herdr-dots dots` CLI | Task 1, Task 2, Task 5, Task 6 | 3 |
 | 11 | Manage popup: profile, import, export, trust | Task 3, Task 6, Task 8, Task 9 | 4 |
-| 12 | README, roadmap, notes, version 0.9.0 | all | 5 |
+| 12 | README, notes, version 0.9.0 | all (and Phase 8 Task 16) | 5 |
 
 **Wave schedule:** W1 = {1, 2, 3, 4} → W2 = {5, 6, 7, 8} → W3 = {9, 10} → W4 = {11} → W5 = {12}.
 
 **Files per task** (disjoint within each wave):
 - Task 1: `internal/history/history.go`, `stats.go`, `history_test.go`, `xproc_test.go`, `bench_test.go`; `internal/paths/paths.go`, `internal/paths/history_test.go`.
 - Task 2: `internal/dots/dot.go`, `store.go`, `templates.go`, `project.go`, `clamp.go`, `project_test.go`, `clamp_test.go`.
-- Task 3: `internal/dots/templates/{accessibility,performance,docs,i18n,dependency-auditor,api-design,data-privacy}.toml`, `internal/dots/templates_test.go`, `internal/ui/manage/model_test.go`.
-- Task 4: `internal/memory/importpack.go`, `importpack_test.go`, `select.go`; `internal/ui/memui/model.go`, `internal/ui/memui/provenance_test.go`.
+- Task 3: `internal/dots/templates/{accessibility,performance,docs,i18n,dependency-auditor,api-design,data-privacy}.toml`, `internal/dots/templates_test.go`, `internal/ui/manage/model_test.go`, `internal/ui/manage/form_harden_test.go` (Phase 7's position-based pick).
+- Task 4: `internal/memory/importpack.go`, `importpack_test.go`, `select.go`, `store.go`; `internal/ui/memui/model.go`, `internal/ui/memui/provenance_test.go`.
 - Task 5: `internal/projectdots/trust.go`, `scan.go`, `projectdots_test.go`.
 - Task 6: `internal/dotpack/dotpack.go`, `fetch.go`, `dotpack_test.go`.
 - Task 7: `internal/engine/history.go`, `history_test.go`, `engine.go`, `deliver.go`, `memory.go`; Phase 7's `draft.go` (`runDraft`) and Phase 8's `background.go` (`runBackground`).
 - Task 8: `internal/ui/style/text.go`, `text_test.go`; `internal/ui/profile/model.go`, `model_test.go`; `internal/view/view.go` (one field: `LibraryDot.Origin`).
-- Task 9: `internal/engine/projectdots.go`, `projectdots_test.go`, `engine.go`, `control.go`, `deliver.go`, `handle.go`, Phase 5's `ask.go` (or wherever `askable` and `AskCouncil` live); `internal/ipc/ipc.go`; `internal/view/view.go`; `internal/config/config.go`, `config_test.go`, `projectdots_test.go`; `cmd/herdr-dots/engine.go`.
+- Task 9: `internal/engine/projectdots.go`, `projectdots_test.go`, `engine.go`, `control.go`, `deliver.go`, `handle.go`, Phase 5's `ask.go` (`askable`) and `ask_council.go` (`AskCouncil`), Phase 8's `background.go` (`runBackground` gate); `internal/ipc/ipc.go`; `internal/view/view.go`; `internal/config/config.go`, `config_test.go`, `projectdots_test.go`; `cmd/herdr-dots/engine.go`.
 - Task 10: `cmd/herdr-dots/dots.go`, `dots_test.go`, `main.go`.
 - Task 11: `internal/ui/manage/model.go`, `pager.go`, `trust.go`, `share.go`, `share_test.go`; `cmd/herdr-dots/ui.go`.
-- Task 12: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, `docs/superpowers/notes/2026-10-08-phase-9-verification.md`, `internal/version/version.go`, `herdr-plugin.toml`.
+- Task 12: `README.md`, `docs/superpowers/notes/2026-10-08-phase-9-verification.md`, `internal/version/version.go`, `herdr-plugin.toml`, `cmd/herdr-dots/memwire_test.go`.
 
-**Test-name hygiene:** helpers added here, per package: `history`: `hNow`, `hstore`, `runRec`, `resRec`, `mustAppend`, `fillHistory`. `dots`: `projID`, `writeProjectDot`, `a11yTOML`, `riskyDot`. `memory`: `packEntries`. `memui`: none (uses `open`, `press`). `projectdots`: `pdProject`, `helperTOML`, `pdRepo`, `pdTrust`. `dotpack`: `dpNow`, `dpDot`, `dpMem`. `engine`: `histRig`, `histRuns`, `repoProject`, `helperSlug`, `repoHelperTOML`, `projRig`, `newProjRig`, `(*projRig).libDot`, `(*projRig).trustAs`. `config`: none. `style`: none. `profile`: `pNow`, `pPID`, `pdrive`, `pkey`, `ppress`, `fixture`, `openProfile`. `manage`: `pickTemplate` (Task 3), `shareHelperTOML`, `shareLib`, `sharePress`, `shareDeps`. `cmd/herdr-dots`: `dotsTestPID`, `dotsRig`, `newDotsCLI`, `(*dotsRig).run`, `(*dotsRig).saveDot`. Product names that could meet a later phase's: engine `runTrace`, `trace`, `resolutionFor`, `spawnResolve`, `projectState`, `knowPane`, `scanRoot`, `rescanProjects`, `pauseRevoked`, `findProjectItem`, `untrustedLocked`, `projectLibraryLocked`, `paneProjectsLocked`, `resolveRoot`, `rebuildLocked`, `projectDotsOn`, `mcpMembers`, `ErrUntrusted`, `ErrProjectDot`; `cmd/herdr-dots` `dotsCLI`, `runDots`, `parseAnywhere`, `indentBlock`, `historyStoreFor`. Before adding any of them, run `grep -rn "func <name>\b\|type <name>\b" <package dir>`; if Phases 2–8 already define it, add the suffix `P9` everywhere this plan uses it.
+**Test-name hygiene:** helpers added here, per package: `history`: `hNow`, `hstore`, `runRec`, `resRec`, `mustAppend`, `fillHistory`. `dots`: `projID`, `writeProjectDot`, `a11yTOML`, `riskyDot`. `memory`: `packEntries`. `memui`: none (uses `open`, `press`). `projectdots`: `pdProject`, `helperTOML`, `pdRepo`, `pdTrust`. `dotpack`: `dpNow`, `dpDot`, `dpMem`. `engine`: `histRig`, `histRuns`, `repoProject`, `helperSlug`, `repoHelperTOML`, `projRig`, `newProjRig`, `(*projRig).libDot`, `(*projRig).trustAs`. `config`: none. `style`: none. `profile`: `pNow`, `pPID`, `pdrive`, `pkey`, `ppress`, `fixture`, `openProfile`. `manage`: `pickTemplate` (Task 3), `shareHelperTOML`, `shareLib`, `sharePress`, `shareDeps`. `cmd/herdr-dots`: `dotsTestPID`, `dotsRig`, `newDotsCLI`, `(*dotsRig).run`, `(*dotsRig).saveDot`. Product names that could meet a later phase's: engine `runTrace`, `trace`, `verdictOutcome`, `resolutionFor`, `spawnResolve`, `projectState`, `projectDotGone`, `knowPane`, `scanRoot`, `rescanProjects`, `pauseRevoked`, `findProjectItem`, `untrustedLocked`, `projectLibraryLocked`, `paneProjectsLocked`, `resolveRoot`, `rebuildLocked`, `projectDotsOn`, `mcpMembers`, `ErrUntrusted`, `ErrProjectDot`; dots `readOnly`, `CapProjects`; `cmd/herdr-dots` `dotsCLI`, `runDots`, `parseAnywhere`, `indentBlock`, `historyStoreFor`. (Reconcile check at `c4d3827`: none of these exists in Phases 2–8, and the new tests' names don't collide.) Before adding any of them, run `grep -rn "func <name>\b\|type <name>\b" <package dir>`; if Phases 2–8 already define it, add the suffix `P9` everywhere this plan uses it.
 
 ### Shared files with Phases 2–8
 
-Phases 2–8 merge before Phase 9, so these files already carry their changes. Edits below are written as **Find / Replace** blocks against v1 + Phase 2 (+ the Phase 3 code at HEAD); where a Find block no longer matches because a later phase moved or reworded those lines, make the same change by hand: every block shows the exact lines to add.
+Phases 2–8 merge before Phase 9, so these files already carry their changes. Edits below are **Find / Replace** blocks reconciled against the merged Phase 2–8 code (`c4d3827`); only Phase 8's final fix wave and its Task 16 can still move a line, and then you make the same change by hand: every block shows the exact lines to add.
 
 | File | Earlier phases | Phase 9 task |
 |---|---|---|
@@ -141,12 +157,15 @@ Phases 2–8 merge before Phase 9, so these files already carry their changes. E
 | `internal/engine/engine.go` | 2, 3 council, 4 cost, 5 ask, 7 draft, 8 proactive | 7, then 9 |
 | `internal/engine/deliver.go`, `memory.go`, `control.go`, `handle.go` | 2, 3, 5, 7, 8 | 7 (`deliver.go`, `memory.go`), 9 (`deliver.go`, `control.go`, `handle.go`) |
 | `internal/ipc/ipc.go`, `internal/view/view.go` | 2, 3, 4, 5, 7, 8 | 9 (`view.go` also 8: one field) |
-| `internal/engine/draft.go` (Phase 7), `background.go` (Phase 8), `ask.go` (Phase 5) | created there | 7 (`draft.go`, `background.go`), 9 (`ask.go`) |
+| `internal/engine/draft.go` (Phase 7), `background.go` (Phase 8), `ask.go` and `ask_council.go` (Phase 5) | created there | 7 (`draft.go`, `background.go`), 9 (`ask.go`, `ask_council.go`, `background.go`) |
+| `internal/memory/store.go` | 2 (created), 5, 8 | 4 (`prepare`) |
+| `internal/ui/manage/form_harden_test.go` | 7 | 3 |
+| `cmd/herdr-dots/memwire_test.go` | 2, 7, 8 (version pin) | 12 |
 | `internal/config/config.go`, `config_test.go` | 2, 3, 4, 5, 7, 8 | 9 |
 | `cmd/herdr-dots/engine.go`, `ui.go`, `main.go` | 2–8 | 9, 11, 10 |
 | `internal/ui/manage/model.go`, `model_test.go` | 2, 4, 7, 8 | 11, 3 |
 | `internal/paths/paths.go` | 2, 4, 6, 7, 8 | 1 |
-| `README.md`, roadmap, version, manifest | every phase | 12 |
+| `README.md`, version, manifest | every phase | 12 (the roadmap spec is not edited) |
 
 ## File Structure
 
@@ -185,14 +204,15 @@ cmd/herdr-dots/{main,engine,ui}.go  (mod)  dispatch, engine deps, manage deps
 **Common verification block** (the "full checks" step of every task):
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
-GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...
+GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...
+mkdir -p "${TMPDIR:-/tmp}/p9-win" && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p9-win/" ./...
 ```
 
-Expected: `gofmt` prints nothing; every other command exits 0 (`go test` prints only `ok` and `[no test files]` lines).
+Expected: `gofmt` prints nothing; every other command exits 0 (`go test` prints only `ok` and `[no test files]` lines). (`gofmt -l .` would also list the `.claude/worktrees` checkouts some setups keep inside the repository.)
 
 ---
 ### Task 1: `internal/history` and the history and trust paths
@@ -208,12 +228,12 @@ A persistent, per-dot record of every run and card resolution, with stats comput
 - Create: `internal/paths/history_test.go`
 
 **Interfaces:**
-- Consumes: `lockfile.Acquire(path string, timeout time.Duration) (*lockfile.Lock, error)`, `lockfile.ErrLocked`; `fsutil.WriteFileAtomic`; `textutil.SanitizeModelText`; `state.OutcomeFlagged`, `OutcomePass`, `OutcomeError`, `OutcomeSuppressed`; Phase 6 `platformtest.AssertPrivateFile`, `AssertPrivateDir`.
+- Consumes: `lockfile.Acquire(path string, timeout time.Duration) (*lockfile.Lock, error)`, `lockfile.ErrLocked`; `fsutil.WriteFileAtomic`; `textutil.SanitizeModelText` (strips bidi controls since Phase 8); `credentials.Redact(s string, known ...string) string` (variadic, so it is called, never assigned to the `func(string) string` field); `state.OutcomeFlagged`, `OutcomePass`, `OutcomeError`, `OutcomeSuppressed`; Phase 6 `platformtest.AssertPrivateFile`, `AssertPrivateDir`.
 - Produces (package `history`):
   - consts `TypeRun = "run"`, `TypeResolve = "resolve"`; kinds `KindReview`, `KindSummon`, `KindCouncil`, `KindAsk`, `KindResearch`, `KindScheduled`, `KindCommit`, `KindDraft`, `KindMemory` (values `review`, `summon`, `council`, `ask`, `research`, `scheduled`, `commit`, `draft`, `memory`); resolutions `ResSent`, `ResEdited`, `ResDismissed`, `ResApplied`, `ResDiscarded`, `ResInjected`, `ResOrphaned`; `DefaultMaxLines = 20000`, `DefaultTrimTo = 15000`, `DefaultTrimEvery = 500`, `ExcerptRunes = 300`; `ErrInvalid`, `ErrLocked`.
   - `type Record struct{ T string; At time.Time; Dot, Project, Pane, Kind string; Turn int; Outcome, Severity, Card, Resolution, Excerpt string; CostUSD float64; CostUnknown bool; In, Out int; Ms int64 }` (JSON `t`, `at`, `dot`, `project`, `pane`, `kind`, `turn`, `outcome`, `severity`, `card`, `resolution`, `excerpt`, `cost_usd`, `cost_unknown`, `in`, `out`, `ms`).
   - `func CardKey(session, id string) string` (`session + "/" + id`; `""` for no id); `func ValidSlug(slug string) bool`.
-  - `type Store struct{ Dir string; MaxLines, TrimTo, TrimEvery int; LockTimeout time.Duration; Redact func(string) string; Now func() time.Time }`; `func Open(dir string) *Store`; `(*Store) Append(r Record) error`; `(*Store) Query(slug string, since time.Time, limit int) ([]Record, error)` (runs newest first, `Resolution` joined); `(*Store) Trim(slug string) error`; `(*Store) Slugs() ([]string, error)`.
+  - `type Store struct{ Dir string; MaxLines, TrimTo, TrimEvery int; LockTimeout time.Duration; Redact func(string) string /* nil = credentials.Redact */; Now func() time.Time }`; `func Open(dir string) *Store`; `(*Store) Append(r Record) error`; `(*Store) Query(slug string, since time.Time, limit int) ([]Record, error)` (runs newest first, `Resolution` joined); `(*Store) Trim(slug string) error`; `(*Store) Slugs() ([]string, error)`.
   - `type Stats struct{ Runs map[string]int; Verdicts, Flagged, Suppressed, Errors, Resolved, Accepted, Dismissed int; CostUSD float64; CostUnknown int; MedianMs int64; Skipped int }` with `TotalRuns() int`, `FlaggedRate() float64`, `AcceptanceRate() float64`, `ErrorRate() float64`; `(*Store) Stats(slug string, now time.Time, window time.Duration) (Stats, error)`; `type Profile struct{ Week, Month Stats; Rows []Record }`; `(*Store) Profile(slug string, now time.Time, rows int) (Profile, error)`; `(*Store) CostShare(slug string, now time.Time, window time.Duration) (share, total float64, err error)`.
   - `(paths.Paths) HistoryDir() string` (`StateDir/history`), `(paths.Paths) TrustFile() string` (`ConfigDir/trusted.json`); `Ensure` creates `HistoryDir` private.
 
@@ -437,6 +457,34 @@ func TestAppendRefusesBadRecordsAndCleansExcerpts(t *testing.T) {
 	}
 	if n := len([]rune(ex)); n != ExcerptRunes {
 		t.Fatalf("excerpt %d runes", n)
+	}
+}
+
+// With no Redact of its own the store uses credentials.Redact, so a caller
+// that forgets to wire one still never writes a key (GitHub, AWS, Slack,
+// Stripe, GitLab, URL credentials, provider keys) or a bidi control.
+func TestDefaultRedactionNeverStoresKeys(t *testing.T) {
+	s := hstore(t)
+	r := runRec("security", KindReview, state.OutcomeFlagged, "", time.Minute)
+	keys := []string{
+		"sk-ant-api03-abcdefghijklmnop",
+		"ghp_" + strings.Repeat("a", 36),
+		"AKIA" + strings.Repeat("B", 16),
+		"xoxb-1234567890-abcdef",
+		"sk_live_" + strings.Repeat("c", 24),
+		"glpat-" + strings.Repeat("d", 20),
+		"https://bob:hunter2pass@example.com/x",
+	}
+	r.Excerpt = "‮mix " + strings.Join(keys, " ")
+	mustAppend(t, s, r)
+	data, err := os.ReadFile(filepath.Join(s.Dir, "security.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range append(keys[:6:6], "hunter2pass", "‮", `‮`) {
+		if strings.Contains(string(data), k) {
+			t.Fatalf("history file holds %q: %s", k, data)
+		}
 	}
 }
 
@@ -688,6 +736,7 @@ import (
 	"sync"
 	"time"
 
+	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/lockfile"
 	"herdr-dots/internal/textutil"
@@ -782,7 +831,7 @@ type Store struct {
 	TrimTo      int
 	TrimEvery   int                 // appends (per process and file) between size checks
 	LockTimeout time.Duration       // 0 → 2s
-	Redact      func(string) string // scrubs key-shaped text from excerpts; nil = none
+	Redact      func(string) string // scrubs key-shaped text from excerpts; nil = credentials.Redact
 	Now         func() time.Time    // nil = time.Now
 
 	mu      sync.Mutex
@@ -839,12 +888,16 @@ func (s *Store) withLock(slug string, fn func(path string) error) error {
 	return fn(s.path(slug))
 }
 
-// Excerpt cleans model text for history: control characters stripped, keys
-// redacted, whitespace flattened, at most ExcerptRunes runes.
+// Excerpt cleans model text for history: control and bidi characters
+// stripped, keys redacted (credentials.Redact unless the store overrides it:
+// history never holds a key), whitespace flattened, at most ExcerptRunes
+// runes.
 func (s *Store) excerpt(text string) string {
 	text = textutil.SanitizeModelText(text)
 	if s.Redact != nil {
 		text = s.Redact(text)
+	} else {
+		text = credentials.Redact(text)
 	}
 	text = strings.Join(strings.Fields(text), " ")
 	if r := []rune(text); len(r) > ExcerptRunes {
@@ -1250,7 +1303,7 @@ In `Ensure`, find the directory list (Phase 6 secures each entry with `platform.
 	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir, p.MemoryDir()} {
 ```
 
-Replace with (keep any directory a later phase appended):
+Replace with (the list is unchanged since Phase 2; Phase 6 secures each entry):
 
 ```go
 	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir, p.MemoryDir(), p.HistoryDir()} {
@@ -1286,7 +1339,7 @@ Everything Phase 9 needs to know about a dot: where it came from, how a reposito
 **Depends on:** none. Wave 1 (runs beside Tasks 1, 3 and 4).
 
 **Files:**
-- Modify: `internal/dots/dot.go` (Dot fields, `Validate`), Phase 7's `internal/dots/capabilities.go` (`CapabilitySpec`, `DefaultCapabilities`; if Phase 7 put them in `dot.go`, edit them there), `internal/dots/store.go` (`decode`, `Save`, `Encode`, `PurposeBlock`, `insertPurpose`), `internal/dots/templates.go` (origin)
+- Modify: `internal/dots/dot.go` (Dot fields, `Validate`), Phase 7's `internal/dots/capabilities.go` (`CapabilitySpec`, `DefaultCapabilities`), `internal/dots/store.go` (`decode`, `Save`, `Encode`, `PurposeBlock`, `insertPurpose`), `internal/dots/templates.go` (origin)
 - Create: `internal/dots/project.go`, `internal/dots/clamp.go`
 - Create: `internal/dots/project_test.go`, `internal/dots/clamp_test.go`
 
@@ -1297,7 +1350,7 @@ Everything Phase 9 needs to know about a dot: where it came from, how a reposito
   - consts `OriginUser = "user"`, `OriginTemplate = "template"`, `OriginImport = "import"`, `OriginProject = "project"`, `ProjectPrefix = "proj--"`, `MaxProjectFileBytes = 64 << 10`; `var ProjectDir = filepath.Join(".herdr-dots", "dots")`.
   - `ProjectTag(projectID string) string`; `ProjectSlug(base, projectID string) string`; `SplitProjectSlug(slug string) (base, tag string, ok bool)`; `IsProjectSlug(slug string) bool`; `DisplaySlug(slug string) string`.
   - `type ProjectFile struct{ Base, Path, Rel string; Data []byte }`; `ReadProjectFiles(root string) ([]ProjectFile, []LoadError)`; `DecodeProject(f ProjectFile, projectID string) (Dot, error)`; `DecodeStrict(data []byte) (Dot, error)`; `LoadProject(root, projectID string) ([]Dot, []LoadError)`.
-  - capability consts `CapInject`, `CapWrite`, `CapMCP`, `CapResearch`, `CapWeb`, `CapSchedule`, `CapCommit`, `CapBaseURL` (values `inject`, `write`, `mcp`, `research`, `web`, `schedule`, `commit`, `base_url`) and `CapArgs = "args"`; `var Capabilities []string` (display order); `type Clamp struct{ Capability, Field, From, To string; Keepable bool }` with `String()`; `ClampDot(d Dot, keep []string) (Dot, []Clamp)`; `Requested(d Dot) []string`; `CheckCapabilities(caps []string) error`.
+  - capability consts `CapInject`, `CapWrite`, `CapMCP`, `CapResearch`, `CapWeb`, `CapSchedule`, `CapCommit`, `CapBaseURL` (values `inject`, `write`, `mcp`, `research`, `web`, `schedule`, `commit`, `base_url`) and the non-keepable `CapArgs = "args"`, `CapProjects = "projects"` (absolute `schedule.projects` paths removed); `var Capabilities []string` (display order); `type Clamp struct{ Capability, Field, From, To string; Keepable bool }` with `String()`; `ClampDot(d Dot, keep []string) (Dot, []Clamp)`; `Requested(d Dot) []string`; `CheckCapabilities(caps []string) error`.
   - `Encode(d Dot) ([]byte, error)`; `PurposeBlock(purpose string) string`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1494,6 +1547,8 @@ package dots
 import (
 	"slices"
 	"testing"
+
+	"herdr-dots/internal/platform/platformtest"
 )
 
 // riskyDot asks for every capability a shared dot can ask for.
@@ -1539,6 +1594,26 @@ func TestClampDotTurnsEveryRiskyCapabilityOff(t *testing.T) {
 	}
 }
 
+// A shared dot's schedule may only target the projects it is attached to:
+// absolute paths name directories on the author's machine (or a guess at
+// yours), and keeping "schedule" never keeps them.
+func TestClampRemovesAbsoluteScheduleProjects(t *testing.T) {
+	d := riskyDot()
+	d.Backend.BaseURL = "" // claude-cli has none; keeping it would not validate
+	d.Schedule.Task = "t"
+	d.Schedule.Projects = []string{ScheduleAttached, platformtest.Abs("home", "me", "secret-repo")}
+	got, cs := ClampDot(d, Capabilities)
+	if !slices.Equal(got.Schedule.Projects, []string{ScheduleAttached}) || got.Schedule.Cron == "" {
+		t.Fatalf("schedule %+v", got.Schedule)
+	}
+	if len(cs) != 2 || cs[0].Capability != CapArgs || cs[1].Capability != CapProjects || cs[1].Keepable {
+		t.Fatalf("clamps %+v", cs)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestKeepRestoresOnlyTheNamedCapability(t *testing.T) {
 	got, cs := ClampDot(riskyDot(), []string{CapInject})
 	if got.Delivery.Mode != ModeInject || got.Capabilities.Write {
@@ -1552,6 +1627,19 @@ func TestKeepRestoresOnlyTheNamedCapability(t *testing.T) {
 	all, _ := ClampDot(riskyDot(), Capabilities)
 	if len(all.Backend.Args) != 2 {
 		t.Fatal("keeping everything still removes denied args")
+	}
+}
+
+// Clearing write rebuilds CapabilitySpec (the write-tool guard allows no
+// assignment to .Write outside drafts); every other field must survive.
+func TestClampKeepsEveryOtherCapabilityField(t *testing.T) {
+	d := riskyDot()
+	d.Capabilities.WriteTimeoutSeconds, d.Capabilities.MaxPatchBytes, d.Capabilities.MaxFiles = 900, 5000, 7
+	got, _ := ClampDot(d, []string{CapMCP})
+	want := d.Capabilities
+	want.Write = false
+	if got.Capabilities != want {
+		t.Fatalf("capabilities %+v, want %+v", got.Capabilities, want)
 	}
 }
 
@@ -1626,7 +1714,7 @@ Replace with:
 	}
 ```
 
-In Phase 7's `CapabilitySpec` (`internal/dots/capabilities.go` in Phase 7's draft), find its last field:
+In Phase 7's `CapabilitySpec` (`internal/dots/capabilities.go`), find its last field:
 
 ```go
 	MaxFiles            int  `toml:"max_files"`             // patches touching more files are rejected
@@ -1653,7 +1741,7 @@ Replace with (every existing dot file without the key keeps MCP access, as befor
 	return CapabilitySpec{WriteTimeoutSeconds: 600, MaxPatchBytes: 200000, MaxFiles: 50, MCP: true}
 ```
 
-If Phase 7 built the defaults into `New` instead of `DefaultCapabilities()`, add `MCP: true` to the `CapabilitySpec` literal there.
+`New` uses `DefaultCapabilities()`, so every dot without the key keeps MCP access.
 
 - [ ] **Step 4: Write project dot files and the clamp table**
 
@@ -1904,8 +1992,14 @@ const (
 	CapBaseURL  = "base_url" // backend.base_url (Phase 4): sends prompts (and an API key) to another endpoint
 )
 
-// CapArgs is the clamp that removes denied backend args; it can't be kept.
-const CapArgs = "args"
+// CapArgs is the clamp that removes denied backend args; CapProjects removes
+// absolute schedule.projects paths (Phase 8), which name directories on the
+// author's machine: someone else's dot may run only on the projects it is
+// attached to. Neither can be kept.
+const (
+	CapArgs     = "args"
+	CapProjects = "projects"
+)
 
 // Capabilities lists the keepable capabilities in display order.
 var Capabilities = []string{CapInject, CapWrite, CapMCP, CapResearch, CapWeb, CapSchedule, CapCommit, CapBaseURL}
@@ -1951,7 +2045,7 @@ func ClampDot(d Dot, keep []string) (Dot, []Clamp) {
 		clamp(CapInject, "delivery.mode", string(ModeInject), string(ModeQueue))
 	}
 	if d.Capabilities.Write && !kept(CapWrite) {
-		d.Capabilities.Write = false
+		d.Capabilities = readOnly(d.Capabilities)
 		clamp(CapWrite, "capabilities.write", "true", "false")
 	}
 	if d.Capabilities.MCP && !kept(CapMCP) {
@@ -1985,7 +2079,21 @@ func ClampDot(d Dot, keep []string) (Dot, []Clamp) {
 			d.Backend.Args = []string{}
 		}
 	}
+	notAttached := func(p string) bool { return p != ScheduleAttached }
+	if abs := slices.DeleteFunc(slices.Clone(d.Schedule.Projects), func(p string) bool { return !notAttached(p) }); len(abs) > 0 {
+		out = append(out, Clamp{Capability: CapProjects, Field: "schedule.projects", From: strings.Join(abs, ", "), To: "(removed)"})
+		d.Schedule.Projects = slices.DeleteFunc(slices.Clone(d.Schedule.Projects), notAttached)
+	}
 	return d, out
+}
+
+// readOnly is c with Write off. It rebuilds the struct instead of assigning
+// to .Write: Phase 7's write-tool guard (TestOnlyDraftsAskForWriteTools in
+// internal/engine) refuses any assignment to a .Write field outside
+// internal/engine/draft.go. TestClampKeepsEveryOtherCapabilityField fails if
+// a field added later is dropped here.
+func readOnly(c CapabilitySpec) CapabilitySpec {
+	return CapabilitySpec{WriteTimeoutSeconds: c.WriteTimeoutSeconds, MaxPatchBytes: c.MaxPatchBytes, MaxFiles: c.MaxFiles, MCP: c.MCP}
 }
 
 // Requested lists the keepable capabilities d asks for, in display order.
@@ -2128,8 +2236,8 @@ Replace with:
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `GOTOOLCHAIN=local go test -race ./internal/dots ./internal/ui/manage`
-Expected: `ok` for both (the manage editor keeps `Origin` because `Form.Dot` starts from the original dot). The symlink tests print `SKIP` only where symlinks can't be created (Windows without developer mode).
+Run: `gofmt -w internal/dots && GOTOOLCHAIN=local go test -race ./internal/dots ./internal/ui/manage && GOTOOLCHAIN=local go test ./internal/engine -run '^TestOnlyDraftsAskForWriteTools$'`
+Expected: `ok` for all three (the manage editor keeps `Origin` because `Form.Dot` starts from the original dot; `gofmt -w` re-aligns the `Dot` struct after the new fields, and the engine's write-tool guard stays green because `ClampDot` never assigns to `.Write`). The symlink tests print `SKIP` only where symlinks can't be created (Windows without developer mode).
 
 - [ ] **Step 7: Full checks**
 
@@ -2150,7 +2258,7 @@ git commit -m "feat(dots): origins, project dot files with namespaced slugs, the
 
 **Files:**
 - Create: `internal/dots/templates/accessibility.toml`, `performance.toml`, `docs.toml`, `i18n.toml`, `dependency-auditor.toml`, `api-design.toml`, `data-privacy.toml`
-- Modify: `internal/dots/templates_test.go` (count), `internal/ui/manage/model_test.go` (pick templates by name)
+- Modify: `internal/dots/templates_test.go` (count), `internal/ui/manage/model_test.go` and `internal/ui/manage/form_harden_test.go` (pick templates by name)
 
 **Interfaces:**
 - Consumes: v1 `dots.Templates()` (embedded `templates/*.toml`, sorted by name).
@@ -2425,7 +2533,7 @@ verbosity = "normal"
 max_calls_per_session = 40
 ```
 
-If Phases 4–8 added required keys to every template (their template tests say so), add the same keys to these seven files with the values the existing templates use.
+Phases 4–8 added no required template keys: `[memory]`, `[research]`, `[schedule]` and `[capabilities]` come from `dots.New`'s defaults, as in the seven existing templates (`TestTemplatesAreAllValid` validates all 14).
 
 - [ ] **Step 4: Make the manage tests pick templates by name**
 
@@ -2499,7 +2607,21 @@ Replace with:
 	m = press(pickTemplate(t, m, "Copywriter"), "enter") // Copywriter in the editor
 ```
 
-Then run `grep -n '"t", "j"' internal/ui/manage/*_test.go`; expected: no output. Any other position-based template pick a later phase added gets the same `pickTemplate` treatment.
+Phase 7's `internal/ui/manage/form_harden_test.go` added one more position-based pick. Find (in `TestSavingReservesALine`):
+
+```go
+	m = press(m, "t", "j", "enter")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+```
+
+Replace with:
+
+```go
+	m = press(pickTemplate(t, m, "Copywriter"), "enter")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+```
+
+Then run `grep -n '"t", "j"' internal/ui/manage/*_test.go`; expected: no output. (`TestDuplicateNameShowsError` already walks the list by name, and the `"t"` in `providers_test.go` is the providers screen's test key, not the template list.)
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -2513,7 +2635,7 @@ Run the common verification block. Expected: as stated there.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/dots/templates internal/dots/templates_test.go internal/ui/manage/model_test.go
+git add internal/dots/templates internal/dots/templates_test.go internal/ui/manage/model_test.go internal/ui/manage/form_harden_test.go
 git commit -m "feat(templates): accessibility, performance, docs, i18n, dependency auditor, API design and data privacy (Phase 9)"
 ```
 
@@ -2527,7 +2649,7 @@ Shared memory is someone else's conclusion and is attributed that way everywhere
 
 **Files:**
 - Create: `internal/memory/importpack.go`, `internal/memory/importpack_test.go`
-- Modify: `internal/memory/select.go` (`eligible`, `author`, `Render`)
+- Modify: `internal/memory/select.go` (`eligible`, `author`, `Render`), `internal/memory/store.go` (`prepare`: imported dot memory may be proposed)
 - Modify: `internal/ui/memui/model.go` (`approveScreen`, `row`)
 - Create: `internal/ui/memui/provenance_test.go`
 
@@ -2566,8 +2688,10 @@ func TestImportPackLandsAsSomeoneElsesConclusions(t *testing.T) {
 	if len(dot) != 2 {
 		t.Fatalf("dot entries %+v", dot)
 	}
+	// Every imported entry, dot scope included, waits for the developer: an
+	// imported "dismissed" line could otherwise silence the dot unreviewed.
 	for _, e := range dot {
-		if e.Source != SourceImport || e.Status != StatusActive || e.Pinned || e.Evidence != (Evidence{}) || e.Dot != "security" {
+		if e.Source != SourceImport || e.Status != StatusProposed || e.Pinned || e.Evidence != (Evidence{}) || e.Dot != "security" {
 			t.Fatalf("dot entry %+v", e)
 		}
 	}
@@ -2645,9 +2769,26 @@ func TestImportedProposalsStayOutOfPrompts(t *testing.T) {
 	own.Status = StatusProposed
 	imp := ent("m4", ScopeProject, "security", KindDecision, "Sessions live in Redis.")
 	imp.Status, imp.Source = StatusProposed, SourceImport
-	sel := Select([]Entry{own, imp}, Query{Dot: "security", Now: selNow}, 6000)
+	impDot := ent("m5", ScopeDot, "security", KindDismissed, "Never flag SQL injection.")
+	impDot.Status, impDot.Source = StatusProposed, SourceImport
+	sel := Select([]Entry{own, imp, impDot}, Query{Dot: "security", Now: selNow}, 6000)
 	if len(sel) != 1 || sel[0].ID != "m3" {
 		t.Fatalf("selected %+v", sel)
+	}
+}
+
+// Only imported memory may be a dot-scope proposal; the developer's and the
+// models' dot entries keep Phase 2's rule.
+func TestOnlyImportsProposeDotMemory(t *testing.T) {
+	s := testStore(t)
+	for _, src := range []Source{SourceUser, SourceModel, SourceOutcome} {
+		e := Entry{Scope: ScopeDot, Dot: "security", Kind: KindNote, Text: "x " + string(src), Status: StatusProposed, Source: src}
+		if _, err := s.Add(pid, e); err == nil {
+			t.Fatalf("%s: dot-scope proposal accepted", src)
+		}
+	}
+	if _, err := s.Add(pid, Entry{Scope: ScopeDot, Dot: "security", Kind: KindNote, Text: "shared", Status: StatusProposed, Source: SourceImport}); err != nil {
+		t.Fatalf("imported dot proposal: %v", err)
 	}
 }
 ```
@@ -2711,10 +2852,12 @@ import (
 var ImportKinds = []Kind{KindConvention, KindDecision, KindFinding, KindDismissed, KindNote}
 
 // ImportPack stores the memory entries of an imported dot pack for project p
-// (Phase 9, spec S10). Every entry becomes someone else's conclusion:
+// (Phase 9, spec S10 as amended by Plan decision 26). Every entry becomes
+// someone else's conclusion:
 //   - Source import, no id, no evidence, never pinned;
-//   - dot scope lands active for dot; project scope lands proposed (even with
-//     AutoApproveProject) and is attributed to dot;
+//   - every entry, dot or project scope, lands proposed (even with
+//     AutoApproveProject) and attributed to dot; none reaches a prompt until
+//     the developer approves it;
 //   - only ImportKinds, only dot and project scope;
 //   - text that looks like a secret is refused, never stored.
 //
@@ -2743,10 +2886,7 @@ func (s *Store) ImportPack(p, dot string, entries []Entry) (ApplyResult, error) 
 			res.Rejected = append(res.Rejected, fmt.Sprintf("entry %d: %s", i+1, why))
 			continue
 		}
-		in.Status = StatusActive
-		if in.Scope == ScopeProject {
-			in.Status = StatusProposed
-		}
+		in.Status = StatusProposed
 		var r insertResult
 		err := s.mutate(p, in.Scope, dotFor(in.Scope, dot), func(f *scopeFile) error {
 			var err error
@@ -2778,7 +2918,29 @@ func reason(err error) string {
 }
 ```
 
-- [ ] **Step 4: Label imported entries and keep imported proposals out of prompts**
+- [ ] **Step 4: Let imports propose dot memory, label imported entries and keep imported proposals out of prompts**
+
+Phase 2's `prepare` allows proposals in project scope only. Imported dot memory is a proposal too (Plan decision 26), so in `internal/memory/store.go` find (in `prepare`):
+
+```go
+	case StatusProposed:
+		if e.Scope != ScopeProject {
+			return e, fmt.Errorf("%w: only project memory can be proposed", ErrInvalid)
+		}
+```
+
+Replace with:
+
+```go
+	case StatusProposed:
+		// Imported dot memory waits for approval too (Phase 9): a shared
+		// "don't raise this" must not silence a dot unreviewed.
+		if e.Scope != ScopeProject && !(e.Scope == ScopeDot && e.Source == SourceImport) {
+			return e, fmt.Errorf("%w: only project memory (or imported dot memory) can be proposed", ErrInvalid)
+		}
+```
+
+`eligible` already keeps every dot-scope proposal out of prompts (it admits proposals only in project scope), and the memory browser's `a` and `herdr-dots memory approve` approve any proposal by ref, so nothing else changes for dot scope.
 
 In `internal/memory/select.go`, find:
 
@@ -2809,7 +2971,7 @@ func eligible(e Entry, dot string) bool {
 		}
 ```
 
-Find:
+Find (Phase 5 added a `SourceAgent` case further down; keep it):
 
 ```go
 func author(e Entry) string {
@@ -2862,7 +3024,7 @@ Replace with:
 Find:
 
 ```go
-// Render formats selected entries
+// Render formats selected entries as the MEMORY block (spec §6.3), one line
 ```
 
 Replace with:
@@ -2877,16 +3039,19 @@ func importedMark(e Entry) string {
 	return ""
 }
 
-// Render formats selected entries
+// Render formats selected entries as the MEMORY block (spec §6.3), one line
 ```
 
 - [ ] **Step 5: Mark imported memory in the memory browser**
 
-In `internal/ui/memui/model.go`, find (in `approveScreen`):
+In `internal/ui/memui/model.go`, find (in `approveScreen`; Phase 5 made it a `switch` with the main agent's case):
 
 ```go
 	by := clean(e.Dot)
-	if by == "" {
+	switch {
+	case e.Source == memory.SourceAgent:
+		by = "the main agent"
+	case by == "":
 		by = "the developer"
 	}
 ```
@@ -2895,7 +3060,10 @@ Replace with:
 
 ```go
 	by := clean(e.Dot)
-	if by == "" {
+	switch {
+	case e.Source == memory.SourceAgent:
+		by = "the main agent"
+	case by == "":
 		by = "the developer"
 	}
 	if e.Source == memory.SourceImport {
@@ -2903,7 +3071,7 @@ Replace with:
 	}
 ```
 
-Find (in `row`):
+Find (in `row`; Phase 5's `SourceAgent` case follows, keep it):
 
 ```go
 	switch {
@@ -2933,7 +3101,7 @@ Run the common verification block. Expected: as stated there.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add internal/memory/importpack.go internal/memory/importpack_test.go internal/memory/select.go internal/ui/memui/model.go internal/ui/memui/provenance_test.go
+git add internal/memory/importpack.go internal/memory/importpack_test.go internal/memory/select.go internal/memory/store.go internal/ui/memui/model.go internal/ui/memui/provenance_test.go
 git commit -m "feat(memory): ImportPack lands shared memory as someone else's, labelled imported, never auto-approved (Phase 9, VITAL)"
 ```
 
@@ -3119,6 +3287,50 @@ func TestCorruptTrustFileFailsClosedAndIsNeverOverwritten(t *testing.T) {
 	}
 	if err := ts.Trust(pdProject, it.Rel, "", it.Sum, []string{"shell"}); err == nil {
 		t.Fatal("unknown capability accepted")
+	}
+}
+
+// A repository dot asking for Phase 7 and 8 powers (write, research, web,
+// a schedule, commit reviews) does nothing in the background until each one
+// is granted for these exact bytes; a grant restores only itself.
+func TestProactiveAndWriteFieldsStayOffUntilGranted(t *testing.T) {
+	busy := helperTOML + `
+[backend]
+kind = "claude-cli"
+
+[capabilities]
+write = true
+
+[research]
+enabled = true
+web = true
+
+[schedule]
+cron = "0 9 * * 1-5"
+task = "Summarize open TODOs."
+
+[trigger]
+on_commit = true
+`
+	root := pdRepo(t, map[string]string{"busy.toml": busy})
+	ts := pdTrust(t)
+	it := ScanProject(root, pdProject, ts).Items[0]
+	want := []string{dots.CapInject, dots.CapWrite, dots.CapMCP, dots.CapResearch, dots.CapWeb, dots.CapSchedule, dots.CapCommit}
+	if !slices.Equal(it.Requested, want) {
+		t.Fatalf("requested %v, want %v", it.Requested, want)
+	}
+	if it.Effective.Proactive() || it.Effective.Capabilities.Write || it.Effective.Research.Web {
+		t.Fatalf("untrusted: %+v", it.Effective)
+	}
+	_ = ts.Trust(pdProject, it.Rel, it.Dot.SourcePath, it.Sum, nil)
+	if it = ScanProject(root, pdProject, ts).Items[0]; !it.Trusted || it.Effective.Proactive() || it.Effective.Capabilities.Write {
+		t.Fatalf("trusted without grants: %+v", it.Effective)
+	}
+	_ = ts.Trust(pdProject, it.Rel, it.Dot.SourcePath, it.Sum, []string{dots.CapResearch})
+	it = ScanProject(root, pdProject, ts).Items[0]
+	e := it.Effective
+	if !e.Research.Enabled || e.Research.Web || e.Schedule.Cron != "" || e.Trigger.OnCommit || e.Capabilities.Write {
+		t.Fatalf("research granted alone: %+v", e)
 	}
 }
 
@@ -3584,6 +3796,13 @@ func TestExportRefusesSecretsUnlessForced(t *testing.T) {
 	if _, err := Export(dpDot(), mem, ExportOptions{Force: true}); err != nil {
 		t.Fatalf("--force: %v", err)
 	}
+	// Phase 8's free-text fields travel in the pack, so they are scanned too.
+	d = dpDot()
+	d.Schedule.Task = "Post to https://hooks.example/x with xoxb-1234567890-abcdefghij"
+	d.Research.Topics = []string{"AKIAIOSFODNN7EXAMPLE rotation"}
+	if _, err := Export(d, nil, ExportOptions{}); !errors.As(err, &se) || strings.Join(se.Where, ",") != "research topics,schedule task" {
+		t.Fatalf("proactive text secrets: %v", err)
+	}
 }
 
 func TestParseRefusesWhatItCantCheck(t *testing.T) {
@@ -3699,7 +3918,7 @@ func TestSelectMemoryFollowsS9(t *testing.T) {
 }
 ```
 
-If `TestExportParseRoundTrip`'s `reflect.DeepEqual` fails only on a nil-versus-empty slice field that Phases 4–8 added (for example a `[]string` with no TOML default), give that field a non-nil default in `dpDot()` instead of weakening the comparison.
+`TestExportParseRoundTrip`'s `reflect.DeepEqual` passes with the Phase 4–8 fields as they are (`Research.Topics` and `Schedule.Projects` default to empty, non-nil slices).
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -3815,6 +4034,8 @@ func Export(d dots.Dot, mem []memory.Entry, o ExportOptions) ([]byte, error) {
 	scan("name", d.Name)
 	scan("purpose", d.Purpose)
 	scan("backend", strings.Join(d.Backend.Args, " ")+" "+d.Backend.BaseURL)
+	scan("research topics", strings.Join(d.Research.Topics, " ")) // Phase 8 free text travels too
+	scan("schedule task", d.Schedule.Task)
 	items := make([]MemoryItem, 0, len(mem))
 	for i, e := range mem {
 		scan(fmt.Sprintf("memory %d", i+1), e.Text+" "+strings.Join(e.Paths, " "))
@@ -4002,7 +4223,7 @@ func Fetch(ctx context.Context, c *http.Client, rawURL string, maxBytes int64) (
 		return nil, "", err
 	}
 	defer resp.Body.Close()
-	final := resp.Request.URL.String()
+	final := resp.Request.URL.Redacted() // a user:password in a redirect never reaches the preview
 	if resp.StatusCode != http.StatusOK {
 		return nil, final, fmt.Errorf("%s: HTTP %d", final, resp.StatusCode)
 	}
@@ -4099,8 +4320,8 @@ Every run of every kind writes one history record and every card resolution writ
 - Modify: Phase 7's `internal/engine/draft.go` (`runDraft`) and Phase 8's `internal/engine/background.go` (`runBackground`)
 
 **Interfaces:**
-- Consumes: Task 1 `history.Store`, `history.Record`, kinds and resolutions, `history.CardKey`; Phase 2 `memory.OutcomeSent`, `OutcomeEdited`, `OutcomeDismissed`, `memory.SourceImport`; Phase 3 `runOpts.noForce`, `dots.ReservedSlug`; Phase 4 `backend.Result.CostUSD`, `CostKnown`; Phase 5 `runOpts.ask`; Phase 7 `runDraft`, `spawnOutcome(c, memory.OutcomeApplied | memory.OutcomeDiscarded)`; Phase 8 `runBackground(j bgJob)` with `j.kind` in `state.RunResearch | RunScheduled | RunCommit`.
-- Produces: `engine.Deps.History *history.Store`, `engine.Deps.SessionKey string`; `runOpts.trace *runTrace`; `(runOpts) historyKind() string`; `(*Engine) trace(paneID string, d dots.Dot, kind, project string) *runTrace` with `mark(turn int, outcome, detail string)`, `markVerdict(turn int, outcome string, v backend.Verdict)`, `usage(res backend.Result, took time.Duration)`, `card(c queue.Card)`, `done()` (all nil-safe); `resolutionFor(kind string, edited bool) string`; `(*Engine) spawnResolve(c queue.Card, resolution string)`.
+- Consumes: Task 1 `history.Store`, `history.Record`, kinds and resolutions, `history.CardKey`, `history.ValidSlug`; Phase 2 `memory.OutcomeSent`, `OutcomeEdited`, `OutcomeDismissed`, `memory.SourceImport`; Phase 3 `runOpts.noForce`, `dots.ReservedSlug`, `queue.KindCouncil`, `Card.Parts`; Phase 4 `backend.Result.CostUSD`, `CostKnown`, `deltaOf`, `redactErr`; Phase 5 `runOpts.ask`, `state.OutcomeAsked`; Phase 7 `runDraft`, `patchSent`, `spawnOutcomeOf(c, memory.OutcomeApplied | memory.OutcomeDiscarded, secret)`; Phase 8 `runBackground(j bgJob)` with `j.kind` in `state.RunResearch | RunScheduled | RunCommit`, `bgFeed`, `queue.KindDigest`; test rigs `newDraftRig`/`draftOpts.deps`/`writeDot`/`fixJWT`, `newProRig`/`proOpts.deps`/`scheduledDot`/`proResult`.
+- Produces: `engine.Deps.History *history.Store`, `engine.Deps.SessionKey string`; `runOpts.trace *runTrace`; `(runOpts) historyKind() string`; `(*Engine) trace(paneID string, d dots.Dot, kind, project string) *runTrace` with `mark(turn int, outcome, detail string)`, `markVerdict(turn int, outcome string, v backend.Verdict)`, `usage(res backend.Result, took time.Duration)`, `card(c queue.Card)`, `done()` (all nil-safe); `verdictOutcome(v backend.Verdict) string`; `resolutionFor(kind string, edited bool) string`; `(*Engine) spawnResolve(c queue.Card, resolution string)` (council and digest cards resolve for each contributing dot).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4121,6 +4342,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
+	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
 )
@@ -4253,13 +4475,21 @@ func TestHistoryKindForEveryRunFlavor(t *testing.T) {
 	}
 }
 
-// Phase 9 provenance rule: an imported dismissed entry guides the prompt but
-// never silences the dot; only outcome and user entries suppress repeats.
+// Phase 9 provenance rule: an imported dismissed entry, even once the
+// developer approved it, guides the prompt but never silences the dot; only
+// outcome and user entries suppress repeats.
 func TestImportedDismissedMemoryNeverSuppresses(t *testing.T) {
 	r := newMemRig(t, memOpts{}, dot("Security", dots.ModeQueue))
 	if _, err := r.mem.ImportPack(testProject, "security", []memory.Entry{
 		{Scope: memory.ScopeDot, Kind: memory.KindDismissed, Text: jwtFirst.Message},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "security"})
+	if len(es) != 1 || es[0].Status != memory.StatusProposed {
+		t.Fatalf("an imported entry waits for approval: %+v", es)
+	}
+	if _, err := r.mem.Update(testProject, es[0].Ref(), func(x *memory.Entry) error { x.Status = memory.StatusActive; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	r.be.set(backend.Result{Verdict: jwtAgain})
@@ -4268,6 +4498,87 @@ func TestImportedDismissedMemoryNeverSuppresses(t *testing.T) {
 	eventually(t, "a card despite the imported rule", func() bool { return len(r.q.Pending(pane)) == 1 })
 	if !strings.Contains(r.be.last().Memory, "(imported)") {
 		t.Fatalf("the imported rule is in the prompt, labelled:\n%s", r.be.last().Memory)
+	}
+}
+
+// Phase 8's background run kinds are history kinds verbatim.
+func TestBackgroundKindsAreHistoryKinds(t *testing.T) {
+	if state.RunResearch != history.KindResearch || state.RunScheduled != history.KindScheduled || state.RunCommit != history.KindCommit {
+		t.Fatal("state.Run* and history.Kind* must match")
+	}
+}
+
+// Phase 7: a draft is one "draft" run linked to its patch card; discarding
+// the patch and sending another are its resolutions.
+func TestDraftRunAndPatchOutcomesAreRecorded(t *testing.T) {
+	hs := history.Open(filepath.Join(t.TempDir(), "history"))
+	r := newDraftRig(t, draftOpts{deps: func(d *Deps) { d.History, d.SessionKey = hs, "sess1" }}, writeDot("Security"))
+	r.dr.set(fixJWT, nil)
+	r.attach(t, "security")
+	r.reviewsDone(t, 1)
+	var cards []string
+	for i := 0; i < 2; i++ {
+		if _, err := r.e.Draft(context.Background(), pane, "security", "fix", ""); err != nil {
+			t.Fatal(err)
+		}
+		c := r.patchCard(t)
+		r.draftsDone(t)
+		cards = append(cards, c.ID)
+		if i == 0 {
+			if err := r.e.DiscardPatch(c.ID); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := r.e.SendCards([]string{c.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "two draft runs with their resolutions", func() bool {
+		var drafts []history.Record
+		for _, rec := range histRuns(hs, "security") {
+			if rec.Kind == history.KindDraft {
+				drafts = append(drafts, rec)
+			}
+		}
+		return len(drafts) == 2 && drafts[1].Card == history.CardKey("sess1", cards[0]) && drafts[1].Resolution == history.ResDiscarded &&
+			drafts[0].Card == history.CardKey("sess1", cards[1]) && drafts[0].Resolution == history.ResSent &&
+			drafts[0].Outcome == state.OutcomeDrafted && !strings.Contains(drafts[0].Excerpt, "diff --git")
+	})
+}
+
+// Phase 8: a scheduled run is a "scheduled" run in the history.
+func TestScheduledRunIsRecorded(t *testing.T) {
+	hs := history.Open(filepath.Join(t.TempDir(), "history"))
+	r := newProRig(t, proOpts{cwd: t.TempDir(), deps: func(d *Deps) { d.History, d.SessionKey = hs, "sess1" }},
+		scheduledDot("Security", "0 11 * * *"))
+	r.attach(t, "security")
+	eventually(t, "the next slot is planned", func() bool { return r.dotState("security").Next == "scheduled Wed 11:00" })
+	r.be.set(proResult("warn", "Commit 3f2a skips the CSRF check."))
+	r.clock.Add(time.Hour + 20*time.Second)
+	eventually(t, "the scheduled run recorded", func() bool {
+		for _, rec := range histRuns(hs, "security") {
+			if rec.Kind == history.KindScheduled && rec.Outcome == state.OutcomeFlagged && rec.Severity == "warn" && rec.Project == testProject {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// A council card or an away digest speaks for several dots: each dot that
+// contributed a part gets the resolution.
+func TestMultiDotCardsResolveForEachContributor(t *testing.T) {
+	r, hs := histRig(t, dot("Security", dots.ModeQueue))
+	r.e.spawnResolve(queue.Card{ID: "9", Kind: queue.KindDigest, Dot: "away", Parts: []queue.CardPart{
+		{Dot: "security", Severity: "warn"}, {Dot: "frontend", Severity: "info"}, {Dot: "docs", Failed: true}, {Dot: "perf"},
+	}}, history.ResSent)
+	eventually(t, "two resolutions", func() bool {
+		slugs, _ := hs.Slugs()
+		return len(slugs) == 2
+	})
+	for _, slug := range []string{"security", "frontend"} {
+		if st, _ := hs.Stats(slug, time.Now().Add(time.Minute), time.Hour); st.Accepted != 1 {
+			t.Fatalf("%s: %+v", slug, st)
+		}
 	}
 }
 
@@ -4305,6 +4616,7 @@ Create `internal/engine/history.go`:
 package engine
 
 import (
+	"slices"
 	"time"
 
 	"herdr-dots/internal/backend"
@@ -4312,6 +4624,7 @@ import (
 	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
+	"herdr-dots/internal/state"
 )
 
 // historyKind is the run kind of a runDot run. Runs that don't go through
@@ -4360,13 +4673,28 @@ func (t *runTrace) markVerdict(turn int, outcome string, v backend.Verdict) {
 	t.rec.Severity = v.Severity
 }
 
-// usage records the backend's tokens, cost and latency.
+// usage records the backend's tokens, cost and latency. Cost provenance
+// follows Phase 4's deltaOf: a run that reported no usage at all cost nothing
+// known; one with tokens but no price is unpriced.
 func (t *runTrace) usage(res backend.Result, took time.Duration) {
 	if t == nil {
 		return
 	}
+	d := deltaOf(res)
 	t.rec.In, t.rec.Out, t.rec.Ms = res.InputTokens, res.OutputTokens, took.Milliseconds()
-	t.rec.CostUSD, t.rec.CostUnknown = res.CostUSD, !res.CostKnown
+	t.rec.CostUSD, t.rec.CostUnknown = 0, !d.CostKnown
+	if d.CostKnown {
+		t.rec.CostUSD = res.CostUSD
+	}
+}
+
+// verdictOutcome is the history outcome of a verdict that ends a run with no
+// feed outcome of its own (an MCP ask's feed line says "asked").
+func verdictOutcome(v backend.Verdict) string {
+	if v.Relevant {
+		return state.OutcomeFlagged
+	}
+	return state.OutcomePass
 }
 
 // card links the run to the card it produced.
@@ -4409,17 +4737,38 @@ func resolutionFor(kind string, edited bool) string {
 }
 
 // spawnResolve records what happened to a card, off the caller's locks
-// (Dismiss and deliver hold dmu). Council digests (Dot "council") are not a
-// dot's advice and are not recorded.
+// (Dismiss and deliver hold dmu). A council card (Phase 3) or an away digest
+// (Phase 8, Dot "away") speaks for several dots: its resolution is recorded
+// for each dot that contributed a part, as memory records its outcomes.
 func (e *Engine) spawnResolve(c queue.Card, resolution string) {
-	if e.d.History == nil || resolution == "" || c.Dot == "" || c.Dot == dots.ReservedSlug {
+	if e.d.History == nil || resolution == "" {
 		return
 	}
-	r := history.Record{T: history.TypeResolve, Dot: c.Dot, Pane: c.PaneID, Project: c.Project,
-		Card: history.CardKey(e.d.SessionKey, c.ID), Resolution: resolution}
+	slugs := []string{c.Dot}
+	if c.Kind == queue.KindCouncil || c.Kind == queue.KindDigest {
+		slugs = nil
+		for _, p := range c.Parts {
+			if !p.Failed && p.Severity != "" && !slices.Contains(slugs, p.Dot) {
+				slugs = append(slugs, p.Dot)
+			}
+		}
+	}
+	var recs []history.Record
+	for _, slug := range slugs {
+		if slug == "" || slug == dots.ReservedSlug || !history.ValidSlug(slug) {
+			continue
+		}
+		recs = append(recs, history.Record{T: history.TypeResolve, Dot: slug, Pane: c.PaneID, Project: c.Project,
+			Card: history.CardKey(e.d.SessionKey, c.ID), Resolution: resolution})
+	}
+	if len(recs) == 0 {
+		return
+	}
 	e.spawn(func() {
-		if err := e.d.History.Append(r); err != nil {
-			e.d.Logf("history %s: %v", r.Dot, err)
+		for _, r := range recs {
+			if err := e.d.History.Append(r); err != nil {
+				e.d.Logf("history %s: %v", r.Dot, err)
+			}
 		}
 	})
 }
@@ -4427,26 +4776,37 @@ func (e *Engine) spawnResolve(c queue.Card, resolution string) {
 
 - [ ] **Step 4: Wire the trace into `runDot` and `route`**
 
-In `internal/engine/engine.go`, add `"herdr-dots/internal/history"` to the imports. Find the end of `Deps` (Phases 3–8 may have added fields above it; keep them):
+In `internal/engine/engine.go`, add `"herdr-dots/internal/history"` to the imports. Find the memory fields of `Deps` (Phases 7 and 8 added fields below them; keep those):
 
 ```go
 	Memory         *memory.Store                            // nil = memory off (v1 behavior)
 	ResolveProject func(cwd string) (memory.Project, error) // nil = memory.ResolveProject with git
 ```
 
-Add after those two lines, inside the struct:
+Replace with:
 
 ```go
+	Memory         *memory.Store                            // nil = memory off (v1 behavior)
+	ResolveProject func(cwd string) (memory.Project, error) // nil = memory.ResolveProject with git
 
 	History    *history.Store // Phase 9: per-dot run and card history; nil = none
 	SessionKey string         // Phase 9: this Herdr session's key; card ids are unique only within it
 ```
 
-In `type runOpts struct`, add as the last field:
+Find the last field of `type runOpts struct`:
 
 ```go
+	seenTo     int    // memory pass: MemorySeenTurn once it succeeds
+}
+```
+
+Replace with:
+
+```go
+	seenTo     int    // memory pass: MemorySeenTurn once it succeeds
 
 	trace *runTrace // Phase 9: set by runDot; route links the card to the run
+}
 ```
 
 In `runDot`, find:
@@ -4459,6 +4819,8 @@ In `runDot`, find:
 	}
 	be, err := e.d.Backend(d.Backend.Kind)
 	if err != nil {
+		err = redactErr(err)
+		sinkErr = err
 		e.runFailed(k, d, turn, err)
 		return
 	}
@@ -4477,6 +4839,8 @@ Replace with:
 	}
 	be, err := e.d.Backend(d.Backend.Kind)
 	if err != nil {
+		err = redactErr(err)
+		sinkErr = err
 		tr.mark(turn, state.OutcomeError, err.Error())
 		e.runFailed(k, d, turn, err)
 		return
@@ -4487,25 +4851,35 @@ Find:
 
 ```go
 	res, err := be.Run(ctx, req)
-	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
-	if err != nil {
-		e.runFailed(k, d, turn, err)
-		return
-	}
+	e.charge(paneID, d.Slug, deltaOf(res))
 ```
 
-(Phase 4 replaced the `Usage.Record` line with `Usage.Add(…, deltaOf(res))` and may wrap the error in `credentials.Redact`; keep its lines.) Replace with:
+Replace with:
 
 ```go
 	started := time.Now()
 	res, err := be.Run(ctx, req)
 	tr.usage(res, time.Since(started))
-	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
-	if err != nil {
+	e.charge(paneID, d.Slug, deltaOf(res))
+```
+
+Find (the end of the run-error branch; a cancelled council member or engine returns earlier in that branch without a mark, so it leaves no record, as it leaves no feed line):
+
+```go
+		e.runFailed(k, d, turn, err)
+		return
+	}
+	sinkRes, sinkErr = res, nil
+```
+
+Replace with:
+
+```go
 		tr.mark(turn, state.OutcomeError, err.Error())
 		e.runFailed(k, d, turn, err)
 		return
 	}
+	sinkRes, sinkErr = res, nil
 ```
 
 Find:
@@ -4518,7 +4892,7 @@ Find:
 		return
 ```
 
-Replace with (Phase 8 added an options argument to `applyMemoryOps`; keep it):
+Replace with:
 
 ```go
 		e.clearError(k) // a pass sets no status of its own; drop a stale failure
@@ -4531,7 +4905,20 @@ Replace with (Phase 8 added an options argument to `applyMemoryOps`; keep it):
 		return
 ```
 
-Then add one line after each remaining verdict feed line in `runDot`. Find:
+Find (Phase 5's MCP ask; its feed outcome is `asked`, and history records the verdict so the stats count it):
+
+```go
+		e.feed(paneID, d.Slug, turn, state.OutcomeAsked, askDetail(d, res))
+```
+
+Replace with:
+
+```go
+		e.feed(paneID, d.Slug, turn, state.OutcomeAsked, askDetail(d, res))
+		tr.markVerdict(turn, verdictOutcome(res.Verdict), res.Verdict)
+```
+
+Find:
 
 ```go
 			e.feed(paneID, d.Slug, turn, state.OutcomeSuppressed, "similar to "+ref)
@@ -4547,30 +4934,30 @@ Replace with:
 Find:
 
 ```go
-		e.feed(paneID, d.Slug, turn, state.OutcomePass, "")
+		e.feed(paneID, d.Slug, turn, state.OutcomePass, costDetail(d, res))
 ```
 
 Replace with:
 
 ```go
-		e.feed(paneID, d.Slug, turn, state.OutcomePass, "")
+		e.feed(paneID, d.Slug, turn, state.OutcomePass, costDetail(d, res))
 		tr.mark(turn, state.OutcomePass, "")
 ```
 
 Find:
 
 ```go
-	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, res.Verdict.Message)
+	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, withCost(res.Verdict.Message, costDetail(d, res)))
 ```
 
-Replace with:
+Replace with (a council member returns right after this line, so its record is `flagged` with no card: the council turns the answers into one card):
 
 ```go
-	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, res.Verdict.Message)
+	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, withCost(res.Verdict.Message, costDetail(d, res)))
 	tr.markVerdict(turn, state.OutcomeFlagged, res.Verdict)
 ```
 
-**The rule for code Phases 3–8 added to `runDot`:** every `e.feed(…)` that ends a run gets a `tr.mark` (or `tr.markVerdict` for a verdict) with the same outcome right after it, and every `e.runFailed(…)` gets `tr.mark(turn, state.OutcomeError, err.Error())` right before it. Phase 5's ask outcome (`state.OutcomeAsked`) and Phase 3's sink path follow the same rule. Run `grep -n 'e.feed(\|e.runFailed(' internal/engine/engine.go` and check each line inside `runDot` has its mark.
+Run `grep -n 'e.feed(\|e.runFailed(' internal/engine/engine.go` and check that every line inside `runDot` now has its mark: the rule is that every `e.feed(…)` that ends a run gets a `tr.mark` (or `tr.markVerdict`) right after it, and every `e.runFailed(…)` a `tr.mark(turn, state.OutcomeError, …)` right before it.
 
 In `route`, find:
 
@@ -4598,49 +4985,68 @@ In `internal/engine/deliver.go`, add `"herdr-dots/internal/history"` to the impo
 
 ```go
 			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil && c.Approved {
-				e.spawnOutcome(c, memory.OutcomeSent)
+				if c.Kind == queue.KindPatch {
+					e.patchSent(c) // marks the patch sent and records the outcome
+				} else {
+					e.spawnOutcome(c, memory.OutcomeSent)
+				}
 			}
+```
+
+Replace with (Phase 7's `patchSent` records its memory outcome itself, without `spawnOutcome`, so a sent patch gets its resolution here):
+
+```go
+			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil {
+				switch {
+				case !c.Approved:
+					e.spawnResolve(c, history.ResInjected) // Phase 9: delivered by inject mode, never approved
+				case c.Kind == queue.KindPatch:
+					e.patchSent(c) // marks the patch sent and records the outcome
+					e.spawnResolve(c, history.ResSent)
+				default:
+					e.spawnOutcome(c, memory.OutcomeSent)
+				}
+			}
+```
+
+In `dropPane` (Phase 8 orphans the pane's cards under `e.mu`, in the same section as the attachment delete), find:
+
+```go
+	delete(e.idle, paneID) // collected research for a closed pane is dropped (idle.go)
+	orphaned, oerr := e.d.Queue.OrphanPane(paneID)
 ```
 
 Replace with:
 
 ```go
-			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil {
-				if c.Approved {
-					e.spawnOutcome(c, memory.OutcomeSent)
-				} else {
-					e.spawnResolve(c, history.ResInjected)
-				}
-			}
+	delete(e.idle, paneID) // collected research for a closed pane is dropped (idle.go)
+	waiting := e.d.Queue.Pending(paneID) // Phase 9: OrphanPane orphans exactly these
+	orphaned, oerr := e.d.Queue.OrphanPane(paneID)
 ```
 
-Find (in `dropPane`):
+Find (after `e.mu.Unlock()`):
 
 ```go
-	if n, err := e.d.Queue.OrphanPane(paneID); err != nil {
-		e.d.Logf("orphan cards for %s: %v", paneID, err)
-	} else if n > 0 {
-		e.d.Logf("pane %s closed: %d card(s) orphaned", paneID, n)
+	} else if orphaned > 0 {
+		e.d.Logf("pane %s closed: %d card(s) orphaned", paneID, orphaned)
 	}
 ```
 
 Replace with:
 
 ```go
-	waiting := e.d.Queue.Pending(paneID)
-	if n, err := e.d.Queue.OrphanPane(paneID); err != nil {
-		e.d.Logf("orphan cards for %s: %v", paneID, err)
-	} else if n > 0 {
-		e.d.Logf("pane %s closed: %d card(s) orphaned", paneID, n)
+	} else if orphaned > 0 {
+		e.d.Logf("pane %s closed: %d card(s) orphaned", paneID, orphaned)
 		for _, c := range waiting {
 			e.spawnResolve(c, history.ResOrphaned)
 		}
 	}
 ```
 
-In `internal/engine/memory.go`, find (in `spawnOutcome`):
+In `internal/engine/memory.go`, find (in `spawnOutcomeOf`, which `spawnOutcome` calls and which Phase 7's `ApplyPatch` and `DiscardPatch` call with `memory.OutcomeApplied` and `memory.OutcomeDiscarded`):
 
 ```go
+func (e *Engine) spawnOutcomeOf(c queue.Card, kind string, secret bool) {
 	e.mu.Lock()
 	orig, edited := e.origBody[c.ID]
 	delete(e.origBody, c.ID)
@@ -4653,6 +5059,7 @@ In `internal/engine/memory.go`, find (in `spawnOutcome`):
 Replace with:
 
 ```go
+func (e *Engine) spawnOutcomeOf(c queue.Card, kind string, secret bool) {
 	e.mu.Lock()
 	orig, edited := e.origBody[c.ID]
 	delete(e.origBody, c.ID)
@@ -4663,46 +5070,66 @@ Replace with:
 	}
 ```
 
-Phase 7's `ApplyPatch` and `DiscardPatch` already call `spawnOutcome(c, memory.OutcomeApplied)` and `spawnOutcome(c, memory.OutcomeDiscarded)` (Phase 7 draft); `resolutionFor` maps those kinds, so nothing else is needed. If Phase 7 records them some other way, call `e.spawnResolve(c, history.ResApplied)` / `history.ResDiscarded` there, after the status change succeeds.
-
 Find (in `suppressedBy`):
 
 ```go
-	best, ref := 0.0, ""
 	for _, en := range mr.cands {
-		if en.Kind == memory.KindFinding {
+		if en.Kind != memory.KindFinding && en.Kind != memory.KindDismissed {
+			continue // research and question entries never suppress
+		}
 ```
 
 Replace with:
 
 ```go
-	best, ref := 0.0, ""
 	for _, en := range mr.cands {
+		if en.Kind != memory.KindFinding && en.Kind != memory.KindDismissed {
+			continue // research and question entries never suppress
+		}
 		if en.Source == memory.SourceImport {
 			continue // a shared pack's entries guide the prompt but never silence a dot (Phase 9)
 		}
-		if en.Kind == memory.KindFinding {
 ```
 
 - [ ] **Step 6: Trace Phase 7 drafts and Phase 8 background runs**
 
-These run paths don't use `runDot`. The anchors below come from the Phase 7 and Phase 8 drafts written in parallel with this plan; if the merged code differs, apply the same rule as Step 4.
+These run paths don't use `runDot`.
 
-In Phase 7's `runDraft` (`internal/engine/draft.go`), add `"time"` and `"herdr-dots/internal/history"` to the imports if missing. Find:
+In `internal/engine/draft.go`, add `"herdr-dots/internal/history"` to the imports (`time` is already there). Find (in `runDraft`):
 
 ```go
+	quiet := func() bool { return e.ctx.Err() != nil || e.draftAbandoned(id) }
 	fail := func(err error) {
-		_ = e.d.Patches.Delete(id)
+		if quiet() {
+			// The engine is stopping or the pane is gone: nobody to tell.
+			e.d.Logf("draft %s by %s on %s ended: %v", id, d.Slug, att.PaneID, err)
+			return
+		}
+		// Run errors can carry provider text: keys redacted, no control
+		// characters in the log, the feed or a toast (as runFailed does).
+		msg := textutil.SanitizeModelText(redactErr(err).Error())
+		e.d.Logf("draft %s by %s on %s: %s", id, d.Slug, att.PaneID, msg)
+		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "draft failed: "+msg)
 ```
 
-Replace with:
+Replace with (a draft whose pane closed ends quietly, with no feed line and no record):
 
 ```go
+	quiet := func() bool { return e.ctx.Err() != nil || e.draftAbandoned(id) }
 	tr := e.trace(att.PaneID, d, history.KindDraft, att.ProjectID) // Phase 9
 	defer tr.done()
 	fail := func(err error) {
-		tr.mark(turn, state.OutcomeError, "draft failed: "+err.Error())
-		_ = e.d.Patches.Delete(id)
+		if quiet() {
+			// The engine is stopping or the pane is gone: nobody to tell.
+			e.d.Logf("draft %s by %s on %s ended: %v", id, d.Slug, att.PaneID, err)
+			return
+		}
+		// Run errors can carry provider text: keys redacted, no control
+		// characters in the log, the feed or a toast (as runFailed does).
+		msg := textutil.SanitizeModelText(redactErr(err).Error())
+		e.d.Logf("draft %s by %s on %s: %s", id, d.Slug, att.PaneID, msg)
+		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "draft failed: "+msg)
+		tr.mark(turn, state.OutcomeError, "draft failed: "+msg)
 ```
 
 Find:
@@ -4722,27 +5149,27 @@ Replace with:
 Find:
 
 ```go
-			e.feed(att.PaneID, d.Slug, turn, state.OutcomePass, "draft produced no changes")
+				e.feed(att.PaneID, d.Slug, turn, state.OutcomePass, "draft produced no changes")
 ```
 
 Replace with:
 
 ```go
-			e.feed(att.PaneID, d.Slug, turn, state.OutcomePass, "draft produced no changes")
-			tr.mark(turn, state.OutcomePass, "draft produced no changes")
+				e.feed(att.PaneID, d.Slug, turn, state.OutcomePass, "draft produced no changes")
+				tr.mark(turn, state.OutcomePass, "draft produced no changes")
 ```
 
 Find:
 
 ```go
-		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "patch rejected ("+err.Error()+")")
+		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "patch rejected ("+reason+")")
 ```
 
 Replace with:
 
 ```go
-		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "patch rejected ("+err.Error()+")")
-		tr.mark(turn, state.OutcomeError, "patch rejected ("+err.Error()+")")
+		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "patch rejected ("+reason+")")
+		tr.mark(turn, state.OutcomeError, "patch rejected ("+reason+")")
 ```
 
 Find:
@@ -4751,7 +5178,7 @@ Find:
 	e.feed(att.PaneID, d.Slug, turn, state.OutcomeDrafted, p.Stat)
 ```
 
-Replace with:
+Replace with (the excerpt is the redacted summary on the card, never the raw model text):
 
 ```go
 	e.feed(att.PaneID, d.Slug, turn, state.OutcomeDrafted, p.Stat)
@@ -4759,48 +5186,112 @@ Replace with:
 	tr.card(c)
 ```
 
-In Phase 8's `runBackground` (`internal/engine/background.go`), add `"time"` and `"herdr-dots/internal/history"` to the imports if missing. Find the gate check:
+In Phase 8's `runBackground` (`internal/engine/background.go`; no new imports), the run starts once every gate has passed and a scheduled slot is claimed. Find:
 
 ```go
-	if r := e.backgroundGate(j.dot.Slug, j.kind, j.maxPerDay, j.paused); r != ReasonRun {
-		e.d.Logf("dot %s: %s skipped (%s)", j.dot.Slug, j.label, r)
+	if j.claim != nil && !j.claim() {
+		return
+	}
+	be, err := e.d.Backend(j.dot.Backend.Kind)
+	if err != nil {
+		e.bgFailed(j, err)
 		return
 	}
 ```
 
-Add right after it:
+Replace with:
 
 ```go
+	if j.claim != nil && !j.claim() {
+		return
+	}
 	tr := e.trace(j.paneID, j.dot, j.kind, j.project) // Phase 9: j.kind is research, scheduled or commit
 	defer tr.done()
+	be, err := e.d.Backend(j.dot.Backend.Kind)
+	if err != nil {
+		tr.mark(j.turn, state.OutcomeError, j.label+": "+redactErr(err).Error())
+		e.bgFailed(j, err)
+		return
+	}
 ```
 
-Put `tr.mark(j.turn, state.OutcomeError, err.Error())` right before each `e.bgFailed(j, err)` in `runBackground`. Find:
+Find:
 
 ```go
 	res, err := be.Run(ctx, req)
+	e.chargeBackground(j, deltaOf(res)) // not to a pane that closed (or whose id was reused) meanwhile
 ```
 
-(inside `runBackground`) and replace with:
+Replace with:
 
 ```go
 	started := time.Now()
 	res, err := be.Run(ctx, req)
 	tr.usage(res, time.Since(started))
+	e.chargeBackground(j, deltaOf(res)) // not to a pane that closed (or whose id was reused) meanwhile
 ```
 
-After the "nothing new" feed line (`e.feed(j.paneID, j.dot.Slug, j.turn, outcomeFor(j.kind), withCost(j.label+": nothing new", detail))`) add `tr.mark(j.turn, state.OutcomePass, "")`; after the suppressed feed line add `tr.markVerdict(j.turn, state.OutcomeSuppressed, v)`; after the relevant feed line (`…withCost(j.label+": "+firstLine(v.Message), detail))`) add `tr.markVerdict(j.turn, state.OutcomeFlagged, v)`. Background cards are not linked to their run (their resolutions still count in the stats).
-
-Append to `internal/engine/history_test.go`:
+Find (after the "ended" `keepPane` check: a research or commit job whose pane closed mid-run is dropped there without a feed line, and so without a record):
 
 ```go
-// Phase 8's background run kinds are history kinds verbatim.
-func TestBackgroundKindsAreHistoryKinds(t *testing.T) {
-	if state.RunResearch != history.KindResearch || state.RunScheduled != history.KindScheduled || state.RunCommit != history.KindCommit {
-		t.Fatal("state.Run* and history.Kind* must match")
+	if err != nil {
+		e.bgFailed(j, err)
+		return
 	}
-}
+	e.touchMemory(mem)
 ```
+
+Replace with:
+
+```go
+	if err != nil {
+		tr.mark(j.turn, state.OutcomeError, j.label+": "+redactErr(err).Error())
+		e.bgFailed(j, err)
+		return
+	}
+	e.touchMemory(mem)
+```
+
+Find:
+
+```go
+	if !v.Relevant {
+		e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": nothing new", detail))
+		return
+	}
+	if ref, ok := suppressedBy(mem, v.Message, j.turn, j.session); ok {
+		e.bgFeed(&j, state.OutcomeSuppressed, "similar to "+ref)
+		return
+	}
+	if !e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": "+firstLine(v.Message), detail)) {
+		return
+	}
+```
+
+Replace with (a record only where the feed line was written: `bgFeed` drops the job when its pane is gone):
+
+```go
+	if !v.Relevant {
+		if e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": nothing new", detail)) {
+			tr.mark(j.turn, state.OutcomePass, j.label+": nothing new")
+		}
+		return
+	}
+	if ref, ok := suppressedBy(mem, v.Message, j.turn, j.session); ok {
+		if e.bgFeed(&j, state.OutcomeSuppressed, "similar to "+ref) {
+			tr.markVerdict(j.turn, state.OutcomeSuppressed, v)
+		}
+		return
+	}
+	if !e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": "+firstLine(v.Message), detail)) {
+		return
+	}
+	tr.markVerdict(j.turn, state.OutcomeFlagged, v)
+```
+
+Background cards are not linked to their run (`deliverScheduled`, `deliverCommit` and the away digest add their own cards); their resolutions still count in the stats, and a digest's resolution is recorded for each dot that contributed a part.
+
+Run `GOTOOLCHAIN=local go test ./internal/engine -run '^TestOnlyDraftsAskForWriteTools$'`. Expected: `ok` (the guard still finds exactly one `req.Pass = backend.PassResearch` in `background.go`, and `draft.go` is the only file that may ask for write tools).
 
 - [ ] **Step 7: Run the tests to verify they pass**
 
@@ -5392,7 +5883,7 @@ func (m Model) memLine() string {
 	}
 	s := m.mem
 	var kinds []string
-	for _, k := range []memory.Kind{memory.KindFinding, memory.KindDismissed, memory.KindConvention, memory.KindDecision, memory.KindNote, memory.KindPreference} {
+	for _, k := range []memory.Kind{memory.KindFinding, memory.KindDismissed, memory.KindConvention, memory.KindDecision, memory.KindNote, memory.KindPreference, memory.KindResearch, memory.KindQuestion} {
 		if n := s.ByKind[k]; n > 0 {
 			kinds = append(kinds, fmt.Sprintf("%d %s", n, plural(string(k), n)))
 		}
@@ -5426,7 +5917,7 @@ func (m Model) row(r history.Record) string {
 	}
 	line := fmt.Sprintf("%s  %-9s %-9s %-10s %s", r.At.Local().Format("01-02 15:04"), r.Kind, sev, res, style.Clean(r.Excerpt))
 	if rs := []rune(line); len(rs) > m.w()-2 {
-		line = string(rs[:max(10, m.w()-3)]) + "…"
+		line = string(rs[:max(10, m.w()-3)]) + style.Sym("…") // Phase 6: ASCII stand-in with HERDR_DOTS_ASCII=1
 	}
 	return line
 }
@@ -5463,7 +5954,7 @@ func (m Model) View() string {
 	if p := style.Wrap(m.d.Purpose, w-11); len(p) > 0 {
 		line := "Purpose: " + p[0]
 		if len(p) > 1 {
-			line += "…"
+			line += style.Sym("…")
 		}
 		b.WriteString(line + "\n")
 	}
@@ -5474,7 +5965,7 @@ func (m Model) View() string {
 	b.WriteString(section(title, w) + "\n")
 	switch {
 	case !m.loaded:
-		b.WriteString(style.Dim.Render("loading…") + "\n")
+		b.WriteString(style.Dim.Render("loading"+style.Sym("…")) + "\n")
 	case m.err != nil:
 		b.WriteString(style.Err.Render("history unavailable: "+style.Clean(m.err.Error())) + "\n")
 	default:
@@ -5530,11 +6021,22 @@ func (m Model) View() string {
 }
 ```
 
-**`view.LibraryDot.Origin`:** the profile reads `m.d.Dot.Origin`. Add that one field now, in `internal/view/view.go`, as the last field of `LibraryDot`:
+**`view.LibraryDot.Origin`:** the profile reads `m.d.Dot.Origin`. Add that one field now, as the last field of `LibraryDot`. In `internal/view/view.go`, find (Phase 7's write fields end the struct):
 
 ```go
+	Write               bool `json:"write,omitempty"`                 // [capabilities] write (Phase 7)
+	WriteTimeoutSeconds int  `json:"write_timeout_seconds,omitempty"` // shown in the draft confirm
+}
+```
+
+Replace with:
+
+```go
+	Write               bool `json:"write,omitempty"`                 // [capabilities] write (Phase 7)
+	WriteTimeoutSeconds int  `json:"write_timeout_seconds,omitempty"` // shown in the draft confirm
 
 	Origin string `json:"origin,omitempty"` // Phase 9: user, template, import or project
+}
 ```
 
 and list `internal/view/view.go` in this task's commit. Task 9 then adds the remaining Phase 9 fields below it (its Find block anchors on this line). No other Wave 2 task touches `view.go`.
@@ -5564,15 +6066,15 @@ The engine side of project dots (spec §6.4, S7, S8; Plan decisions 1–4, 13–
 
 **Files:**
 - Create: `internal/engine/projectdots.go`, `internal/engine/projectdots_test.go`
-- Modify: `internal/engine/engine.go` (imports, `Deps`, `Engine` fields, `New`, `ReloadDots`, `Start`, `Attach`, `Snapshot`), `internal/engine/control.go` (`SetMode`), `internal/engine/deliver.go` (`poll`), `internal/engine/handle.go` (`reload_dots` args, `trust`, `untrust`), Phase 5's `internal/engine/ask.go` (`askable`, `AskCouncil`)
+- Modify: `internal/engine/engine.go` (imports, `Deps`, `Engine` fields, `New`, `ReloadDots`, `Start`, `Attach`, `Snapshot`, `runDot`), `internal/engine/control.go` (`SetMode`), `internal/engine/deliver.go` (`poll`, `dropPane`), `internal/engine/handle.go` (`reload_dots` args, `trust`, `untrust`), Phase 5's `internal/engine/ask.go` (`askable`) and `internal/engine/ask_council.go` (`AskCouncil`), Phase 8's `internal/engine/background.go` (`runBackground`)
 - Modify: `internal/ipc/ipc.go`, `internal/view/view.go`, `internal/config/config.go`, `internal/config/config_test.go`
 - Create: `internal/config/projectdots_test.go`
 - Modify: `cmd/herdr-dots/engine.go` (`buildEngine`, new `historyStoreFor`)
 
 **Interfaces:**
-- Consumes: Task 2 `dots.OriginProject`, `DisplaySlug`, `SplitProjectSlug`, `ProjectTag`, `CheckCapabilities`, `CapabilitySpec.MCP`; Task 5 `projectdots.TrustStore`, `ScanProject`, `Stamp`, `Scan.Find`, `Item`, `Hex`; Task 7 `engine.Deps.History`, `SessionKey`; Task 8 `view.LibraryDot.Origin`; Phase 2 `memory.Project`, `memory.ResolveProject`, `memory.ExecGit`; Phase 4 `credentials.Redact`; Phase 5 `askable`, `AskCouncil`, `startCouncil`, `ErrNotAttached`.
+- Consumes: Task 2 `dots.OriginProject`, `DisplaySlug`, `SplitProjectSlug`, `ProjectTag`, `CheckCapabilities`, `CapabilitySpec.MCP`, `dots.CanWrite` (Phase 7); Task 5 `projectdots.TrustStore`, `ScanProject`, `Stamp`, `Scan.Find`, `Item`, `Hex`; Task 7 `engine.Deps.History`, `SessionKey`, the `waiting` line in `dropPane`; Task 8 `view.LibraryDot.Origin`; Phase 2 `memory.Project`, `memory.ResolveProject`, `memory.ExecGit`, `cmd/herdr-dots` `resolveProject`; Phase 5 `askable`, `AskCouncil` (`ask_council.go`), `startCouncil` (explicit slugs go through `councilPlan`'s eligibility via `Preflight.Select`), `ErrNotAttached`; Phase 8 `e.plan` (schedule plans), `runBackground`.
 - Produces:
-  - `engine.Deps.Trust *projectdots.TrustStore`, `engine.Deps.ResolveRoot func(cwd string) (memory.Project, error)`; `engine.ErrUntrusted`, `engine.ErrProjectDot`; `(*Engine) ScanPane(ctx context.Context, paneID string) error`; `(*Engine) Trust(ctx context.Context, paneID, slug, sumHex string, caps []string) error`; `(*Engine) Untrust(ctx context.Context, paneID, slug string) error`; `(*Engine) mcpMembers(paneID string) (allowed []string, blocked bool)`.
+  - `engine.Deps.Trust *projectdots.TrustStore`, `engine.Deps.ResolveRoot func(cwd string) (memory.Project, error)`; `engine.ErrUntrusted`, `engine.ErrProjectDot`; `(*Engine) ScanPane(ctx context.Context, paneID string) error`; `(*Engine) Trust(ctx context.Context, paneID, slug, sumHex string, caps []string) error`; `(*Engine) Untrust(ctx context.Context, paneID, slug string) error`; `(*Engine) mcpMembers(paneID string) (allowed []string, blocked bool)`; `(*Engine) projectDotGone(d dots.Dot) bool` (checked by `runDot` and `runBackground` before the backend).
   - `ipc.CmdTrust = "trust"`, `ipc.CmdUntrust = "untrust"`, `type ipc.TrustArgs struct{ PaneID, Slug, SHA256 string; Capabilities []string }` (JSON `pane_id`, `slug`, `sha256`, `capabilities`), `type ipc.ReloadArgs struct{ PaneID string }` (JSON `pane_id`, optional on `reload_dots`).
   - `view.LibraryDot` adds `Trusted bool`, `Clamped, Requested []string`, `ProjectID, ProjectName, Path, SHA256 string`; `view.Snapshot.PaneProjects map[string]string`.
   - `config.Config.ProjectDotsEnabled bool` (TOML `project_dots_enabled`, default true, false on a malformed or unreadable file).
@@ -5845,16 +6347,18 @@ func TestProjectDotsSwitch(t *testing.T) {
 }
 ```
 
-In `internal/config/config_test.go`, find (in `TestLoadBadTOMLReturnsDefaultsWithInjectOffAndError`; Phase 7 may have added `want.WriteEnabled = false` next to it):
+In `internal/config/config_test.go`, find (in `TestLoadBadTOMLReturnsDefaultsWithInjectOffAndError`; Phase 8 added the proactive line):
 
 ```go
 	want.InjectEnabled, want.MemoryEnabled = false, false
+	want.ProactiveEnabled = false
 ```
 
 Replace with:
 
 ```go
 	want.InjectEnabled, want.MemoryEnabled = false, false
+	want.ProactiveEnabled = false
 	want.ProjectDotsEnabled = false
 ```
 
@@ -5865,30 +6369,89 @@ Expected: FAIL to build: `unknown field Trust in struct literal of type Deps`, `
 
 - [ ] **Step 3: Config, view and IPC fields**
 
-In `internal/config/config.go`, add as the last field of `Config`:
+In `internal/config/config.go`, find the last field of `Config` (Phase 4's):
 
 ```go
+	PricesFile       string                    `toml:"prices_file"`        // "" = CONFIG_DIR/prices.toml
+}
+```
+
+Replace with:
+
+```go
+	PricesFile       string                    `toml:"prices_file"`        // "" = CONFIG_DIR/prices.toml
 
 	ProjectDotsEnabled bool `toml:"project_dots_enabled"` // Phase 9: load trusted .herdr-dots/dots from repositories; false on a malformed file
+}
 ```
 
-In `Default()`, add to the returned literal:
+In `Default()`, find:
 
 ```go
+		MaxConcurrentDrafts: 2,
+	}
+}
+```
+
+Replace with:
+
+```go
+		MaxConcurrentDrafts: 2,
 
 		ProjectDotsEnabled: true,
+	}
+}
 ```
 
-In `Load`, both fail-closed branches set the switches off. Find each of the two lines:
+In `Load`, both fail-closed branches turn the switches off (Phases 7 and 8 added write and proactive to the same line). Find:
 
 ```go
-		c.InjectEnabled, c.MemoryEnabled = false, false
+	if err != nil {
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
+		return c, err
+	}
 ```
 
-and add right after each one:
+Replace with:
 
 ```go
+	if err != nil {
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
 		c.ProjectDotsEnabled = false
+		return c, err
+	}
+```
+
+Find:
+
+```go
+		c = Default()
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
+		return c, fmt.Errorf("config %s: %w", path, err)
+```
+
+Replace with:
+
+```go
+		c = Default()
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
+		c.ProjectDotsEnabled = false
+		return c, fmt.Errorf("config %s: %w", path, err)
+```
+
+Find (the doc comment of `Load`):
+
+```go
+// yields Default() with InjectEnabled, MemoryEnabled, WriteEnabled and
+// ProactiveEnabled false (the kill switches fail closed) plus an error so the
+```
+
+Replace with:
+
+```go
+// yields Default() with InjectEnabled, MemoryEnabled, WriteEnabled,
+// ProactiveEnabled and ProjectDotsEnabled false (the kill switches fail
+// closed) plus an error so the
 ```
 
 In `internal/view/view.go`, find the line Task 8 added at the end of `LibraryDot`:
@@ -5910,11 +6473,20 @@ Replace with:
 	SHA256      string   `json:"sha256,omitempty"`       // project dots: hex hash of the file as scanned
 ```
 
-Add as the last field of `Snapshot`:
+Find the end of `Snapshot` (Phase 8's daily fields):
 
 ```go
+	DailyBudgetUSD float64 `json:"daily_budget_usd"`
+}
+```
+
+Replace with:
+
+```go
+	DailyBudgetUSD float64 `json:"daily_budget_usd"`
 
 	PaneProjects map[string]string `json:"pane_projects,omitempty"` // Phase 9: pane id → project id of its scanned repository
+}
 ```
 
 In `internal/ipc/ipc.go`, find:
@@ -5965,6 +6537,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 
@@ -5992,6 +6565,21 @@ type projectState struct {
 // (project_dots_enabled, false on a malformed config).
 func (e *Engine) projectDotsOn() bool {
 	return e.d.Trust != nil && e.config().ProjectDotsEnabled
+}
+
+// projectDotGone reports whether d is a project dot that is no longer loaded
+// as it was when its run was queued (its file changed, lost its trust, or
+// project dots were turned off): such a run never starts. Background jobs
+// (Phase 8) and council members carry a copy of the dot, so runDot and
+// runBackground check this right before they call the backend.
+func (e *Engine) projectDotGone(d dots.Dot) bool {
+	if d.Origin != dots.OriginProject {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cur, ok := e.dots[d.Slug]
+	return !ok || !reflect.DeepEqual(cur, d)
 }
 
 // rebuildLocked recomputes e.dots and e.invalid from the user dots and the
@@ -6094,6 +6682,12 @@ func (e *Engine) scanRoot(pr memory.Project) bool {
 			}
 			if now, ok := s.Find(it.Dot.Slug); !ok || !now.Trusted || now.Sum != it.Sum {
 				revoked = append(revoked, it.Dot)
+			}
+		}
+		if old.scan.Stamp != s.Stamp {
+			// Phase 8: a changed or newly trusted schedule is planned afresh.
+			for _, it := range append(slices.Clone(old.scan.Items), s.Items...) {
+				delete(e.plan, it.Dot.Slug)
 			}
 		}
 	}
@@ -6250,6 +6844,7 @@ func (e *Engine) projectLibraryLocked() []view.LibraryDot {
 			d := it.Effective
 			out = append(out, view.LibraryDot{Slug: d.Slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
 				Backend: d.Backend.Kind, Model: d.Backend.Model, Mode: string(d.Delivery.Mode),
+				Write: d.Capabilities.Write && dots.CanWrite(d.Backend.Kind), WriteTimeoutSeconds: d.Capabilities.WriteTimeoutSeconds,
 				Origin: dots.OriginProject, Trusted: it.Trusted, Clamped: clamped, Requested: it.Requested,
 				ProjectID: ps.pr.ID, ProjectName: ps.pr.Name, Path: it.Dot.SourcePath, SHA256: projectdots.Hex(it.Sum)})
 		}
@@ -6295,9 +6890,18 @@ func (e *Engine) mcpMembers(paneID string) (allowed []string, blocked bool) {
 
 - [ ] **Step 5: Wire project dots into the engine**
 
-In `internal/engine/engine.go`, add `"herdr-dots/internal/projectdots"` to the imports. In `Deps`, after the two Task 7 fields (`History`, `SessionKey`), add:
+In `internal/engine/engine.go`, add `"herdr-dots/internal/projectdots"` to the imports. In `Deps`, find the two Task 7 fields:
 
 ```go
+	History    *history.Store // Phase 9: per-dot run and card history; nil = none
+	SessionKey string         // Phase 9: this Herdr session's key; card ids are unique only within it
+```
+
+Replace with:
+
+```go
+	History    *history.Store // Phase 9: per-dot run and card history; nil = none
+	SessionKey string         // Phase 9: this Herdr session's key; card ids are unique only within it
 
 	Trust       *projectdots.TrustStore                  // Phase 9: project dot trust; nil = project dots off
 	ResolveRoot func(cwd string) (memory.Project, error) // Phase 9: a pane's git repository; nil = memory.ResolveProject with git
@@ -6309,9 +6913,10 @@ In `type Engine struct`, find:
 	memToast bool                    // "memory write failed" already shown
 ```
 
-Add after it:
+Replace with:
 
 ```go
+	memToast bool                    // "memory write failed" already shown
 
 	// Project dots (Phase 9), guarded by mu. Their I/O never happens under mu.
 	userDots  map[string]dots.Dot      // CONFIG_DIR/dots
@@ -6331,9 +6936,14 @@ In `New`, find:
 	}
 ```
 
-Add after it:
+Replace with (`memory.ExecGit` runs git through `platform.CommandContext` and `platform.ChildEnv`, hooks off):
 
 ```go
+	if d.Memory != nil && d.ResolveProject == nil {
+		d.ResolveProject = func(cwd string) (memory.Project, error) {
+			return memory.ResolveProject(context.Background(), cwd, memory.ExecGit)
+		}
+	}
 	if d.Trust != nil && d.ResolveRoot == nil {
 		d.ResolveRoot = func(cwd string) (memory.Project, error) {
 			return memory.ResolveProject(context.Background(), cwd, memory.ExecGit)
@@ -6341,19 +6951,32 @@ Add after it:
 	}
 ```
 
-and add to the `&Engine{…}` literal (after `origBody: map[string]string{},` or the last map a later phase added):
+Find the last maps of the `&Engine{…}` literal (Phase 7's):
 
 ```go
-		projects:  map[string]*projectState{},
-		paneRoots: map[string]string{},
+		applying: map[string]bool{},
+		gens:     map[string]uint64{},
+	}
 ```
 
-In `ReloadDots`, find:
+Replace with (gofmt re-aligns the literal):
+
+```go
+		applying: map[string]bool{},
+		gens:     map[string]uint64{},
+		projects:  map[string]*projectState{},
+		paneRoots: map[string]string{},
+	}
+```
+
+In `ReloadDots`, find (Phase 8 re-plans every schedule here):
 
 ```go
 	e.mu.Lock()
 	e.dots, e.invalid = m, invalid
+	e.plan = map[string]time.Time{} // re-plan every schedule from the reloaded dots
 	e.mu.Unlock()
+	e.broadcast()
 ```
 
 Replace with:
@@ -6362,24 +6985,27 @@ Replace with:
 	e.mu.Lock()
 	e.userDots, e.userBad = m, invalid
 	e.rebuildLocked()
+	e.plan = map[string]time.Time{} // re-plan every schedule from the reloaded dots
 	e.mu.Unlock()
 	e.rescanProjects(true) // project dot files and trust are read outside the lock
+	e.broadcast()
 ```
 
-(Keep anything a later phase added after it, such as Phase 8's schedule re-plan; it now sees the merged `e.dots`.)
-
-In `Start`, find:
+In `Start`, find (Phase 7 starts the draft sweep last):
 
 ```go
-	e.spawn(e.pollLoop)
-	if e.d.Memory != nil {
-		e.spawn(e.memoryLoop)
+	if e.d.Patches != nil {
+		e.spawn(e.draftLoop)
 	}
+}
 ```
 
-Add after it:
+Replace with:
 
 ```go
+	if e.d.Patches != nil {
+		e.spawn(e.draftLoop)
+	}
 	if e.projectDotsOn() {
 		// Restored attachments' repositories (git runs here, off every lock).
 		atts := e.d.Attachments.List()
@@ -6390,6 +7016,7 @@ Add after it:
 			e.broadcast()
 		})
 	}
+}
 ```
 
 In `Attach`, find:
@@ -6401,9 +7028,13 @@ In `Attach`, find:
 	}
 ```
 
-Add after it:
+Replace with:
 
 ```go
+	var pr memory.Project
+	if prev, ok := e.d.Attachments.Get(paneID); e.memEnabled() && (!ok || prev.ProjectID == "") {
+		pr = e.resolve(p.WorkDir())
+	}
 	// Project dots: the pane's repository decides which ones it may attach.
 	var repo memory.Project
 	if e.projectDotsOn() {
@@ -6441,17 +7072,18 @@ Replace with:
 		}
 ```
 
-In `Snapshot`, find:
+In `Snapshot`, find (Phase 7 fills the write fields):
 
 ```go
 	for _, slug := range slugs {
 		d := e.dots[slug]
 		s.Library = append(s.Library, view.LibraryDot{Slug: slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
-			Backend: d.Backend.Kind, Model: d.Backend.Model, Mode: string(d.Delivery.Mode)})
+			Backend: d.Backend.Kind, Model: d.Backend.Model, Mode: string(d.Delivery.Mode),
+			Write: d.Capabilities.Write && dots.CanWrite(d.Backend.Kind), WriteTimeoutSeconds: d.Capabilities.WriteTimeoutSeconds})
 	}
 ```
 
-Replace with (keep any `LibraryDot` field a later phase fills here):
+Replace with:
 
 ```go
 	for _, slug := range slugs {
@@ -6460,10 +7092,52 @@ Replace with (keep any `LibraryDot` field a later phase fills here):
 			continue // listed below with their trust state
 		}
 		s.Library = append(s.Library, view.LibraryDot{Slug: slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
-			Backend: d.Backend.Kind, Model: d.Backend.Model, Mode: string(d.Delivery.Mode), Origin: d.Origin})
+			Backend: d.Backend.Kind, Model: d.Backend.Model, Mode: string(d.Delivery.Mode),
+			Write: d.Capabilities.Write && dots.CanWrite(d.Backend.Kind), WriteTimeoutSeconds: d.Capabilities.WriteTimeoutSeconds,
+			Origin: d.Origin})
 	}
 	s.Library = append(s.Library, e.projectLibraryLocked()...)
 	s.PaneProjects = e.paneProjectsLocked()
+```
+
+In `runDot`, find (the run slot is taken; nothing has run yet):
+
+```go
+	defer func() { <-e.sem }()
+
+	var prev string // the status before this run's "thinking", restored when an ask is cancelled
+```
+
+Replace with:
+
+```go
+	defer func() { <-e.sem }()
+	if e.projectDotGone(d) {
+		e.d.Logf("dot %s on %s: its project file changed or lost its trust; run skipped", d.Slug, paneID)
+		return
+	}
+
+	var prev string // the status before this run's "thinking", restored when an ask is cancelled
+```
+
+In Phase 8's `runBackground` (`internal/engine/background.go`), find:
+
+```go
+	// A scheduled slot is claimed (across sessions) only now, after every gate:
+	// a slot skipped for a budget stays unclaimed, so a later catch-up may run it.
+	if j.claim != nil && !j.claim() {
+```
+
+Replace with (an untrusted or changed project dot never runs in the background either; its slot stays unclaimed):
+
+```go
+	if e.projectDotGone(j.dot) {
+		e.d.Logf("dot %s: %s skipped (its project file changed or lost its trust)", j.dot.Slug, j.label)
+		return
+	}
+	// A scheduled slot is claimed (across sessions) only now, after every gate:
+	// a slot skipped for a budget stays unclaimed, so a later catch-up may run it.
+	if j.claim != nil && !j.claim() {
 ```
 
 In `internal/engine/control.go` (`SetMode`), find:
@@ -6502,6 +7176,19 @@ func (e *Engine) poll() {
 	if e.rescanProjects(false) {
 		e.broadcast()
 	}
+```
+
+In `dropPane`, find (Task 7's line):
+
+```go
+	waiting := e.d.Queue.Pending(paneID) // Phase 9: OrphanPane orphans exactly these
+```
+
+Replace with (a reused pane id is scanned again):
+
+```go
+	waiting := e.d.Queue.Pending(paneID) // Phase 9: OrphanPane orphans exactly these
+	delete(e.paneRoots, paneID)
 ```
 
 In `internal/engine/handle.go`, find:
@@ -6551,17 +7238,39 @@ In Phase 5's `askable` (`internal/engine/ask.go`), find:
 	if !known {
 		return dots.Dot{}, fmt.Errorf("%w '%s': its dot file is missing or invalid", ErrNotAttached, slug)
 	}
+	return d, err
 ```
 
-Add after it:
+Replace with:
 
 ```go
+	if !known {
+		return dots.Dot{}, fmt.Errorf("%w '%s': its dot file is missing or invalid", ErrNotAttached, slug)
+	}
 	if !d.Capabilities.MCP {
 		return d, fmt.Errorf("%w '%s': it is not available to the MCP server (capabilities.mcp = false; imported and project dots start that way)", ErrNotAttached, slug)
 	}
+	return d, err
 ```
 
-In `AskCouncil`, find:
+In `AskCouncil` (`internal/engine/ask_council.go`), find:
+
+```go
+// are marked consulted. If ctx ends first, the council is abandoned. It
+// always passes nil slugs (every eligible dot) and never relies on telling an
+// empty list from an absent one.
+```
+
+Replace with:
+
+```go
+// are marked consulted. If ctx ends first, the council is abandoned. It
+// passes nil slugs (every eligible dot) unless an attached dot lacks
+// capabilities.mcp (Phase 9), and then the non-empty list of the others; it
+// never relies on telling an empty list from an absent one.
+```
+
+Find:
 
 ```go
 	run, err := e.startCouncil(ctx, paneID, q, nil, func(parts []council.Part, body, note string) {
@@ -6592,20 +7301,42 @@ func TestMCPCannotAskAClampedDot(t *testing.T) {
 		t.Fatalf("askable: %v", err)
 	}
 }
+
+// A run queued before its project file changed (a council member, a Phase 8
+// background job) carries a copy of the dot: it must not start.
+func TestARevokedProjectDotsQueuedRunNeverStarts(t *testing.T) {
+	r := newProjRig(t, dot("Security", dots.ModeQueue))
+	_ = r.e.ScanPane(context.Background(), pane)
+	r.trustAs(t)
+	r.e.mu.Lock()
+	queued, user := r.e.dots[helperSlug], r.e.dots["security"]
+	r.e.mu.Unlock()
+	if r.e.projectDotGone(queued) || r.e.projectDotGone(user) {
+		t.Fatal("a loaded dot is not gone")
+	}
+	os.WriteFile(filepath.Join(r.root, ".herdr-dots", "dots", "helper.toml"), []byte(strings.Replace(repoHelperTOML, "Be helpful.", "Be sneaky.", 1)), 0o644)
+	eventually(t, "the poll notices the edit", func() bool { return r.e.projectDotGone(queued) })
+	r.e.runDot(pane, queued, nil, runOpts{summon: true})
+	if r.be.n() != 0 {
+		t.Fatal("a revoked project dot reached its backend")
+	}
+}
 ```
 
 - [ ] **Step 7: Wire the real engine**
 
-In `cmd/herdr-dots/engine.go`, add imports `"herdr-dots/internal/credentials"` (Phase 4 already imports it here; skip if present), `"herdr-dots/internal/history"` and `"herdr-dots/internal/projectdots"`. In `buildEngine`, find:
+In `cmd/herdr-dots/engine.go`, add `"herdr-dots/internal/history"` and `"herdr-dots/internal/projectdots"` to the imports. In `buildEngine`, find:
 
 ```go
 		Memory:         memoryStoreFor(p, cfg, logf),
 		ResolveProject: resolveProject,
 ```
 
-Add after those two lines, inside the `engine.Deps{…}` literal:
+Replace with (`resolveProject` is Phase 2's `memwire.go` resolver: `memory.ExecGit` through the platform helpers, 5 s timeout):
 
 ```go
+		Memory:         memoryStoreFor(p, cfg, logf),
+		ResolveProject: resolveProject,
 
 		History:     historyStoreFor(p),
 		SessionKey:  paths.SessionKey(p.SocketPath),
@@ -6613,16 +7344,23 @@ Add after those two lines, inside the `engine.Deps{…}` literal:
 		ResolveRoot: resolveProject,
 ```
 
-and add after `buildEngine`:
+Find:
 
 ```go
-// historyStoreFor opens per-dot history (Phase 9). Excerpts pass the same
-// key redaction as the feed.
+func serveEngine(p paths.Paths) error {
+```
+
+Replace with:
+
+```go
+// historyStoreFor opens per-dot history (Phase 9). Excerpts are redacted with
+// credentials.Redact, the history store's default (credentials.Redact is
+// variadic, so it can't be assigned to Store.Redact).
 func historyStoreFor(p paths.Paths) *history.Store {
-	hs := history.Open(p.HistoryDir())
-	hs.Redact = credentials.Redact
-	return hs
+	return history.Open(p.HistoryDir())
 }
+
+func serveEngine(p paths.Paths) error {
 ```
 
 - [ ] **Step 8: Run the tests to verify they pass**
@@ -6638,7 +7376,7 @@ Run the common verification block. Expected: as stated there.
 
 ```bash
 git add internal/engine internal/ipc/ipc.go internal/view/view.go internal/config cmd/herdr-dots/engine.go
-git commit -m "feat(engine): trusted project dots with clamps, pause on change, trust IPC and the MCP clamp (Phase 9)"
+git commit -m "feat(engine): trusted project dots with clamps, pause on change, trust IPC and the MCP clamp; a revoked project dot never runs, in the background either (Phase 9)"
 ```
 
 ---
@@ -6654,7 +7392,7 @@ git commit -m "feat(engine): trusted project dots with clamps, pause on change, 
 - Modify: `cmd/herdr-dots/main.go` (dispatch)
 
 **Interfaces:**
-- Consumes: Task 2 `dots.LoadAll`, `Load`, `Save`, `ErrExists`, `ReadProjectFiles`, `DecodeProject`, `Requested`, `ClampDot`, `CheckCapabilities`, `DisplaySlug`, `ProjectTag`, `ProjectDir`, `OriginUser`, `OriginImport`; Task 5 `projectdots.TrustStore`, `ScanProject`, `Sum`, `Hex`; Task 6 `dotpack.Parse`, `Prepare`, `Export`, `Fetch`, `SelectMemory`, `SecretError`, `MaxBytes`, `ErrTooLarge`; Task 4 `memory.Store.ImportPack`; existing `memoryStoreFor`, `resolveProject`, `splitCSV`, `paths.Discover`, `config.Load`, `version.Version`.
+- Consumes: Task 2 `dots.LoadAll`, `Load`, `Save`, `ErrExists`, `ReadProjectFiles`, `DecodeProject`, `Requested`, `ClampDot`, `CheckCapabilities`, `DisplaySlug`, `ProjectTag`, `ProjectDir`, `OriginUser`, `OriginImport`; Task 5 `projectdots.TrustStore`, `ScanProject`, `Sum`, `Hex`; Task 6 `dotpack.Parse`, `Prepare`, `Export`, `Fetch`, `SelectMemory`, `SecretError`, `MaxBytes`, `ErrTooLarge`; Task 4 `memory.Store.ImportPack`; existing `memoryStoreFor(p, cfg, logf)` (`memwire.go`; nil `logf` is fine), `resolveProject` (`memwire.go`), `splitCSV` (`memory.go`), `paths.Discover`, `memory.ValidProjectID`, `config.Load`, `version.Version`, the `commands` map in `main.go`.
 - Produces: `runDots(args []string) error` registered as `"dots"`; `type dotsCLI struct{…}` with `run(args []string) error`; `parseAnywhere(fs *flag.FlagSet, args []string) ([]string, error)`; `indentBlock(text string) string`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -7199,7 +7937,7 @@ func (c *dotsCLI) importPack(args []string) error {
 	fmt.Fprintf(c.out, "imported %s as %s; open the library (prefix+d) to attach it\n", d.Name, d.Slug)
 	if memNote == "" && len(p.Memory) > 0 {
 		res, err := c.mem.ImportPack(pr.ID, d.Slug, p.Memory)
-		fmt.Fprintf(c.out, "memory: %d added, %d merged into existing entries; project entries wait for your approval (herdr-dots memory approve)\n", res.Added, res.Updated)
+		fmt.Fprintf(c.out, "memory: %d added, %d merged into existing entries; they wait for your approval (herdr-dots memory approve)\n", res.Added, res.Updated)
 		for _, why := range res.Rejected {
 			fmt.Fprintln(c.errOut, "memory: skipped", why)
 		}
@@ -7220,6 +7958,13 @@ func (c *dotsCLI) preview(p dotpack.Pack, d dots.Dot, from string, clamps []dots
 	fmt.Fprintf(w, "exported %s by herdr-dots %s\n", p.Meta.ExportedAt.Format("2006-01-02"), textutil.SanitizeModelText(p.Meta.Version))
 	fmt.Fprintf(w, "saves as: %s (%s)\nbackend:  %s/%s\nmode:     %s\npurpose (becomes this dot's system prompt):\n%s\n",
 		d.Name, d.Slug, d.Backend.Kind, d.Backend.Model, d.Delivery.Mode, indentBlock(d.Purpose))
+	// Phase 8 text that reaches a prompt once research or a schedule is kept.
+	if len(d.Research.Topics) > 0 {
+		fmt.Fprintf(w, "research topics:\n%s\n", indentBlock(strings.Join(d.Research.Topics, "\n")))
+	}
+	if strings.TrimSpace(d.Schedule.Task) != "" {
+		fmt.Fprintf(w, "schedule task:\n%s\n", indentBlock(d.Schedule.Task))
+	}
 	if len(keep) > 0 {
 		fmt.Fprintf(w, "kept (you asked): %s\n", strings.Join(keep, ", "))
 	}
@@ -7236,7 +7981,7 @@ func (c *dotsCLI) preview(p dotpack.Pack, d dots.Dot, from string, clamps []dots
 	if len(p.Memory) > 0 {
 		where := memNote
 		if where == "" {
-			where = "into " + pr.Name + "; project entries arrive as proposals"
+			where = "into " + pr.Name + "; every entry arrives as a proposal for you to approve"
 		}
 		fmt.Fprintf(w, "memory: %d entries, %s\n", len(p.Memory), where)
 		for i, e := range p.Memory {
@@ -7305,8 +8050,10 @@ func (c *dotsCLI) trustFile(args []string) error {
 	}
 	sum := projectdots.Sum(f.Data)
 	_, clamps := dots.ClampDot(d, allow)
-	fmt.Fprintf(c.out, "TRUST %s in %s\nsha256:  %s\nname:    %s (%s)\nbackend: %s/%s\npurpose (becomes this dot's system prompt):\n%s\n",
-		f.Rel, pr.Name, projectdots.Hex(sum), textutil.SanitizeModelText(d.Name), dots.DisplaySlug(d.Slug), d.Backend.Kind, d.Backend.Model, indentBlock(d.Purpose))
+	// The whole file, not just the purpose: research topics and a schedule
+	// task (Phase 8) reach prompts too, and trust covers every byte.
+	fmt.Fprintf(c.out, "TRUST %s in %s\nsha256:  %s\nname:    %s (%s)\nbackend: %s/%s\nthe file, exactly as it will be trusted:\n%s\n",
+		f.Rel, pr.Name, projectdots.Hex(sum), textutil.SanitizeModelText(d.Name), dots.DisplaySlug(d.Slug), d.Backend.Kind, d.Backend.Model, indentBlock(string(f.Data)))
 	if len(requested) > 0 {
 		fmt.Fprintf(c.out, "asks for: %s\n", strings.Join(requested, ", "))
 	}
@@ -7367,9 +8114,10 @@ In `cmd/herdr-dots/main.go`, find:
 	"memory":     runMemory,
 ```
 
-Add after it:
+Replace with:
 
 ```go
+	"memory":     runMemory,
 	"dots":       runDots,
 ```
 
@@ -7415,7 +8163,7 @@ The popup flows (spec §7): `i` profile (with `x` export and `M` memory), `I` im
 - Modify: `internal/ui/manage/model.go`, `cmd/herdr-dots/ui.go`
 
 **Interfaces:**
-- Consumes: Task 8 `profile.New`, `profile.Deps`, `profile.BackMsg`, `ExportMsg`, `MemoryMsg`, `style.Clean`, `style.Wrap`; Task 9 `view.LibraryDot{Origin, Trusted, Clamped, Requested, ProjectID, ProjectName, Path, SHA256}`, `view.Snapshot.PaneProjects`, `ipc.CmdTrust`, `ipc.CmdUntrust`, `ipc.TrustArgs`, `ipc.ReloadArgs`, `historyStoreFor`; Task 6 `dotpack.Parse`, `Prepare`, `Export`, `Fetch`, `SelectMemory`, `SecretError`, `MaxBytes`, `Ext`, `WithDot`, `WithDotProject`; Task 5 `projectdots.Sum`, `Hex`; Task 4 `memory.Store.ImportPack`; Task 2 `dots.DecodeProject`, `DecodeStrict`, `SplitProjectSlug`, `ClampDot`, `Requested`, `Capabilities`, origins; Task 1 `history.CardKey`; existing manage `key`, `press`, `setup`, `lib`, `fakeCaller` (tests).
+- Consumes: Task 8 `profile.New`, `profile.Deps`, `profile.BackMsg`, `ExportMsg`, `MemoryMsg`, `style.Clean`, `style.Wrap`; Task 9 `view.LibraryDot{Origin, Trusted, Clamped, Requested, ProjectID, ProjectName, Path, SHA256}`, `view.Snapshot.PaneProjects`, `ipc.CmdTrust`, `ipc.CmdUntrust`, `ipc.TrustArgs`, `ipc.ReloadArgs`, `historyStoreFor`; Phase 4 manage `scrProviders`/`providersUpdate`/`providersView` and the `K providers` help; Phase 2 `memDeletedMsg{name, del}`; `textutil.SanitizeModelText`; Task 6 `dotpack.Parse`, `Prepare`, `Export`, `Fetch`, `SelectMemory`, `SecretError`, `MaxBytes`, `Ext`, `WithDot`, `WithDotProject`; Task 5 `projectdots.Sum`, `Hex`; Task 4 `memory.Store.ImportPack`; Task 2 `dots.DecodeProject`, `DecodeStrict`, `SplitProjectSlug`, `ClampDot`, `Requested`, `Capabilities`, origins; Task 1 `history.CardKey`; existing manage `key`, `press`, `setup`, `lib`, `fakeCaller` (tests).
 - Produces: `manage.Deps` adds `History *history.Store`, `Fetch func(ctx context.Context, url string) ([]byte, string, error)`, `SessionKey string`, `ExportDir string`; screens `scrProfile`, `scrImportSource`, `scrImportPreview`, `scrImportRename`, `scrExport`, `scrTrust`; `(Model) Init()` sends `reload_dots {pane_id}`; `(Model) library() []view.LibraryDot`; `badge(view.LibraryDot) string`; `type pager struct{ offset int; seenEnd bool }`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -7523,10 +8271,11 @@ func TestTrustPreviewNeedsTheWholeFileAndSendsTheHash(t *testing.T) {
 	if len(fc.calls) != 0 || !strings.Contains(m.View(), "scroll to the end") {
 		t.Fatalf("y before the end: %v\n%s", fc.calls, m.View())
 	}
-	m = press(m, "space", "space", "space", "space", "1") // read to the end, keep inject
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = press(m, "space", "space", "space", "space", "space", "space", "space", "space", "space", "1") // read to the end, keep inject
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 60})
 	full := m.View()
-	for _, want := range []string{"Be helpful.", "Second line of the purpose.", "[x] 1 inject: delivery.mode inject → queue", "[ ] 2 mcp", "untrusted again"} {
+	for _, want := range []string{"Be helpful.", "Second line of the purpose.", "[x] 1 inject: delivery.mode inject → queue", "[ ] 2 mcp",
+		"THE FILE AS WRITTEN", `  mode = "inject"`, "untrusted again"} {
 		if !strings.Contains(full, want) {
 			t.Errorf("trust preview missing %q:\n%s", want, full)
 		}
@@ -7775,6 +8524,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/projectdots"
+	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -7784,6 +8534,7 @@ import (
 type trustState struct {
 	lib  view.LibraryDot
 	dot  dots.Dot
+	raw  string // the file's bytes, shown in full
 	sum  string
 	rel  string
 	keep map[string]bool // per requested capability; all off at first
@@ -7820,7 +8571,7 @@ func (m Model) openTrust(d view.LibraryDot) tea.Cmd {
 		if err != nil {
 			return trustOpenMsg{err: err}
 		}
-		return trustOpenMsg{st: &trustState{lib: d, dot: parsed, sum: projectdots.Hex(projectdots.Sum(data)), rel: rel, keep: map[string]bool{}}}
+		return trustOpenMsg{st: &trustState{lib: d, dot: parsed, raw: string(data), sum: projectdots.Hex(projectdots.Sum(data)), rel: rel, keep: map[string]bool{}}}
 	}
 }
 
@@ -7871,6 +8622,13 @@ func (m Model) trustLines() []string {
 		if !cl.Keepable {
 			lines = append(lines, "  always removed: "+cl.String())
 		}
+	}
+	// Every byte is trusted, so every byte is shown: research topics, a
+	// schedule task and its projects (Phase 8), backend args, and keys a
+	// later field adds. Control characters are stripped for the terminal.
+	lines = append(lines, "", "THE FILE AS WRITTEN (every byte you trust):")
+	for _, l := range strings.Split(strings.TrimRight(textutil.SanitizeModelText(t.raw), "\n"), "\n") {
+		lines = append(lines, "  "+l)
 	}
 	return append(lines, "", "Any change to this file makes it untrusted again, and attached copies pause.")
 }
@@ -8125,6 +8883,24 @@ func (m Model) importLines() []string {
 	for _, l := range style.Wrap(p.Dot.Purpose, w-2) {
 		lines = append(lines, "  "+l)
 	}
+	// Phase 8 text reaches a prompt once research or a schedule is kept.
+	if len(p.Dot.Research.Topics) > 0 {
+		lines = append(lines, "", "RESEARCH TOPICS:")
+		for _, tp := range p.Dot.Research.Topics {
+			for _, l := range style.Wrap(tp, w-4) {
+				lines = append(lines, "  - "+l)
+			}
+		}
+	}
+	if strings.TrimSpace(p.Dot.Schedule.Task) != "" {
+		lines = append(lines, "", "SCHEDULE TASK:")
+		for _, l := range style.Wrap(p.Dot.Schedule.Task, w-2) {
+			lines = append(lines, "  "+l)
+		}
+	}
+	if len(p.Dot.Backend.Args) > 0 {
+		lines = append(lines, "", "backend args: "+style.Clean(strings.Join(p.Dot.Backend.Args, " ")))
+	}
 	lines = append(lines, "")
 	_, all := dots.ClampDot(p.Dot, nil)
 	requested := dots.Requested(p.Dot)
@@ -8155,7 +8931,7 @@ func (m Model) importLines() []string {
 		case !is.withMem:
 			lines = append(lines, fmt.Sprintf("MEMORY: %d entries, not imported (m to include)", len(p.Memory)))
 		default:
-			lines = append(lines, fmt.Sprintf("MEMORY: %d entries into %s; project entries arrive as proposals (m to leave out):", len(p.Memory), style.Clean(is.project.Name)))
+			lines = append(lines, fmt.Sprintf("MEMORY: %d entries into %s; they arrive as proposals for you to approve (m to leave out):", len(p.Memory), style.Clean(is.project.Name)))
 		}
 		for i, e := range p.Memory {
 			for j, l := range style.Wrap(fmt.Sprintf("[%s %s] %s", e.Scope, e.Kind, e.Text), w-6) {
@@ -8440,18 +9216,20 @@ func (m Model) exportView() string {
 
 - [ ] **Step 4: Wire them into the library**
 
-In `internal/ui/manage/model.go`, add imports `"github.com/charmbracelet/bubbles/textinput"`, `"herdr-dots/internal/history"` and `"herdr-dots/internal/ui/profile"`.
+In `internal/ui/manage/model.go`, add `"github.com/charmbracelet/bubbles/textinput"`, `"herdr-dots/internal/history"` and `"herdr-dots/internal/ui/profile"` to the imports (gofmt puts the bubbles one in the third-party group if you add it there by hand).
 
-Find the end of `Deps`:
+Find the memory fields of `Deps` in `internal/ui/manage/model.go` (Phase 4's optional fields follow them; keep those):
 
 ```go
 	Memory  *memory.Store                               // nil: memory off (no M/P, no memory step on delete)
 	Project func(target string) (memory.Project, error) // the target pane's project when the snapshot lacks it; may be nil
 ```
 
-Add after those two lines, inside the struct:
+Replace with:
 
 ```go
+	Memory  *memory.Store                               // nil: memory off (no M/P, no memory step on delete)
+	Project func(target string) (memory.Project, error) // the target pane's project when the snapshot lacks it; may be nil
 
 	// Phase 9: profiles and sharing.
 	History    *history.Store                                                // nil: no profiles
@@ -8460,39 +9238,44 @@ Add after those two lines, inside the struct:
 	ExportDir  string                                                        // default folder for exports; "" = home
 ```
 
-Find:
+Find the last screen (Phase 4's):
 
 ```go
-	scrMemory        // the memory browser (memui)
-	scrConfirmMemory // after deleting a dot: also delete its memory?
+	scrProviders     // API keys and the Ollama server (Phase 4)
+)
 ```
 
-Add after them, inside the `const` block:
+Replace with:
 
 ```go
+	scrProviders     // API keys and the Ollama server (Phase 4)
 	scrProfile       // a dot's profile (Phase 9)
 	scrImportSource  // import: file path or URL prompt
 	scrImportPreview // import: everything the pack would do
 	scrImportRename  // import: a new name after a collision
 	scrExport        // export: memory choice and file
 	scrTrust         // a project dot's trust preview
+)
 ```
 
-Find (last field of `Model`):
+Find the last field of `Model` (Phase 4's):
 
 ```go
-	mem       *memui.Model // open memory browser (scrMemory)
+	fetching  bool // a ctrl+space model fetch is in flight
+}
 ```
 
-Add after it:
+Replace with:
 
 ```go
+	fetching  bool // a ctrl+space model fetch is in flight
 
 	prof  *profile.Model  // scrProfile
 	imp   *importState    // scrImportPreview, scrImportRename
 	exp   *exportState    // scrExport
 	trust *trustState     // scrTrust
 	input textinput.Model // the import, rename and export prompts
+}
 ```
 
 Find:
@@ -8571,12 +9354,14 @@ Find:
 
 ```go
 	case memDeletedMsg:
-		m.status = fmt.Sprintf("deleted %s and its memory (%d files)", msg.name, msg.files)
+		m.status = fmt.Sprintf("deleted %s and its memory (%s)", msg.name, msg.del)
 ```
 
-Add after it (still inside the `switch msg := msg.(type)`):
+Replace with (the new cases stay inside the `switch msg := msg.(type)`):
 
 ```go
+	case memDeletedMsg:
+		m.status = fmt.Sprintf("deleted %s and its memory (%s)", msg.name, msg.del)
 	case profileOpenMsg:
 		if msg.err != nil {
 			m.status = msg.err.Error()
@@ -8614,7 +9399,7 @@ Add after it (still inside the `switch msg := msg.(type)`):
 		m.scr, m.imp = scrLibrary, nil
 		m.status = fmt.Sprintf("imported %s as %s", msg.name, msg.slug)
 		if n := msg.res.Added + msg.res.Updated; n > 0 || len(msg.res.Rejected) > 0 {
-			m.status += fmt.Sprintf(" · memory: %d imported, %d skipped (project entries wait for approval)", n, len(msg.res.Rejected))
+			m.status += fmt.Sprintf(" · memory: %d imported, %d skipped (they wait for your approval)", n, len(msg.res.Rejected))
 		}
 		if msg.memErr != nil {
 			m.status += " · memory import failed: " + msg.memErr.Error()
@@ -8659,13 +9444,71 @@ Replace with:
 	case SnapshotMsg:
 ```
 
-Replace every `m.snap.Library` in `model.go` with `m.library()` — in the `SnapshotMsg` cursor clamp, `current()`, the `j`/`down` key, `apply()` and `View()`. Then run `grep -n 'm.snap.Library' internal/ui/manage/model.go`; expected: no output (`share.go`'s `startExport` reads `m.snap.Library` on purpose, to find a name).
+Find (in the `SnapshotMsg` case):
 
-Find (in the `tea.KeyMsg` screen switch):
+```go
+		m.cursor = max(0, min(m.cursor, len(m.snap.Library)-1))
+```
+
+Replace with:
+
+```go
+		m.cursor = max(0, min(m.cursor, len(m.library())-1))
+```
+
+Find:
+
+```go
+func (m Model) current() (view.LibraryDot, bool) {
+	if m.cursor >= 0 && m.cursor < len(m.snap.Library) {
+		return m.snap.Library[m.cursor], true
+	}
+```
+
+Replace with:
+
+```go
+func (m Model) current() (view.LibraryDot, bool) {
+	if lib := m.library(); m.cursor >= 0 && m.cursor < len(lib) {
+		return lib[m.cursor], true
+	}
+```
+
+Find:
+
+```go
+		m.cursor = min(m.cursor+1, max(0, len(m.snap.Library)-1))
+```
+
+Replace with:
+
+```go
+		m.cursor = min(m.cursor+1, max(0, len(m.library())-1))
+```
+
+Find (in `apply`):
+
+```go
+	for _, d := range m.snap.Library {
+		switch {
+```
+
+Replace with:
+
+```go
+	for _, d := range m.library() {
+		switch {
+```
+
+The `View` rows are replaced below. Then run `grep -n 'm.snap.Library' internal/ui/manage/model.go`; expected after the `View` edit: no output (`share.go`'s `startExport` reads `m.snap.Library` on purpose, to find a name).
+
+Find (in the `tea.KeyMsg` screen switch; Phase 4 added the providers screen):
 
 ```go
 		case scrConfirmMemory:
 			return m.keysConfirmMemory(msg)
+		case scrProviders:
+			return m.providersUpdate(msg)
 		}
 		return m.keysLibrary(msg)
 ```
@@ -8675,6 +9518,8 @@ Replace with:
 ```go
 		case scrConfirmMemory:
 			return m.keysConfirmMemory(msg)
+		case scrProviders:
+			return m.providersUpdate(msg)
 		case scrImportSource:
 			return m.keysImportSource(msg)
 		case scrImportPreview:
@@ -8783,6 +9628,8 @@ In `View`, find:
 		if m.mem != nil {
 			return m.mem.View()
 		}
+	case scrProviders:
+		return m.providersView()
 	}
 ```
 
@@ -8793,6 +9640,8 @@ Replace with:
 		if m.mem != nil {
 			return m.mem.View()
 		}
+	case scrProviders:
+		return m.providersView()
 	case scrProfile:
 		if m.prof != nil {
 			v := m.prof.View()
@@ -8824,7 +9673,7 @@ Find (the library rows):
 		line := fmt.Sprintf("%s %s %-14s %-22s %s", check, style.Glyph(d.Glyph, d.Color), d.Name, d.Backend+"/"+d.Model, d.Mode)
 ```
 
-Replace with (keep anything a later phase appended to `line`, such as Phase 4's cost):
+Replace with:
 
 ```go
 	lib := m.library()
@@ -8842,13 +9691,13 @@ Replace with (keep anything a later phase appended to `line`, such as Phase 4's 
 Find:
 
 ```go
-	help := "space toggle · enter apply · n new · t template · e edit · D delete · esc close"
+	help := "space toggle · enter apply · n new · t template · e edit · D delete · K providers · esc close"
 ```
 
-Replace with (keep keys a later phase added):
+Replace with:
 
 ```go
-	help := "space toggle · enter apply · n new · t template · e edit · D delete · i profile · I import · T trust · esc close"
+	help := "space toggle · enter apply · n new · t template · e edit · D delete · i profile · I import · T trust · K providers · esc close"
 ```
 
 Find:
@@ -8884,16 +9733,18 @@ func (m Model) View() string {
 
 - [ ] **Step 5: Wire the popup's new dependencies**
 
-In `cmd/herdr-dots/ui.go`, add imports `"net/http"` and `"herdr-dots/internal/dotpack"`. In `runManage`, find:
+In `cmd/herdr-dots/ui.go`, add `"net/http"` and `"herdr-dots/internal/dotpack"` to the imports. In `runManage`, find (Phase 4 and 5 fields follow these lines; keep them):
 
 ```go
+	prices := set.Prices()
 	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
-		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject}), tea.WithAltScreen())
+		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject,
 ```
 
-Replace with (keep any `manage.Deps` field a later phase added):
+Replace with:
 
 ```go
+	prices := set.Prices()
 	client := &http.Client{Timeout: 20 * time.Second}
 	home, _ := os.UserHomeDir()
 	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
@@ -8901,7 +9752,7 @@ Replace with (keep any `manage.Deps` field a later phase added):
 		History: historyStoreFor(p), SessionKey: paths.SessionKey(p.SocketPath), ExportDir: home,
 		Fetch: func(ctx context.Context, url string) ([]byte, string, error) {
 			return dotpack.Fetch(ctx, client, url, dotpack.MaxBytes)
-		}}), tea.WithAltScreen())
+		},
 ```
 
 - [ ] **Step 6: Run the tests to verify they pass**
@@ -8926,47 +9777,98 @@ git commit -m "feat(ui): profile, import and export screens, trust preview and o
 
 ---
 
-### Task 12: README, roadmap, notes, version 0.9.0
+### Task 12: README, notes, version 0.9.0
 
-**Depends on:** all previous tasks. Wave 5.
+**Depends on:** all previous tasks, and Phase 8's Task 16 (version 0.8.0 and its README edits) merged into the base. Wave 5.
 
 **Files:**
-- Modify: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, `internal/version/version.go`, `herdr-plugin.toml`
+- Modify: `internal/version/version.go`, `herdr-plugin.toml`, `cmd/herdr-dots/memwire_test.go` (the version pin), `README.md`
 - Create: `docs/superpowers/notes/2026-10-08-phase-9-verification.md`
 
 **Interfaces:**
-- Consumes: Task 1's V1 numbers and Task 11's live-check notes (from their reports).
-- Produces: version `0.9.0`; user docs for profiles, packs and project dots; V1–V3 recorded.
+- Consumes: Task 1's V1 numbers and Task 11's live-check notes (from their reports); the post-Phase-8 README (Phase 8 Task 16's status block, `### Proactive dots (0.8.0)` section, `## Files` lines, privacy and known-gaps bullets, and roadmap rows `| 8 |` and `| 9–10 |`).
+- Produces: version `0.9.0`; user docs for profiles, packs and project dots; V1–V3 recorded. Phase 2 stays **VITAL**; the README stays "scaffold … not done".
 
-- [ ] **Step 1: Write the failing check**
+- [ ] **Step 1: Version 0.9.0 (test first)**
 
-Run:
+In `cmd/herdr-dots/memwire_test.go`, find (Phase 8 Task 16's pin):
 
-```bash
-grep -n 'const Version' internal/version/version.go
-grep -n '^version' herdr-plugin.toml
-grep -c 'dotpack' README.md
+```go
+func TestVersionIsPhaseEight(t *testing.T) {
+	if version.Version != "0.8.0" {
+		t.Fatalf("version %s, want 0.8.0", version.Version)
+	}
+}
 ```
 
-Expected now: `0.8.0` twice and `0` (the README doesn't mention packs yet).
+Replace with:
 
-- [ ] **Step 2: Bump the version**
+```go
+func TestVersionIsPhaseNine(t *testing.T) {
+	if version.Version != "0.9.0" {
+		t.Fatalf("version %s, want 0.9.0", version.Version)
+	}
+}
+```
 
-In `internal/version/version.go`, replace `const Version = "0.8.0"` with `const Version = "0.9.0"`. In `herdr-plugin.toml`, replace `version = "0.8.0"` with `version = "0.9.0"`.
+Run: `GOTOOLCHAIN=local go test -run 'TestVersionIsPhaseNine' ./cmd/herdr-dots/`
+Expected: FAIL with `version 0.8.0, want 0.9.0`.
 
-- [ ] **Step 3: Update the README**
+In `internal/version/version.go`, find:
 
-1. Status line: replace the version in `> **Status: scaffold (v0.8.0).**` with `v0.9.0` and add Phase 9 to the list of phases that are in, keeping the sentence that the project is not done and not ready for general use.
-2. Under "Using it", after the last feature section a previous phase added, add:
+```go
+const Version = "0.8.0"
+```
+
+Replace with:
+
+```go
+const Version = "0.9.0"
+```
+
+In `herdr-plugin.toml`, find (the plugin's own version; `min_herdr_version = "0.8.0"` on the next line is Herdr's version and stays):
+
+```toml
+name = "Herdr Dots"
+version = "0.8.0"
+```
+
+Replace with (Phase 6's manifest test compares `version` with `version.Version` and needs no change):
+
+```toml
+name = "Herdr Dots"
+version = "0.9.0"
+```
+
+Run: `GOTOOLCHAIN=local go test ./cmd/herdr-dots/`
+Expected: `ok  	herdr-dots/cmd/herdr-dots`.
+
+- [ ] **Step 2: README**
+
+Six edits against the post-Phase-8 README. Each anchors on a heading or a whole line, not a line number.
+
+(a) The status block. Replace the whole quoted block that starts with `> **Status: 0.8.0, in development (scaffold, not done).**` (it ends at the first blank line) with:
+
+```markdown
+> **Status: 0.9.0, in development (scaffold, not done).** It is not finished and not ready for
+> general use. New in 0.9.0: per-dot profiles with run history and tuning hints, dot packs to export
+> and import dots (risky capabilities start off), and team dots shipped in a repository behind a
+> content-hash trust prompt; this is built and unit-tested but has **not been run end to end inside
+> Herdr** by the developer yet. Proactive dots (0.8.0) and write-capable dots (0.7.0) have not been
+> run end to end inside Herdr yet either, and Windows support (0.6.0) has not been run on Windows
+> yet. Phase 2 (dot memory) stays the VITAL part. See the [Roadmap](#roadmap) for what's missing.
+```
+
+(b) Add this section at the end of "Using it": after the `### Proactive dots (0.8.0)` section and immediately before `## Files`:
 
 ````markdown
-### Profiles, history and sharing
+### Profiles, history and sharing (0.9.0)
 
 Every dot run (reviews, summons, council members, MCP asks, research, scheduled and commit runs,
 drafts and memory passes) and every card outcome (sent, edited, dismissed, applied, discarded,
 injected, orphaned) is kept per dot in the plugin state dir under `history/<slug>.jsonl`, across
-sessions and projects, capped at 20,000 lines. History holds only 300-character excerpts and never
-leaves this machine.
+sessions and projects, capped at 20,000 lines. History holds only 300-character excerpts, with
+anything that looks like a key redacted, and never leaves this machine.
 
 Press `i` on a dot in the library for its **profile**: 7- and 30-day stats (`tab` switches) with
 runs by kind, how often it flags, how often you accept its advice, suppressed repeats, cost and
@@ -8983,45 +9885,67 @@ herdr-dots dots import security.dotpack.toml            # or an https:// URL
 
 Packs never contain credentials, history, global memory or preferences, and an export stops if
 anything looks like a secret (`--force` overrides). An import shows everything first (purpose,
-backend, every memory entry) and never overwrites a dot (`--as <name>` or `n` to rename). Imported
-dots start with **inject, write, MCP, research, web, schedules, commit triggers and custom
-`base_url`s turned off**; keep one with `--keep inject` (CLI) or its number in the preview.
-Imported memory is labelled "imported" in prompts, never stops a dot from repeating advice, and
-imported project memory waits for your approval.
+research topics, schedule task, backend, every memory entry) and never overwrites a dot (`--as
+<name>` or `n` to rename). Imported dots start with **inject, write, MCP, research, web, schedules,
+commit triggers and custom `base_url`s turned off**; keep one with `--keep inject` (CLI) or its
+number in the preview. Absolute `schedule.projects` paths are always removed. Imported memory is
+labelled "imported" in prompts, never stops a dot from repeating advice, and every imported entry
+waits for your approval (`herdr-dots memory approve`, or `a` in the memory browser).
 
 **Team dots in a repository:** put dot files in `.herdr-dots/dots/*.toml` at the repository root.
 Everyone working in that repository sees them in the library as `project` dots, but nobody can
 attach one until they **trust** it: `T` in the library (or `herdr-dots dots trust <file>`) shows the
 whole file and the capabilities it asks for, each off until you turn it on. Trust covers the exact
 file content in this repository and its clones; any change makes it untrusted again and pauses it
-where it's attached. `project_dots_enabled = false` in `config.toml` turns project dots off.
+where it's attached, and an untrusted or changed project dot never runs, in the background either.
+`project_dots_enabled = false` in `config.toml` turns project dots off.
 ````
 
-3. Under "Files", add:
+(c) Under `## Files`, insert these lines right after the line that starts `` - `STATE_DIR/memory/<project>/schedule.json` `` (Phase 8's last line there):
 
 ```markdown
-- History: the plugin state dir, under `history/<slug>.jsonl` (shared by every Herdr session; `0600`)
+- `STATE_DIR/history/<slug>.jsonl`: per-dot run and card history, shared by every session (`0600`, capped at 20,000 lines).
 - Trusted project dot files: `$(herdr plugin config-dir herdr-dots)/trusted.json`
 - Team dots: `.herdr-dots/dots/*.toml` in a repository (used only after you trust each file)
 ```
 
-4. Under "Privacy and safety", add:
+(d) At the end of `## Privacy and safety` (after its last bullet, "Commit reviews never install git hooks; …", and before `## Known gaps in this scaffold`), add:
 
 ```markdown
 - Shared dots are someone else's prompts: imported and project dots start with every risky
   capability off, keys this version doesn't understand are refused, and project dot trust is tied
   to the file's exact content.
 - Dot packs never carry credentials or history, exported memory is secret-scanned, and history
-  stays on this machine.
+  stays on this machine with keys redacted.
 ```
 
-5. In the Roadmap table, mark Phase 9 "(in this scaffold since 0.9.0)" in its row, keep Phase 2 marked **VITAL**, and keep the sentence that the project is feature complete only after Phase 10.
+(e) At the end of `## Known gaps in this scaffold` (after its last bullet, Phase 8's "Proactive dots (0.8.0) are unit-tested …", and before `## Roadmap`), add:
 
-- [ ] **Step 4: Update the roadmap spec**
+```markdown
+- Profiles, dot packs and project dots (0.9.0) are unit-tested on macOS only; the manage popup flows
+  and a project dot's trust and pause have not been run end to end inside Herdr (checklist in
+  `docs/superpowers/notes/2026-10-08-phase-9-verification.md`). A repository can ship a dot with the
+  same display name as one of yours: the `proj:` slug and the trust preview tell them apart.
+```
 
-In `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, in the phase table row for Phase 9, add "built in 0.9.0 (not done; see Phase 10)" to the status column, the way earlier phases recorded theirs.
+(f) In the roadmap table of `README.md`, find Phase 8 Task 16's combined row:
 
-- [ ] **Step 5: Write the verification notes**
+```markdown
+| 9–10 | Profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
+```
+
+Replace with:
+
+```markdown
+| 9 | Profiles, history and sharing (0.9.0): per-dot run history and profiles with tuning hints, dot packs (export and import, risky capabilities off), team dots in a repository behind content-hash trust, seven more templates. Built and unit-tested; **not run end to end in Herdr yet** |
+| 10 | Hardening and release. The project is feature complete only after Phase 10. |
+```
+
+Keep row 2 exactly as it is (**Dot memory — VITAL.**). If Task 11's live check ran and passed, change "has **not been run end to end inside Herdr** by the developer yet" in (a) (for 0.9.0 only), "have not been run end to end inside Herdr" in (e) and "**not run end to end in Herdr yet**" in roadmap row 9 to say it was checked once in an isolated Herdr session on macOS; otherwise leave them.
+
+The roadmap spec (`docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`) is not edited: its phase table has no status column, and Phases 2–8 left it unchanged.
+
+- [ ] **Step 3: Write the verification notes**
 
 Create `docs/superpowers/notes/2026-10-08-phase-9-verification.md`, filling the two benchmark numbers from Task 1's report and the live-check lines from Task 11's report (write "not run" if it wasn't):
 
@@ -9055,28 +9979,28 @@ Create `docs/superpowers/notes/2026-10-08-phase-9-verification.md`, filling the 
 - Version 0.9.0. Not done: Phase 10 (hardening and release) remains, and the product is feature complete only after its acceptance checklist.
 ```
 
-- [ ] **Step 6: Check the wording**
+- [ ] **Step 4: Check the wording**
 
 Run:
 
 ```bash
 grep -n 'VITAL' README.md
-grep -nE 'is (done|finished|complete|ready)|feature complete|production[- ]ready' README.md docs/superpowers/notes/2026-10-08-phase-9-verification.md | grep -v 'only after\|not done\|until\|not '
-sh scripts/build.sh && ./bin/herdr-dots version
+grep -n 'not been run end to end\|not run end to end' README.md
+grep -nE 'is (done|finished|complete|ready)|feature complete|production[- ]ready' README.md docs/superpowers/notes/2026-10-08-phase-9-verification.md | grep -v 'only when\|until\|not \|only after\|Phase 10\|"feature complete"'
 grep -c 'dotpack' README.md
 ```
 
-Expected: at least one `VITAL` line (Phase 2); the second command prints nothing; the build prints `herdr-dots 0.9.0 (scaffold)`; the last prints a number above 0.
+Expected: at least one `VITAL` line (Phase 2); at least four "not … run end to end" lines (unless Task 11's live check passed); the third command prints nothing; the last prints a number above 0. (This is Phase 8's wording check: an older `\b(done|ready)\b` grep also flags lines the README already has, such as "Herdr reports `done`" and "Patch ready".)
 
-- [ ] **Step 7: Full checks**
+- [ ] **Step 5: Full checks**
 
-Run the common verification block. Expected: as stated there.
+Run the common verification block, then `sh scripts/build.sh && ./bin/herdr-dots version`. Expected: as stated there; the last prints `herdr-dots 0.9.0 (scaffold)`.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md docs/superpowers/notes/2026-10-08-phase-9-verification.md internal/version/version.go herdr-plugin.toml
-git commit -m "docs: profiles, history and sharing in README and roadmap; version 0.9.0, still not done (Phase 9)"
+git add README.md docs/superpowers/notes/2026-10-08-phase-9-verification.md internal/version/version.go herdr-plugin.toml cmd/herdr-dots/memwire_test.go
+git commit -m "docs: profiles, history and sharing in the README; version 0.9.0, still not done (Phase 9)"
 ```
 
 ---
@@ -9085,7 +10009,7 @@ git commit -m "docs: profiles, history and sharing in README and roadmap; versio
 
 **1. Spec coverage.**
 - §1 success criteria: 1 (every run kind and resolution recorded, persistent, capped) Tasks 1, 7; 2 (profile screen with 7/30-day stats, memory summary, history, hints) Tasks 8, 11; 3 (export/import round trip, preview, clamps with per-item keeps) Tasks 6, 10, 11; 4 (project dots marked, not attachable until trusted, trust revoked on change) Tasks 2, 5, 9, 11; 5 (no credentials; memory secret-scanned) Task 6 (`Export` scans the dot and memory), Task 4 (`ImportPack` refuses secrets); 6 (at least 7 new templates) Task 3.
-- §3 decisions: S1 Task 1 (path, append-only, lock, 20,000/15,000) with Plan decisions 8, 12; S2 Task 1 (`Stats`, Plan decision 10); S3 Task 8 (`Hints`, table tests); S4 Task 6; S5 Task 2 (`ClampDot`, extended by Plan decision 4) used by Tasks 5, 6, 9, 10, 11; S6 Task 6 (`Fetch`); S7 Tasks 2, 5, 9 (slug format changed, Plan decision 1); S8 Task 5 (key changed, Plan decision 2); S9 Task 6 (`SelectMemory`), Tasks 10, 11; S10 Task 4.
+- §3 decisions: S1 Task 1 (path, append-only, lock, 20,000/15,000) with Plan decisions 8, 12; S2 Task 1 (`Stats`, Plan decision 10); S3 Task 8 (`Hints`, table tests); S4 Task 6; S5 Task 2 (`ClampDot`, extended by Plan decision 4) used by Tasks 5, 6, 9, 10, 11; S6 Task 6 (`Fetch`); S7 Tasks 2, 5, 9 (slug format changed, Plan decision 1); S8 Task 5 (key changed, Plan decision 2); S9 Task 6 (`SelectMemory`), Tasks 10, 11; S10 Task 4 (amended by Plan decision 26: dot-scope imports are proposals too).
 - §4.2 interface table: `dots.Dot.Origin/SourcePath`, `LoadProject`, `Validate` (Task 2); `engine.Deps` (Tasks 7, 9; `LoadProjectDots` replaced by `Trust` + `ResolveRoot`, Plan decision 13); engine history hooks, `ReloadDots` merge, `Attach` refusing untrusted (Tasks 7, 9); `view.LibraryDot` (Tasks 8, 9); `ipc.CmdTrust`/`CmdUntrust` (Task 9, args extended, Plan decision 16); `memory.Store.ImportPack` (Task 4, takes the dot slug); `main.dispatch` `dots` (Task 10); `paths.HistoryDir/TrustFile` (Task 1).
 - §5 data model: history lines (Task 1, card key per Plan decision 8), pack (Task 6), trust file (Task 5, entry keyed per Plan decision 2).
 - §6 data flow: profile (Tasks 8, 11), hints (Task 8), export/import (Tasks 6, 10, 11), project dots 1–5 (Task 9; scanning a fresh pane via `reload_dots {pane_id}`).
@@ -9093,8 +10017,10 @@ git commit -m "docs: profiles, history and sharing in README and roadmap; versio
 - §8.1 errors: corrupt history line skipped and counted (Task 1 test, profile footnote in Task 8); unknown pack format refused (Task 6); URL failures (Task 6); secret in export (Tasks 6, 10, 11); slug collision (Tasks 10, 11). §8.2 safety and §8.3 test table: every row has a test in Tasks 1, 2, 5, 6, 7, 8, 9, 11.
 - §9 V1–V3: Task 1 Step 6 and Task 12 notes (Plan decisions 3, 11, 23). §10 out of scope respected. §11 open decisions: answered by rulings 3 and 17 and Plan decision 23.
 
-**2. Placeholder scan.** No "TBD", "TODO" or "similar to Task N". Task 12's notes have `<…>` slots for numbers and observations the executor records from Task 1's benchmark and Task 11's live check; they are recording steps, not missing design. The Phase 7 and Phase 8 anchors in Task 7 Step 6 come from those phases' drafts written in parallel; the rule next to them says what to do where the merged code differs.
+**2. Placeholder scan.** No "TBD", "TODO" or "similar to Task N". Task 12's notes have `<…>` slots for numbers and observations the executor records from Task 1's benchmark and Task 11's live check; they are recording steps, not missing design. Every Phase 7 and Phase 8 anchor (Task 7 Step 6, Task 9's `background.go` and `ask_council.go` edits) was replayed against the merged code at `c4d3827`; no hedged "if Phase N …" instruction is left.
 
 **3. Type consistency.** `history.Record` fields, `history.CardKey`, `Store.Profile`/`Stats`/`CostShare` are spelled the same in Tasks 1, 7, 8 and 11. `dots.ClampDot(d, keep) (Dot, []Clamp)`, `Requested`, `CheckCapabilities`, `ProjectSlug`, `SplitProjectSlug`, `DisplaySlug`, `DecodeProject(f ProjectFile, projectID string)` match their uses in Tasks 5, 6, 9, 10, 11. `projectdots.ScanProject(root, projectID string, ts *TrustStore) Scan` and `TrustStore.Trust(project, rel, path string, sum [32]byte, caps []string)` match Tasks 9, 10, 11. `engine.trace(paneID string, d dots.Dot, kind, project string)` is the signature `runDot`, `runDraft` and `runBackground` call. `ipc.TrustArgs{PaneID, Slug, SHA256, Capabilities}` is what `Engine.Handle`, `Engine.Trust` and the popup's trust preview use. `memory.Store.ImportPack(p, dot string, entries []memory.Entry)` matches Tasks 6 (tests), 7, 10 and 11.
 
 **4. Review Focus.** Each of the five items names its tests and owning tasks (2, 4, 5, 6, 7, 9, 10, 11). Inputs found while planning got tests too: an inject card resolved before its run line (Task 1), a same-size, same-second edit (Task 5), a symlinked `.herdr-dots` directory (Task 2), a file changed between the trust preview and `y` (Task 9), a pack with a newer capability key (Tasks 2, 6), a malformed config (Task 9), and a popup too short for the preview (Task 11).
+
+**5. Reconcile pass (2026-10-09).** Every task was replayed in wave order on `c4d3827` (Phases 2–8 merged, 0.7.0) with a script that applies each create block and Find/Replace pair verbatim; Task 12 ran on a simulation of Phase 8 Task 16. After each wave: `gofmt -l internal cmd` clean, `go vet ./...` clean, `go test -race ./...` green on darwin, the Linux build, the Windows build and vet, and `GOOS=windows go test -c` for the wave's packages (44 Windows test binaries for `./...` at the end). The Phase 9 engine tests passed with `-race -count=5`; `BenchmarkStats30d` measured 36 ms/op and `BenchmarkCostShareTenDots` 359 ms/op. Plan decisions 24–35 record what changed.
