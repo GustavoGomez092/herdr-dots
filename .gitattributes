@@ -1,0 +1,3 @@
+# Keep LF line endings in every checkout, Windows included: gofmt and the
+# test data compare bytes.
+* text=auto eol=lf

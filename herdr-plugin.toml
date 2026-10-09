@@ -1,13 +1,22 @@
 # Herdr Dots — always-on specialist agents for Herdr. Still a scaffold (0.x), not done.
 id = "herdr-dots"
 name = "Herdr Dots"
-version = "0.5.0"
+version = "0.6.0"
 min_herdr_version = "0.8.0"
 description = "Specialist agents (dots) that join your Claude Code / Codex sessions and review each turn. Scaffold release."
+platforms = ["macos", "linux", "windows"]
+
+# One build step per OS (build steps have no id, so item-level platforms may
+# split them). Actions and panes can't be split: Herdr rejects duplicate ids
+# even across platforms, so they all run ./bin/herdr-dots, which Herdr
+# resolves to bin\herdr-dots.exe on Windows.
+[[build]]
 platforms = ["macos", "linux"]
+command = ["sh", "scripts/build.sh"]
 
 [[build]]
-command = ["sh", "scripts/build.sh"]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/build.ps1"]
 
 [[startup]]
 command = ["./bin/herdr-dots", "engine", "--ensure"]

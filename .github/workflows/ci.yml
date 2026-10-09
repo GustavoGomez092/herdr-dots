@@ -1,0 +1,52 @@
+# Herdr Dots CI: the same checks on macOS, Linux and Windows. Written in
+# Phase 6; it runs once the user pushes the repository (nothing is pushed
+# automatically).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "1" # -race needs cgo; windows-latest ships gcc (MinGW)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race ./...
+      - name: cross-compile
+        if: runner.os == 'Linux'
+        run: |
+          GOOS=windows GOARCH=amd64 go build ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+          GOOS=darwin GOARCH=arm64 go build ./...
+      - name: build the plugin (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1
+          if (-not (Test-Path bin/herdr-dots.exe)) { throw "bin/herdr-dots.exe missing" }
+          ./bin/herdr-dots.exe version
+      - name: build the plugin (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          sh scripts/build.sh
+          ./bin/herdr-dots version
