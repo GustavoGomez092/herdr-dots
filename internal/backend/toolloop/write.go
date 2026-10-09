@@ -90,30 +90,11 @@ type writer struct {
 // the path allowed by the deny-list both relative to the root and, when the
 // root sits below the home directory, relative to home.
 func resolveForWrite(root, p string, deny []string) (rr, abs, rel string, err error) {
-	if strings.ContainsRune(p, 0) {
-		return "", "", "", errors.New("invalid path")
-	}
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return "", "", "", errors.New("path is required")
-	}
-	absRoot, err := filepath.Abs(root)
+	rr, _, rel, err = jailEntry(root, p)
 	if err != nil {
 		return "", "", "", err
 	}
-	rr, err = filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return "", "", "", fmt.Errorf("project root: %w", err)
-	}
-	joined := filepath.Join(rr, p)
-	if filepath.IsAbs(p) {
-		joined = filepath.Clean(p)
-		if r, ok := within(absRoot, joined); ok {
-			joined = filepath.Join(rr, r)
-		}
-	}
-	rel, ok := within(rr, joined)
-	if !ok || rel == "." {
+	if rel == "." {
 		return "", "", "", ErrOutsideRoot
 	}
 	if err := worktree.CheckPath(rel); err != nil {
