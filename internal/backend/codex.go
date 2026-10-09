@@ -66,14 +66,17 @@ func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
 	if ctx.Err() != nil {
 		return Result{}, fmt.Errorf("codex timed out: %w", ctx.Err())
 	}
-	res, perr := ParseCodexOutput(out)
+	res, perr := parseCodex(out, r.Pass)
 	if err != nil && perr != nil {
 		return Result{}, fmt.Errorf("codex failed: %s", Hint(c.Kind(), string(stderr)+"\n"+string(out)))
 	}
 	return res, perr
 }
 
-func ParseCodexOutput(out []byte) (Result, error) {
+// ParseCodexOutput parses a review run's `codex exec --json` event stream.
+func ParseCodexOutput(out []byte) (Result, error) { return parseCodex(out, PassReview) }
+
+func parseCodex(out []byte, pass string) (Result, error) {
 	var res Result
 	var last, failure string
 	sc := bufio.NewScanner(bytes.NewReader(out))
@@ -118,7 +121,5 @@ func ParseCodexOutput(out []byte) (Result, error) {
 		return res, errors.New("codex produced no agent message")
 	}
 	res.Raw = last
-	v, err := ParseVerdict(last)
-	res.Verdict = v
-	return res, err
+	return finishResult(res, last, pass)
 }
