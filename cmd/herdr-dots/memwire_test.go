@@ -57,8 +57,8 @@ func TestBuildEngineWiresMemory(t *testing.T) {
 	}
 }
 
-func TestVersionIsPhaseTwo(t *testing.T) {
-	if version.Version != "0.2.0" {
-		t.Fatalf("version %s, want 0.2.0", version.Version)
+func TestVersionIsPhaseThree(t *testing.T) {
+	if version.Version != "0.3.0" {
+		t.Fatalf("version %s, want 0.3.0", version.Version)
 	}
 }

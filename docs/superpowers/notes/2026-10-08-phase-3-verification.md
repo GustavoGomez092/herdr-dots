@@ -37,3 +37,15 @@ Assumption holds: yes (with the paste-wrapper caveat above)
 Command: `go test -tags live ./internal/council/ -run LiveCouncilWallClock -v -timeout 20m`
 Evidence: `V4 summary: members 7s, chair 5s (err=<nil>), total 12s` (members 3–4 s each at 3 parallel).
 That is far under `2 × run_timeout_seconds` (240 s by default). Informational, no gate; `max_parallel_runs` stays (spec O5 (a)).
+
+## E2E (Task 8)
+Setup: isolated session `dots-test` (server started with every `CLAUDE*` variable unset; the session restored older workspaces, ignored), fresh workspace on `/tmp/dots-test-repo`, `claude --model haiku` started in the repo pane by sending the command text to the pane, prompt "store the login token in localStorage in auth.ts" through `herdr agent prompt --wait --timeout`. Engine run by hand with a temporary config/state dir and three haiku dots (`security`, `frontend` in queue mode, `copy` in observe mode; `turns = 3`, `repo_read = false`). Driven with a throwaway IPC client (not committed). Version 0.3.0. Visual pane layout was not checked by eye (not automatable here); the checks below use the snapshot JSON, the card and the feed.
+
+1. Preflight: PASS. `members: [security, frontend, copy]` (observe dot included), `rounds: 1`, `chair: true`, `estimated_calls: 4`, `allowed: true`, `pane_left: 120`.
+2. Progress and card: PASS, with a gap. `show` reported `"council": {"phase": "members", "done": 1, "total": 3, "round": 1}`; the `merging` phase was too short to catch by polling. Afterwards `council` was null and one card existed with `"kind": "council"`, `"mode": "queue"`, `"status": "pending"`, `"severity": "critical"`, three parts (security warn, frontend critical, copy with no body = passed), and a chair digest with `## Must fix` and `## Should fix` sections and attributed bullets `(Frontend)`, `(Security)`. No `note` field, so the chair merge was used.
+3. Calls and feed: PASS. Pane calls went from 2 (two ordinary turn reviews that ran when the dots attached) to 6 (+4: 3 members and the chair). The feed has a `council` line: "3 of 3 members answered; critical".
+4. Send and loop guard: PASS. After `send`, the Claude transcript has exactly one user record, `"\n\n<pasted_content id=\"…\">\n[⊕ Council dot] ## Must fix…"` (paste wrapper, as in V3), and Claude answered. For 80 s after the turn, calls stayed at 6 and the feed had no new lines, so no dot reviewed the council-started turn.
+5. Second council while one runs: PASS. `council-e2e: council already running`.
+6. Pane closed mid-council: PASS. After `pane close`, `engine.log` said `pane w5:p1 closed: 2 card(s) orphaned`, `council` was null, pane calls were reset to 0 and no council card appeared. Concern: the cancelled member runs were logged to the feed as `error` lines with detail "claude timed out: context canceled" (one per dot), although the pane was already gone; cosmetic wording for a cancelled run.
+
+Cleanup: engine killed, `dots-test` server stopped, throwaway driver and temp dirs removed, the global Claude settings file unchanged (diff against a snapshot taken before the run was empty).
