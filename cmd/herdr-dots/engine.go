@@ -162,7 +162,7 @@ func serveEngine(p paths.Paths) error {
 
 	cfg, err := config.Load(p.ConfigFile())
 	if err != nil {
-		logger.Printf("config: %v (using defaults with inject disabled)", err)
+		logger.Printf("config: %v (using defaults with inject and memory disabled)", err)
 	}
 	hc, err := herdr.NewFromEnv()
 	if err != nil {

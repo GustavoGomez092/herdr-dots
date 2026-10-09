@@ -26,8 +26,8 @@ func configStamp(path string) string {
 }
 
 // ReloadConfig re-reads config.toml. On an unreadable or malformed file it
-// keeps the last good settings but forces InjectEnabled off (the kill switch
-// fails closed) and logs the error.
+// keeps the last good settings but forces InjectEnabled and MemoryEnabled off
+// (the kill switches fail closed) and logs the error.
 func (e *Engine) ReloadConfig() {
 	if e.d.ConfigPath == "" {
 		return
@@ -38,8 +38,8 @@ func (e *Engine) ReloadConfig() {
 	c, err := config.Load(e.d.ConfigPath)
 	if err != nil {
 		c = e.config()
-		c.InjectEnabled = false
-		e.d.Logf("config: %v (keeping the last good settings; inject disabled until it is fixed)", err)
+		c.InjectEnabled, c.MemoryEnabled = false, false
+		e.d.Logf("config: %v (keeping the last good settings; inject and memory disabled until it is fixed)", err)
 	}
 	e.cfg.Store(&c)
 	e.broadcast()

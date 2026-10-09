@@ -44,8 +44,8 @@ func Default() Config {
 
 // Load returns Default() when the file is missing. Keys present in the file
 // override defaults; absent keys keep them. An unreadable or malformed file
-// yields Default() with InjectEnabled=false (the kill switch fails closed)
-// plus an error so the caller can log it and keep running.
+// yields Default() with InjectEnabled=false and MemoryEnabled=false (the kill
+// switches fail closed) plus an error so the caller can log it and keep running.
 func Load(path string) (Config, error) {
 	c := Default()
 	data, err := os.ReadFile(path)
@@ -53,12 +53,12 @@ func Load(path string) (Config, error) {
 		return c, nil
 	}
 	if err != nil {
-		c.InjectEnabled = false
+		c.InjectEnabled, c.MemoryEnabled = false, false
 		return c, err
 	}
 	if _, err := toml.Decode(string(data), &c); err != nil {
 		c = Default()
-		c.InjectEnabled = false
+		c.InjectEnabled, c.MemoryEnabled = false, false
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.MaxParallelRuns < 1 {
