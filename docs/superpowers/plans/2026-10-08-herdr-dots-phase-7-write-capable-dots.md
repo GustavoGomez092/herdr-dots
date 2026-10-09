@@ -10,13 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-08-herdr-dots-phase-7-write-capable-dots-design.md`, approved with the amendments in `docs/superpowers/decisions/2026-10-08-phase-decisions.md` (binding here: ruling 5, write-capable dots get **no shell** and edits are reviewed as patches; ruling 15, apply to the **working tree only, never stage or commit**; ruling 4, Windows is Phase 6, so this phase is written cross-platform with Phase 6's helpers). This plan replaces the outline `docs/superpowers/plans/drafts/2026-10-08-herdr-dots-phase-7-write-capable-dots-outline.md`. Task 0 implements the Phase 2 final review's open item ("Delete a dot's memory in all projects" must scrub ledger excerpts and orphaned project proposals; Phase 2 spec §8.2 "Forgetting is real").
 
-**Preconditions (check in Task 1, Step 1; stop and report if any fails).** Phases 3, 4, 5 and 6 are planned, not all built, when this plan is written. The code below is written against real code where it exists (v1, Phase 2, Phase 3 Tasks 1–3 and 5) and against these Interfaces blocks of the unbuilt plans:
+**Preconditions (check in Task 1, Step 1; stop and report if any fails).** Reconciled on 2026-10-09 against `feat/dots-v1` at `7dd7d94` (Phases 2–6 merged, 0.6.0): every precondition below holds there, and every code block in this plan was replayed task by task, in wave order, on a scratch worktree of that commit (see "Conventions for code steps"). The Phase 6 final review/fix may still touch `internal/platform`, `fsutil`, `credentials`, `toolloop`, `ipc` and `backend`; re-run Step 1 on the actual base.
 - Phases 3–6 merged; `internal/version/version.go` says `0.6.0`.
-- Phase 6 `internal/platform` (Tasks 2–3): `const DevNull`, `func HideWindow(cmd *exec.Cmd)`, `func EnvKey(name string) string`, `func ReservedPathName(rel string) bool`; Phase 6 Task 5 `style.Sym(s string) string`; Phase 6 Task 10's portability guard `TestProductCodeHasNoUnixOnlyCalls` (this phase's product code must pass it).
-- Phase 4 Task 7 `internal/backend/toolloop`: `Tool`, `Limits`, `DefaultLimits`, `WithDeny`, `RepoTools`, `SystemNote`, `Denied`, `ErrDenied`, `ErrOutsideRoot`, unexported `within` and `obj`; the four adapters (`internal/backend/anthropicapi/anthropic.go`, `openaiapi/openai.go`, `openrouter/openrouter.go`, `ollama/ollama.go`) each contain the `var tools []toolloop.Tool` / `toolloop.RepoTools(r.Cwd, lim)` / `toolloop.SystemNote` block Task 6 replaces.
-- Phase 4 Task 14 (engine): unexported `requestFor(d dots.Dot, cwd string) backend.Request`, `deltaOf(res backend.Result) state.Delta`, `func OverUSD(cost, budget float64) bool`; `(*state.Usage) Add(paneID, slug string, d state.Delta) error`, `Cost(paneID, slug string) float64`, `PaneCost(paneID string) float64`; `dots.BudgetSpec.MaxUSDPerSession float64`; `config.Config.SessionBudgetUSD float64`.
+- Phase 6 `internal/platform`: `const DevNull`, `func HideWindow(cmd *exec.Cmd)`, `func EnvKey(name string) string`, `func ReservedPathName(rel string) bool` (per OS: false on Unix), `func CommandContext(ctx context.Context, name string, args []string) (*exec.Cmd, error)`, `func SecureDir(path string) error`; `platformtest.AssertPrivateFile`/`AssertPrivateDir`; Phase 6 `style.Sym(s string) string`; Phase 6's portability guard `TestProductCodeHasNoUnixOnlyCalls` (this phase's product code must pass it); `fsutil.WriteFileAtomic` (private before the first write).
+- Phase 4 `internal/backend/toolloop` (with Phase 6's ports): `Tool`, `Limits`, `DefaultLimits`, `WithDeny`, `RepoTools`, `SystemNote`, `NoToolsNote`, `Note`, `Unavailable`, `Denied` (Unicode case-folded), `ErrDenied`, `ErrOutsideRoot`, unexported `within`, `obj`, `newResolver`, `(*resolver).exact`, `(*resolver).homeRel`; the four adapters (`internal/backend/anthropicapi/anthropic.go`, `openaiapi/openai.go`, `openrouter/openrouter.go`, `ollama/ollama.go`) each contain the `var tools []toolloop.Tool` / `toolloop.RepoTools(r.Cwd, lim)` / `toolloop.Note(...)` block Task 6 replaces.
+- Phase 4 Task 14 (engine): unexported `requestFor(d dots.Dot, cwd string) backend.Request`, `deltaOf(res backend.Result) state.Delta`, `func OverUSD(cost, budget float64) bool`, `redactErr(err error) error`; Phase 5 `(*Engine) charge(paneID, slug string, d state.Delta)`, `ErrBudget`, `ErrPaneClosed`, `e.asking`; `(*state.Usage) Add(paneID, slug string, d state.Delta) error`, `Calls`, `PaneCalls`, `Cost(paneID, slug string) float64`, `PaneCost(paneID string) float64`; `dots.BudgetSpec.MaxUSDPerSession float64`; `config.Config.SessionBudgetUSD float64`.
 - Phase 5 Task 2: `var ipc.QueryCmds []string` (the only commands the MCP server may send).
-- Phase 3: `queue.Card.Kind`, `queue.KindCouncil`, `view.Pane.Council` (built); Phase 3 Task 6/7 (engine council, `cmd/herdr-dots/council.go`, `pane.WithOpener` wiring) may or may not be merged; nothing here depends on them.
+- Phase 3: `queue.Card.Kind`, `queue.KindCouncil`, `view.Pane.Council`, engine `Council`, `cmd/herdr-dots/council.go`, `pane.WithOpener(paneOpener)` in `runPane` (all merged; Task 9 keeps the `WithOpener` chain).
 - `GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local go vet ./...` passes on the base, and `git --version` is ≥ 2.31.
 
 ## Global Constraints
@@ -33,11 +33,11 @@ Phase 7 constraints:
 - **Model text is sanitized** (`textutil.SanitizeModelText`) before display, storage or delivery: patch summaries, instructions, and every diff line the viewer renders.
 - **Engine lock order:** paneLock → `e.mu` → stores, and `e.dmu` → `e.mu`/stores. No git, patch-file or network I/O under `e.mu` or `e.dmu`; background work goes through `e.spawn` (drained by `Engine.Wait`).
 - **UI rule:** never act on an unseen selection. The draft confirm is bound to the card id and dot slugs captured when it opened and shows the full instruction; gate 2 happens only in the diff viewer, with the diff on screen; the viewer re-checks the patch file's SHA-256 before showing it, and the engine re-checks it before applying.
-- Platforms: macOS, Linux, Windows (Phase 6 matrix). No `runtime.GOOS` in product code; `platform.DevNull`, `platform.HideWindow`, `platform.EnvKey`, `platform.ReservedPathName`, `style.Sym`. Windows behavior is compiled and unit-tested here, run-verified only by the user (release-gate amendment).
+- Platforms: macOS, Linux, Windows (Phase 6 matrix). No `runtime.GOOS` in product code; `platform.DevNull`, `platform.HideWindow`, `platform.EnvKey`, `platform.ReservedPathName`, `platform.CommandContext` (every git command; never raw `exec` for git), `platform.SecureDir` (private temp and worktree directories), `fsutil.WriteFileAtomic`, `style.Sym`. Windows behavior is compiled and unit-tested here, run-verified only by the user (release-gate amendment).
 - **Live-step safety:** use only `herdr --session dots-test`; never `herdr plugin link` (it is global); never type Claude slash commands (such as `/model`) into panes; snapshot `~/.claude/settings.json` before and diff it after every live run; never touch `~/.config/herdr/config.toml` (read only) or the user's sessions.
 - Codex is not installed on this machine: Codex paths stay "documented-format, not live-verified".
 - **No outward-facing actions:** no push, remote tag, publish, license or rename.
-- Every task's verification runs, from the repo root: `gofmt -l .` (prints nothing), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...`, `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...`, and `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c` for the packages it touches.
+- Every task's verification runs, from the repo root: `gofmt -l internal cmd` (prints nothing; not `gofmt -l .`, which would walk other worktrees under `.claude/`), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...`, `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...`, and `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c` for the packages it touches.
 
 All earlier Global Constraints still apply (v1 through Phase 6): plugin id `herdr-dots`; module `herdr-dots`; every child environment is stripped of `HERDR_*`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_CHILD_SESSION`; the claude backend always passes `--settings` with `{"disableAllHooks":true}`, `--no-session-persistence` and `--strict-mcp-config`, never `--bare`; state files `0600`, directories `0700`, atomic writes (`fsutil.WriteFileAtomic`); default delivery mode `queue`; keys never reach logs, the feed, snapshots, IPC, memory, argv or error strings.
 
@@ -71,6 +71,16 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 24. **git version.** `git` ≥ 2.31 is documented (`--path-format`); verified on Apple Git 2.50.1 and 2.52.0. Ubuntu LTS and Git for Windows run in the Phase 6 CI matrix (a user gate: CI is written, never pushed).
 25. **Windows.** Product code uses only Phase 6 helpers and passes the portability guard. Tests skip where a platform can't express the case (symlinks unavailable or checked out as plain files, no exec bit, no POSIX shell). A timed-out git command is killed with `exec.CommandContext` (its own children, such as an LFS filter, are not in a Job Object): recorded as a risk.
 26. **Version** `0.7.0` in `internal/version/version.go` and `herdr-plugin.toml`, with the version pin test moved to `TestVersionIsPhaseSeven`.
+27. **(reconciled) git through `platform.CommandContext`.** `worktree.Git` starts every git command with Phase 6's `platform.CommandContext` (the portability guard bans raw `exec` for git): on Windows git is resolved on `PATH`, never a repo-local `git.exe` in the cwd, and a `.cmd` shim runs through Phase 6's checked command line. Unix behavior is unchanged (`exec.CommandContext`).
+28. **(reconciled) Private temp and worktree directories.** The snapshot's and the apply's private-index directories (`os.MkdirTemp`) and the parent of every draft worktree get `platform.SecureDir` (0700 on Unix; an owner-only DACL on Windows, which `MkdirTemp` alone doesn't give), so the index copy and the checked-out code stay the user's. Patch and metadata files use `fsutil.WriteFileAtomic(…, 0o600)`, private before the first byte. `TestRemoveAndPruneLeaveNoWorktreesBehind` asserts the parent is private (`platformtest.AssertPrivateDir`).
+29. **(reconciled) Windows-reserved names are per OS.** Phase 6's `platform.ReservedPathName` is false on Unix, so `CheckPath`, `Validate` and the write tools refuse `con.txt`, `a.txt:stream` or `name.` on Windows only; on Unix those are ordinary files a project may contain. The tests assert "refused exactly when `platform.ReservedPathName` says so" (they were written against an always-on stand-in); `a:b` (a drive-like path) is refused everywhere.
+30. **(reconciled) The write tools use the read tools' jail.** `WriteTools` and `Select` reuse Phase 4/6's jail instead of a looser copy: an `Unavailable` root (a file system root, the home directory or an ancestor) gets no tools and `Select` returns Phase 4's `NoToolsNote` (`Note`'s rule); every existing path component and an existing target must have its exact on-disk spelling (`resolver.exact`, so a case or Unicode variant can't reach another file on APFS or NTFS); the deny-list is the case-folded `Denied` plus the home-anchored globs (`resolver.homeRel`); NUL bytes are refused. Tests: `TestWriteToolsUseTheReadJail`, the folded names in `TestWriteToolsRefuseGitSecretsAndEscapes`, the `Unavailable` roots in `TestSelectOffersWriteToolsOnlyToDrafts`. Phase 6's `symlinkOrSkip` replaces the planned `writeLinkOrSkip`.
+31. **(reconciled) Adapters.** Task 6's adapter edit is a concrete diff against the merged Phase 4 code (the planned find-and-replace blocks matched only the Phase 4 plan): `toolloop.Select` replaces `RepoTools` + `Note`, OpenRouter's `wantTools` goes, and Ollama's `FitPrompt` counts a draft's write-tool schemas while `noteFor` returns `WriteNote` for a draft with tools.
+32. **(reconciled) Draft accounting and closed panes.** A draft's usage goes through Phase 5's `charge` (never charged to a pane that closed meanwhile). The budget check (`draftBudgetLocked`, under `e.mu`, once up front and again when the draft is reserved) counts asks and drafts in flight on the pane as calls already made, as `askBlockedLocked` does, and refuses with Phase 5's `ErrBudget`. A draft that ends after its pane closed makes no card (`ErrPaneClosed`; patch, metadata and ref deleted). Failure and rejection text is redacted (`redactErr`) and sanitized before the log, the feed and a toast. Test: `TestDraftIsRefusedWhenTheBudgetIsSpent`.
+33. **(reconciled) MCP asks, councils and summons of a write-capable dot never write.** `Ask`, `AskCouncil`, `Summon` and `Council` go through `runDot`/`requestFor`, which never set `Write` or `PassWrite`; councils never draft (spec §10: no council patch). Beyond the source check, `TestAsksCouncilsAndSummonsOfAWriteDotNeverWrite` runs all four on write-capable dots and asserts no request asked for write tools or ran in a worktree, no snapshot ref appeared and the files are unchanged.
+34. **(reconciled) `DeleteDot` and Phase 5 proposals.** The main agent's proposals (`Store.Propose`: no dot, source `agent`) are not the deleted dot's and stay, like the developer's entries; Phase 5's cap and `enforceCap` order are untouched. The Task 0 test pins it.
+35. **(reconciled) Gates and docs.** Gates use `gofmt -l internal cmd` (Phase 6 precedent). The version pin is Phase 6's `TestVersionIsPhaseSix` in `cmd/herdr-dots/memwire_test.go`. README anchors match the real README: the section is `### Write-capable dots (drafts)` at the end of `## Using it`, the gaps go under `## Known gaps in this scaffold`, the roadmap's `7–10` (or `6–10`) row is split, and the existing "Forgetting is real" bullet is extended instead of duplicated; the wording check filters the roadmap's existing Phase 10 "feature complete" lines.
+36. **(reconciled) Live steps.** Task 1 Step 2 (V1 re-run on a new Claude Code version) and the notes' user gates stay as written and run only under the live-step safety rules (`herdr --session dots-test`, a throwaway directory outside the temp dir, `~/.claude/settings.json` snapshotted before and diffed after, no slash commands, no `herdr plugin link`). The reconcile replay ran none of them.
 
 ## Confirmed while planning (2026-10-08)
 
@@ -89,7 +99,7 @@ The five inputs the spec implies but its test list doesn't exercise, most likely
 1. **The user has staged changes (including a staged file edited again) when a draft starts and when it is applied.** Expect `.git/index` byte-identical after the snapshot and after the apply, staged files still staged, and the patch's new files untracked. Tests: `TestSnapshotCapturesTheWorkingTreeAndLeavesTheUserStateAlone` (Task 2), `TestApplyTouchesOnlyTheWorkingTree` (Task 3), `TestDraftHappyPathMakesAPatchCard`, `TestApplyPatchWaitsForAnIdleAgentAndTouchesOnlyTheWorkingTree` (Task 8).
 2. **The agent kept editing while the dot drafted, or created a file where the patch adds one, or deleted a file the patch edits.** Expect a three-way merge, or conflict markers with the files listed on the card, never a silent overwrite, and nothing applied at all on a hard failure. Tests: `TestApplyMergesWhenTheWorkingTreeMoved`, `TestApplyReportsConflictsWithoutStaging`, `TestApplyNeverSilentlyOverwritesAFileTheUserCreated`, `TestApplyIsAllOrNothingOnAHardFailure` (Task 3), `TestApplyPatchReportsConflictsAndRefusesAnotherRepository` (Task 8).
 3. **The pane moved to another repository, or another worktree of the same one, between draft and apply.** Expect the apply refused, naming both paths. Test: `TestApplyPatchReportsConflictsAndRefusesAnotherRepository` (Task 8).
-4. **A dot writes through an absolute path, `../`, or a symlink inside the worktree pointing at `~/.bashrc`.** Expect the real file untouched and the write denied, the link restored, or the patch rejected. Tests: `TestNoClaudeRunEverBypassesPermissions` (Task 5, with live V1), `TestWriteToolsNeverWriteThroughSymlinks`, `TestWriteToolsRefuseGitSecretsAndEscapes` (Task 6), `TestAddChecksOutTheSnapshotAndDefangsEscapingSymlinks` (Task 2), `TestWritingThroughAnEscapingSymlinkNeverReachesOutside`, `TestANewSymlinkPointingOutsideIsRejected` (Task 3).
+4. **A dot writes through an absolute path, `../`, or a symlink inside the worktree pointing at `~/.bashrc`.** Expect the real file untouched and the write denied, the link restored, or the patch rejected. Tests: `TestNoClaudeRunEverBypassesPermissions` (Task 5, with live V1), `TestWriteToolsNeverWriteThroughSymlinks`, `TestWriteToolsRefuseGitSecretsAndEscapes`, `TestWriteToolsUseTheReadJail` (Task 6), `TestAddChecksOutTheSnapshotAndDefangsEscapingSymlinks` (Task 2), `TestWritingThroughAnEscapingSymlinkNeverReachesOutside`, `TestANewSymlinkPointingOutsideIsRejected` (Task 3).
 5. **The engine stops mid-draft (crash, Herdr closed).** Expect the next engine start to delete the worktree, git's worktree metadata, the snapshot ref and the record, and no card. Tests: `TestEngineStartCleansUpAnInterruptedDraft` (Task 8), `TestRemoveAndPruneLeaveNoWorktreesBehind` (Task 2).
 
 Found while planning and also pinned: a patch file swapped between review and apply (`TestPutPatchRoundTripsAndVerifiesTheFile`, Task 4; `TestDiffModelVerifiesThePatchItShows`, Task 9); terminal escape sequences inside a diff (`TestControlCharactersNeverReachTheTerminal`, Task 9); hooks and fsmonitor programs (`TestHooksNeverRunDuringSnapshotCheckoutAndRemove`, `TestAnFsmonitorProgramNeverRuns`, Task 2; `TestHooksNeverRunDuringCaptureAndApply`, Task 3); a codex dot arg moving the working root (`-C /`, Task 5).
@@ -98,7 +108,7 @@ Found while planning and also pinned: a patch file swapped between review and ap
 
 ## Parallel execution: dependencies and waves
 
-Each task runs in its own git worktree branched from the wave's base (the base branch with Phases 3–6 merged, plus every earlier wave). Merge every task of a wave, in task order, before starting the next wave. Tasks in the same wave never touch the same file.
+Each task runs in its own git worktree branched from the wave's base (`feat/dots-v1` with Phases 2–6 merged, at `7dd7d94` or later, plus every earlier wave). Merge every task of a wave, in task order, before starting the next wave. Tasks in the same wave never touch the same file.
 
 | Task | Title | Depends on | Wave |
 |---|---|---|---|
@@ -129,13 +139,13 @@ Each task runs in its own git worktree branched from the wave's base (the base b
 - Task 10: `internal/ui/pane/model.go`, `patch.go`, `patch_test.go`.
 - Task 8: `internal/engine/engine.go`, `handle.go`, `deliver.go`, `draft.go`, `draft_maint.go`, `draft_test.go`; `cmd/herdr-dots/engine.go`.
 - Task 9: `internal/ui/diff/model.go`, `model_test.go`; `cmd/herdr-dots/diffui.go`, `diffui_test.go`, `main.go`, `ui.go`; `herdr-plugin.toml` (the `diff` pane only).
-- Task 11: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, the Task 1 notes file (wrap-up), `internal/version/version.go`, `herdr-plugin.toml` (version line), the version pin test in `cmd/herdr-dots` (whichever file holds `TestVersionIsPhase*`, else a new `cmd/herdr-dots/version_test.go`).
+- Task 11: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, the Task 1 notes file (wrap-up), `internal/version/version.go`, `herdr-plugin.toml` (version line), `cmd/herdr-dots/memwire_test.go` (the version pin).
 
-**Test-name hygiene:** helpers added here: Task 0 none; Task 2 (`worktree`, new package) `testEnv`, `isoGit`, `sh`, `writeFile`, `readFile`, `newRepo`, `symlinkOrSkip`, `installMarkerHooks`, `snapshotT`, `checkoutT`, `userState`, `stateOf`; Task 3 `draftT`; Task 4 (`patchstore`, new) `testStore`, `id1`, `id2`; Task 5 (`backend`) `writeReq`; Task 6 (`toolloop`) `draftRoot`, `writeLinkOrSkip`, `runWrite`, `adapterSource`; Task 7 (`queue`) `patchCard`; Task 8 (`engine`) `drafter`, `gitTestEnv`, `gitT`, `writeT`, `draftRepo`, `fixJWT`, `writeDot`, `draftOpts`, `draftRig`, `newDraftRig`, and `draftRig` methods `patchCard`, `draftsDone`, `refs`, `feedHasDraft`; Task 9 (`diff`, new) `samplePatch`, `recCaller`, `keyOf`, `send`, `sampleMeta`, `viewer`; Task 10 (`pane`) `patchSnap`, `viewerCall`, `patchReady`. Production helpers in shared packages: `engine` `draftRun`, `runDraft`, `draftBudget`, `setDraftPhase`, `patchCard` (method), `forDelivery`, `patchSent`, `patchMessage`, `draftViews`, `sameRepo`, `fileWord`, `draftLoop`, `maintainDrafts`; `pane` `draftForm`, `clockNow`, `libraryDot`, `writeDots`, `newDraftEditor`, `openDraft`, `editDraft`, `updateDraft`, `draftTools`, `timeoutText`, `draftView`, `patchKeys`, `tickIfDrafting`, `draftProgress`, `cardLabel`, `patchTags`, `patchDetail`, `patchHint`; `toolloop` `writer`, `resolveForWrite`, `saveFile`. None collides with v1–Phase 6 names listed in their plans (`fakeBackend`, `rig`, `newRigWith`, `dot`, `pane`, `memRig`, `councilRig`, `feedHas`, `costRig`, `apiDot`, `mcpAsk`, `repoDir`, `run`, `gitInit`, `symlinkOrSkip` (package `toolloop`, Phase 6), `fakeCaller`, `key`, `press`, `snap`, `ready`, `queueCard`, …). Before adding a helper, run `grep -rn "func <name>\b" <package dir>`; if an earlier phase already defines it, add the suffix `P7`.
+**Test-name hygiene:** helpers added here: Task 0 none; Task 2 (`worktree`, new package) `testEnv`, `isoGit`, `sh`, `writeFile`, `readFile`, `newRepo`, `symlinkOrSkip`, `installMarkerHooks`, `snapshotT`, `checkoutT`, `userState`, `stateOf`; Task 3 `draftT`; Task 4 (`patchstore`, new) `testStore`, `id1`, `id2`; Task 5 (`backend`) `writeReq`; Task 6 (`toolloop`) `draftRoot`, `runWrite`, `adapterSource` (and Phase 6's `symlinkOrSkip`, `setHome`, `mustWrite`); Task 7 (`queue`) `patchCard`; Task 8 (`engine`) `drafter`, `gitTestEnv`, `gitT`, `writeT`, `draftRepo`, `fixJWT`, `writeDot`, `draftOpts`, `draftRig`, `newDraftRig`, and `draftRig` methods `patchCard`, `draftsDone`, `reviewsDone`, `refs`, `feedHasDraft`; Task 9 (`diff`, new) `samplePatch`, `recCaller`, `keyOf`, `send`, `sampleMeta`, `viewer`; Task 10 (`pane`) `patchSnap`, `viewerCall`, `patchReady`. Production helpers in shared packages: `engine` `draftRun`, `runDraft`, `draftBudgetLocked`, `setDraftPhase`, `patchCard` (method), `forDelivery`, `patchSent`, `patchMessage`, `draftViews`, `sameRepo`, `fileWord`, `draftLoop`, `maintainDrafts`; `pane` `draftForm`, `clockNow`, `libraryDot`, `writeDots`, `newDraftEditor`, `openDraft`, `editDraft`, `updateDraft`, `draftTools`, `timeoutText`, `draftView`, `patchKeys`, `tickIfDrafting`, `draftProgress`, `cardLabel`, `patchTags`, `patchDetail`, `patchHint`; `toolloop` `writer`, `resolveForWrite`, `saveFile`. None collides with v1–Phase 6 names listed in their plans (`fakeBackend`, `rig`, `newRigWith`, `dot`, `pane`, `memRig`, `councilRig`, `feedHas`, `costRig`, `apiDot`, `mcpAsk`, `repoDir`, `run`, `gitInit`, `symlinkOrSkip` (package `toolloop`, Phase 6), `fakeCaller`, `key`, `press`, `snap`, `ready`, `queueCard`, …). Before adding a helper, run `grep -rn "func <name>\b" <package dir>`; if an earlier phase already defines it, add the suffix `P7`.
 
 ### Shared files with Phases 2–6
 
-Phases 3–6 merge before Phase 7, so these files already carry their changes. Diffs below are against the code at planning time (v1 + Phase 2 + Phase 3 Tasks 1–3 and 5); where a hunk doesn't apply because a later phase moved a line, make the same edit by hand: every hunk shows the exact lines to remove and add.
+Phases 3–6 merge before Phase 7, so these files already carry their changes. Every diff below is `git diff` output against `feat/dots-v1` at `7dd7d94` (Phases 2–6 merged, 0.6.0), replayed in wave order (reconciled 2026-10-09). If the Phase 6 final fix moves a line, make the same edit by hand: every hunk shows the exact lines to remove and add.
 
 | File | Phase 3 | Phase 4 | Phase 5 | Phase 6 | Phase 7 task |
 |---|---|---|---|---|---|
@@ -196,12 +206,12 @@ internal/version/version.go          (mod)  0.7.0
 README.md, roadmap, notes            (mod/new) write-capable dots, safety model, still not done
 ```
 
-**Conventions for code steps.** New files are given in full. Changes to existing files are unified diffs: save the block to a file (for example `/tmp/p7-task.patch`) and run `git apply /tmp/p7-task.patch` from the repo root. If a hunk doesn't apply because a neighboring line changed in Phases 3–6, make the same edit by hand (every hunk shows the exact lines), then run `gofmt -w` on the touched files. Every code block that touches real code was compiled while planning in a scratch worktree of v1 + Phase 2 + Phase 3 (partial), with small stand-ins for the Phase 4–6 symbols listed in the Preconditions (`platform.DevNull`/`HideWindow`/`EnvKey`/`ReservedPathName`, `style.Sym`, `requestFor`, `deltaOf`, `OverUSD`, `state.Delta`/`Usage.Add`/`Cost`/`PaneCost`, `BudgetSpec.MaxUSDPerSession`, `Config.SessionBudgetUSD`, `ipc.QueryCmds`) and with Phase 4's `toolloop/jail.go` and `tools.go` taken from the Phase 4 plan; its tests ran green with `go test -race` (Go 1.25.7, git 2.52.0 and Apple Git 2.50.1). Not compiled: the four adapter edits and `adapters_test.go` (Task 6; the adapters exist only in the Phase 4 plan), and the README.
+**Conventions for code steps.** New files are given in full. Changes to existing files are unified diffs: save the block to a file (for example `/tmp/p7-task.patch`) and run `git apply /tmp/p7-task.patch` from the repo root. If a hunk doesn't apply because a neighboring line changed in Phases 3–6, make the same edit by hand (every hunk shows the exact lines), then run `gofmt -w` on the touched files. Every code block was first compiled while planning against v1 + Phase 2 + part of Phase 3 with stand-ins for Phases 4–6, then **reconciled on 2026-10-09**: replayed task by task, in wave order (W1 → W4), on a scratch worktree of `feat/dots-v1` at `7dd7d94` (Phases 2–6 merged), applying each block as written and fixing the plan wherever the merged code differed (Plan decisions 27–36). After each wave: `go vet ./...`, `go test -race ./...` (darwin, Go 1.25.7, git 2.52.0; the `internal/worktree` tests also with Apple Git 2.50.1), `GOOS=linux go build ./... && go vet ./...`, `GOOS=windows go build ./... && go vet ./...` and `GOOS=windows go test -c` for the wave's packages, all green, and `gofmt -l internal cmd` clean. The four adapter edits and `adapters_test.go` now compile and pass against the real Phase 4 adapters. The README steps were applied to the real README and their greps checked. Live steps were not run.
 
 **The cross-OS gate** (each task's verification step spells it out with that task's packages):
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -226,7 +236,7 @@ The Phase 2 final review left one item open: the manage popup's "Also delete its
 - Test: `internal/memory/deletedot_test.go` (new), `internal/memory/store_test.go` (one assertion), `internal/ui/manage/memory_test.go` (one test)
 
 **Interfaces:**
-- Consumes: Phase 2's `Store.withLock`, `readLedgerLocked`, `writeLedgerLocked`, `readScope`, `mutateLocked`, `scopePath`, `ValidSlug`, `ValidProjectID`, `GlobalID`, `StatusProposed`, `StatusArchived`, `SourceUser`, `ErrCorrupt`; test helpers `testStore`, `mustAdd`, `list`, `pid` (`memory`), `memSetup`, `addMem`, `memPID`, `press` (`manage`).
+- Consumes: Phase 2's `Store.withLock`, `readLedgerLocked`, `writeLedgerLocked`, `readScope`, `mutateLocked`, `scopePath`, `ValidSlug`, `ValidProjectID`, `GlobalID`, `StatusProposed`, `StatusArchived`, `SourceUser`, `ErrCorrupt`; Phase 5 `Store.Propose` (agent proposals have no dot and survive `DeleteDot`); test helpers `testStore`, `mustAdd`, `list`, `pid` (`memory`), `memSetup`, `addMem`, `memPID`, `press` (`manage`).
 - Produces: `type memory.DotDeletion struct{ Files, LedgerLines, Proposals int }`; `func (DotDeletion) String() string` ("3 files", "1 file, 1 ledger line, 1 proposal"); **signature change** `func (*Store) DeleteDot(slug string) (DotDeletion, error)` (was `(int, error)`; the manage popup is its only caller); unexported `scrubDotLedgerLocked(p, dot string) (int, error)`, `dropDotProposalsLocked(p, dot string) (int, error)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -260,6 +270,10 @@ func TestDeleteDotScrubsItsLedgerAndOrphanedProposals(t *testing.T) {
 	approved := mustAdd(t, s, pid, Entry{Scope: ScopeProject, Dot: "security", Kind: KindConvention, Text: "Every handler checks CSRF tokens.", Status: StatusActive, Source: SourceModel})
 	mine := mustAdd(t, s, pid, Entry{Scope: ScopeProject, Kind: KindConvention, Text: "Use pnpm, never npm."})
 	theirs := mustAdd(t, s, pid, Entry{Scope: ScopeProject, Dot: "frontend", Kind: KindConvention, Text: "Components use CSS modules.", Status: StatusProposed, Source: SourceModel})
+	agent, err := s.Propose(pid, Entry{Kind: KindConvention, Text: "Run make lint before pushing."}) // Phase 5: the main agent's, no dot
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	del, err := s.DeleteDot("security")
 	if err != nil {
@@ -278,8 +292,8 @@ func TestDeleteDotScrubsItsLedgerAndOrphanedProposals(t *testing.T) {
 	for _, e := range list(t, s, pid, Filter{Scope: ScopeProject, Statuses: []Status{StatusActive, StatusProposed, StatusArchived}}) {
 		ids = append(ids, e.ID)
 	}
-	if want := []string{approved.ID, mine.ID, theirs.ID}; !slices.Equal(ids, want) {
-		t.Fatalf("project entries %v, want %v (approved, developer and other dots' entries stay)", ids, want)
+	if want := []string{approved.ID, mine.ID, theirs.ID, agent.ID}; !slices.Equal(ids, want) {
+		t.Fatalf("project entries %v, want %v (approved, developer, other dots' and the agent's entries stay)", ids, want)
 	}
 	if _, err := os.Stat(filepath.Join(s.Dir, other, "project.json")); !os.IsNotExist(err) {
 		t.Fatal("DeleteDot created a project file where there was none")
@@ -390,8 +404,8 @@ Expected: FAIL to compile: `undefined: DotDeletion` (and `del.Files undefined (t
 diff --git a/internal/memory/store.go b/internal/memory/store.go
 --- a/internal/memory/store.go
 +++ b/internal/memory/store.go
-@@ -967,39 +967,118 @@ func (s *Store) Purge(p string) error {
- 	return s.withLock(dir, func() error { return os.RemoveAll(dir) })
+@@ -1024,39 +1024,118 @@ func removeAllBut(dir, keep string) error {
+ 	return errors.Join(errs...)
  }
  
 -// DeleteDot removes a dot's memory in every project and its global memory,
@@ -535,7 +549,7 @@ diff --git a/internal/memory/store.go b/internal/memory/store.go
 diff --git a/internal/ui/manage/model.go b/internal/ui/manage/model.go
 --- a/internal/ui/manage/model.go
 +++ b/internal/ui/manage/model.go
-@@ -50,8 +50,8 @@ type (
+@@ -62,8 +62,8 @@ type (
  		err  error
  	}
  	memDeletedMsg struct {
@@ -544,9 +558,9 @@ diff --git a/internal/ui/manage/model.go b/internal/ui/manage/model.go
 +		name string
 +		del  memory.DotDeletion
  	}
- )
- 
-@@ -142,7 +142,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+ 	modelsMsg struct {
+ 		kind string
+@@ -168,7 +168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
  		}
  		return m, mm.Init()
  	case memDeletedMsg:
@@ -555,7 +569,7 @@ diff --git a/internal/ui/manage/model.go b/internal/ui/manage/model.go
  	case tea.WindowSizeMsg:
  		m.width, m.height = msg.Width, msg.Height
  	case SnapshotMsg:
-@@ -425,14 +425,14 @@ func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+@@ -501,14 +501,14 @@ func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  	case "y", "Y", "enter":
  		m.scr = scrLibrary
  		return m, func() tea.Msg {
@@ -587,7 +601,7 @@ Expected: PASS, including `TestDeleteDotScrubsItsLedgerAndOrphanedProposals`, `T
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -627,7 +641,9 @@ Run:
 ```bash
 grep -n 'const Version' internal/version/version.go
 ls internal/platform/platform.go internal/backend/toolloop/tools.go internal/backend/anthropicapi/anthropic.go internal/backend/ollama/ollama.go >/dev/null && echo phases-present
-grep -n 'DevNull\|func HideWindow\|func EnvKey\|func ReservedPathName' internal/platform/*.go | grep -v _test | head
+grep -n 'DevNull\|func HideWindow\|func EnvKey\|func ReservedPathName\|func CommandContext\|func SecureDir' internal/platform/*.go | grep -v _test | head -20
+grep -n 'func Note\|func Unavailable\|func (r \*resolver) exact\|func (r \*resolver) homeRel' internal/backend/toolloop/*.go | grep -v _test
+grep -n 'func (e \*Engine) charge\|ErrBudget  *=' internal/engine/*.go | grep -v _test
 grep -rn 'func Sym' internal/ui/style/
 grep -rn 'func requestFor\|func deltaOf\|func OverUSD' internal/engine/ | grep -v _test
 grep -rn 'func (u \*Usage) Add\|func (u \*Usage) Cost\|func (u \*Usage) PaneCost' internal/state/
@@ -638,7 +654,7 @@ git --version
 GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... >/dev/null && echo base-green
 ```
 
-Expected: `const Version = "0.6.0"`; `phases-present`; the platform helpers, `func Sym`, the three engine helpers, the three `Usage` methods, `MaxUSDPerSession`, `SessionBudgetUSD` and `QueryCmds` each found; `1` for each adapter; git ≥ 2.31; `base-green`. If anything is missing, stop and report to the coordinator: Phase 7 is written against those interfaces (Preconditions).
+Expected: `const Version = "0.6.0"`; `phases-present`; the platform helpers (including `CommandContext` and `SecureDir`), the toolloop jail symbols (`Note`, `Unavailable`, `exact`, `homeRel`), `charge` and `ErrBudget`, `func Sym`, the three engine helpers, the three `Usage` methods, `MaxUSDPerSession`, `SessionBudgetUSD` and `QueryCmds` each found; `1` for each adapter; git ≥ 2.31; `base-green`. If anything is missing, stop and report to the coordinator: Phase 7 is written against those interfaces (Preconditions).
 
 - [ ] **Step 2: Re-run V1 only if Claude Code changed**
 
@@ -720,6 +736,7 @@ Under the live-step safety rules (`herdr --session dots-test` only; never `herdr
 - [ ] CI on `windows-latest` and `ubuntu-latest` (push to a private remote): `internal/worktree` and `internal/engine` draft tests pass there.
 - [ ] An API dot (`anthropic-api`) with `write = true` drafts through `write_file`/`edit_file`.
 - [ ] A partial clone (`git clone --filter=blob:none`) drafts without network access, or fails with a clear error.
+- [ ] On Windows: a draft runs git found on `PATH` (Phase 6 `platform.CommandContext`), the session's `worktrees` folder and the `herdr-dots-index-*`/`herdr-dots-apply-*` temp folders are owner-only (`icacls`), and a patch path such as `con.txt` or `a.txt:stream` is rejected.
 ````
 
 - [ ] **Step 4: Commit**
@@ -740,7 +757,7 @@ git commit -m "docs: Phase 7 verification notes (V1-V5) and user gates"
 - Test: `internal/worktree/helpers_test.go`, `internal/worktree/worktree_test.go`
 
 **Interfaces:**
-- Consumes: `platform.DevNull`, `platform.HideWindow(cmd *exec.Cmd)`, `platform.EnvKey(name string) string`, `platform.ReservedPathName(rel string) bool` (Phase 6); the `git` binary.
+- Consumes: `platform.DevNull`, `platform.HideWindow(cmd *exec.Cmd)`, `platform.EnvKey(name string) string`, `platform.ReservedPathName(rel string) bool` (per OS: false on Unix), `platform.CommandContext(ctx context.Context, name string, args []string) (*exec.Cmd, error)` (every git command), `platform.SecureDir(path string) error` (Phase 6); in tests `platformtest.AssertPrivateDir(t testing.TB, path string)`; the `git` binary.
 - Produces (package `worktree`):
   - `const DefaultTimeout = 60 * time.Second`; `var ErrNotGit, ErrUnbornHead, ErrTimeout, ErrTooLarge, ErrEmptyPatch, ErrEscape, ErrGitDir error`
   - `type Git struct{ Bin string; Timeout time.Duration; Environ func() []string }`; `func (Git) Run(ctx context.Context, dir string, env []string, args ...string) (string, error)` (trimmed stdout); `func (Git) Output(ctx context.Context, dir string, env []string, args ...string) ([]byte, error)`; `type CmdError struct{ Args []string; Stderr string; Err error }`
@@ -892,6 +909,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"herdr-dots/internal/platform"
+	"herdr-dots/internal/platform/platformtest"
 )
 
 // userState is everything a snapshot must leave exactly as it was.
@@ -1133,10 +1153,18 @@ func TestCheckPath(t *testing.T) {
 	for path, want := range map[string]error{
 		".git": ErrGitDir, ".git/config": ErrGitDir, "x/.Git/HEAD": ErrGitDir, ".git /x": ErrGitDir, "git~1/x": ErrGitDir,
 		"": ErrEscape, "../x": ErrEscape, "a/./b": ErrEscape, "a//b": ErrEscape, "/abs": ErrEscape, "C:/x": ErrEscape,
-		`a\b`: ErrEscape, "a\nb": ErrEscape, "aux": ErrEscape,
+		`a\b`: ErrEscape, "a\nb": ErrEscape, "a:b": ErrEscape,
 	} {
 		if err := CheckPath(path); !errors.Is(err, want) {
 			t.Errorf("CheckPath(%q) = %v, want %v", path, err, want)
+		}
+	}
+	// Windows-reserved names follow platform.ReservedPathName (Phase 6 made it
+	// per-OS): refused on Windows, ordinary names on Unix.
+	for _, name := range []string{"aux", "src/nul.txt", "a.txt:secret", "env."} {
+		err := CheckPath(name)
+		if refused := errors.Is(err, ErrEscape); refused != platform.ReservedPathName(name) {
+			t.Errorf("CheckPath(%q) = %v, want refused=%v (platform.ReservedPathName)", name, err, platform.ReservedPathName(name))
 		}
 	}
 }
@@ -1153,7 +1181,11 @@ func TestRemoveAndPruneLeaveNoWorktreesBehind(t *testing.T) {
 		}
 		return co
 	}
+	if err := os.MkdirAll(wts, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	gone := add()
+	platformtest.AssertPrivateDir(t, wts) // the checkouts' parent is made private
 	if err := Remove(context.Background(), g, repo, gone.Dir); err != nil {
 		t.Fatal(err)
 	}
@@ -1263,7 +1295,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -1357,13 +1388,18 @@ func (g Git) Output(ctx context.Context, dir string, env []string, args ...strin
 		"-c", "maintenance.auto=false",
 		"-c", "core.quotePath=false",
 	}, args...)
-	cmd := exec.CommandContext(ctx, g.bin(), full...)
+	// platform.CommandContext, not exec: on Windows it resolves git.exe on
+	// PATH (never a repo-local git.exe in the cwd) and runs a .cmd shim safely.
+	cmd, err := platform.CommandContext(ctx, g.bin(), full)
+	if err != nil {
+		return nil, &CmdError{Args: args, Err: err}
+	}
 	cmd.Env = append(gitEnv(g.environ()), env...)
 	cmd.WaitDelay = 500 * time.Millisecond
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	platform.HideWindow(cmd)
-	err := cmd.Run()
+	err = cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return stdout.Bytes(), fmt.Errorf("%w (git %s, %s)", ErrTimeout, args[0], g.timeout())
 	}
@@ -1438,6 +1474,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"herdr-dots/internal/platform"
 )
 
 // RefPrefix holds one private ref per unresolved draft. The ref keeps the
@@ -1493,6 +1531,11 @@ func TakeSnapshot(ctx context.Context, g Git, repo, id string, maxIndexBytes int
 		return Snapshot{}, err
 	}
 	defer os.RemoveAll(tmp)
+	// The private index names every file; keep it the user's alone (on
+	// Windows a temp dir inherits the parent's ACL, not 0700).
+	if err := platform.SecureDir(tmp); err != nil {
+		return Snapshot{}, err
+	}
 	idx := filepath.Join(tmp, "index")
 	// Seeding from the user's index (a read-only copy) lets git reuse its
 	// stat cache, so only changed files are hashed.
@@ -1588,6 +1631,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"herdr-dots/internal/platform"
 )
 
 // Checkout is a draft's detached worktree.
@@ -1615,6 +1660,11 @@ func Add(ctx context.Context, g Git, s Snapshot, dir string) (Checkout, error) {
 		return Checkout{}, fmt.Errorf("worktree directory %s already exists", dir)
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return Checkout{}, err
+	}
+	// The checkout holds a copy of the user's code: its parent stays private
+	// (0700 on Unix, an owner-only ACL on Windows that the checkout inherits).
+	if err := platform.SecureDir(filepath.Dir(dir)); err != nil {
 		return Checkout{}, err
 	}
 	if _, err := g.Run(ctx, s.Repo, nil, "worktree", "add", "--detach", dir, s.Commit); err != nil {
@@ -1781,7 +1831,7 @@ Prove the hook and fsmonitor tests bite: temporarily delete the `"-c", "core.hoo
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -1811,7 +1861,7 @@ git commit -m "feat(worktree): hook-free git runner, side-effect-free snapshot, 
 - Test: `internal/worktree/patch_test.go`, `internal/worktree/scale_live_test.go` (build tag `live`, V4)
 
 **Interfaces:**
-- Consumes: Task 2's `Git.Run`/`Output`, `Snapshot`, `Checkout`, `restoreDefanged`, `Escapes`, `CheckPath`, `copyFile`, errors; test helpers `isoGit`, `sh`, `writeFile`, `readFile`, `newRepo`, `symlinkOrSkip`, `installMarkerHooks`, `snapshotT`, `checkoutT`, `stateOf`.
+- Consumes: Task 2's `Git.Run`/`Output`, `Snapshot`, `Checkout`, `restoreDefanged`, `Escapes`, `CheckPath`, `copyFile`, errors; Phase 6 `platform.SecureDir` (the apply's private-index directory) and, in tests, `platform.ReservedPathName`; test helpers `isoGit`, `sh`, `writeFile`, `readFile`, `newRepo`, `symlinkOrSkip`, `installMarkerHooks`, `snapshotT`, `checkoutT`, `stateOf`.
 - Produces (package `worktree`):
   - `const FlagBinary = "binary"`, `FlagMode = "mode"`, `FlagSymlink = "symlink"`, `FlagSymlinkKept = "symlink-kept"`, `FlagSubmoduleSkipped = "submodule-skipped"`
   - `type Change struct{ Path, Status, OldMode, NewMode string; Added, Deleted int }` (`Added == -1` for binary); `type Patch struct{ Diff []byte; Stat string; Files, Bytes int; Flags []string; Changes []Change }`; `func (Patch) Paths() []string`
@@ -1835,6 +1885,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"herdr-dots/internal/platform"
 )
 
 // draftT snapshots repo, lets edit change the checkout like a dot would, and
@@ -1936,11 +1988,19 @@ func TestValidateRejectsGitDirsEscapesAndSubmodules(t *testing.T) {
 		"C:/Windows/x":     ErrEscape,
 		`a\b`:              ErrEscape,
 		"a\x1b[31m":        ErrEscape,
-		"con.txt":          ErrEscape,
 	} {
 		p := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: path, Status: "M", OldMode: "100644", NewMode: "100644"}}}
 		if err := Validate(p, t.TempDir(), Caps{}); !errors.Is(err, want) {
 			t.Errorf("%q: err %v, want %v", path, err, want)
+		}
+	}
+	// Windows-reserved names are refused where platform.ReservedPathName says
+	// so (Windows); on Unix they are ordinary files.
+	for _, path := range []string{"con.txt", "src/aux.c", "a.txt:stream"} {
+		p := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: path, Status: "M", OldMode: "100644", NewMode: "100644"}}}
+		err := Validate(p, t.TempDir(), Caps{})
+		if refused := errors.Is(err, ErrEscape); refused != platform.ReservedPathName(path) {
+			t.Errorf("%q: err %v, want refused=%v", path, err, platform.ReservedPathName(path))
 		}
 	}
 	sub := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: "vendor/lib", Status: "M", OldMode: "160000", NewMode: "160000"}}}
@@ -2436,6 +2496,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"herdr-dots/internal/platform"
 )
 
 // privateIndex copies repo's index into a private temp file and makes the
@@ -2445,6 +2507,10 @@ import (
 func privateIndex(ctx context.Context, g Git, repo string, paths []string) (env []string, dir string, err error) {
 	dir, err = os.MkdirTemp("", "herdr-dots-apply-")
 	if err != nil {
+		return nil, "", err
+	}
+	if err := platform.SecureDir(dir); err != nil {
+		os.RemoveAll(dir)
 		return nil, "", err
 	}
 	idx := filepath.Join(dir, "index")
@@ -2505,7 +2571,7 @@ Optionally reproduce V4 (about 3 minutes): `HERDR_DOTS_SCALE_FILES=100000 GOTOOL
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go vet -tags live ./internal/worktree/
 GOTOOLCHAIN=local go test -race ./...
@@ -2904,7 +2970,7 @@ Expected: PASS: `TestPutPatchRoundTripsAndVerifiesTheFile`, `TestInvalidIDsNever
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -3103,7 +3169,7 @@ Expected: FAIL: `internal/backend` doesn't compile (`undefined: PassWrite`, `unk
 diff --git a/internal/backend/backend.go b/internal/backend/backend.go
 --- a/internal/backend/backend.go
 +++ b/internal/backend/backend.go
-@@ -28,15 +28,24 @@ type Request struct {
+@@ -29,7 +29,11 @@ type Request struct {
  	Force     bool   // summoned: must answer
  	Memory    string // pre-rendered memory block (memory.Render); "" = none
  	Learn     bool   // the dot may return memory ops in its reply
@@ -3113,6 +3179,11 @@ diff --git a/internal/backend/backend.go b/internal/backend/backend.go
 +	// worktree). Backends honor it only together with Pass == PassWrite, so
 +	// one stray field can never make a review write.
 +	Write bool
+ 
+ 	// Phase 4: API backends. Zero values mean provider defaults.
+ 	Effort        string // "" | low | medium | high | xhigh | max (anthropic-api, openai-api)
+@@ -39,12 +43,17 @@ type Request struct {
+ 	Fallbacks     string // anthropic-api: "" or "default" = on, "off"
  }
  
 -// Pass values: a normal review, or an observe dot's memory-only pass.
@@ -3184,8 +3255,8 @@ diff --git a/internal/backend/prompt.go b/internal/backend/prompt.go
 diff --git a/internal/backend/claude.go b/internal/backend/claude.go
 --- a/internal/backend/claude.go
 +++ b/internal/backend/claude.go
-@@ -11,6 +11,17 @@ import (
- 	"herdr-dots/internal/dots"
+@@ -12,6 +12,17 @@ import (
+ 	"herdr-dots/internal/platform"
  )
  
 +// A claude draft run gets the tools in ClaudeWriteTools. Only the read
@@ -3202,7 +3273,7 @@ diff --git a/internal/backend/claude.go b/internal/backend/claude.go
  type ClaudeCLI struct {
  	Runner  Runner
  	Bin     string          // default "claude"
-@@ -53,9 +64,16 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
+@@ -80,9 +91,16 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
  	if r.Model != "" {
  		args = append(args, "--model", r.Model)
  	}
@@ -3229,8 +3300,8 @@ diff --git a/internal/backend/claude.go b/internal/backend/claude.go
 diff --git a/internal/backend/codex.go b/internal/backend/codex.go
 --- a/internal/backend/codex.go
 +++ b/internal/backend/codex.go
-@@ -58,7 +58,14 @@ func (c CodexCLI) BuildCmd(r Request) Cmd {
- 	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: CleanEnv(c.environ()), Stdin: SystemPrompt(r) + "\n\n" + UserPrompt(r)}
+@@ -60,7 +60,14 @@ func (c CodexCLI) BuildCmd(r Request) Cmd {
+ 	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: env, Stdin: SystemPrompt(r) + "\n\n" + UserPrompt(r)}
  }
  
 +// ErrCodexCannotDraft: `codex exec` always offers its shell tool, and
@@ -3272,7 +3343,7 @@ Expected: PASS, including `TestClaudeDraftGetsFileToolsAndNoShell`, `TestWriteTo
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -3302,8 +3373,8 @@ git commit -m "feat(backend): draft write mode: claude file tools without a shel
 - Test: `internal/backend/toolloop/write_test.go`, `internal/backend/toolloop/adapters_test.go`
 
 **Interfaces:**
-- Consumes: Phase 4 `toolloop.Tool`, `Limits`, `DefaultLimits`, `WithDeny`, `RepoTools`, `SystemNote`, `Denied`, `ErrDenied`, `ErrOutsideRoot`, unexported `within`, `obj`; Phase 6 `platform.ReservedPathName`; Task 2 `worktree.CheckPath`; Task 5 `backend.WriteMode`.
-- Produces (package `toolloop`): `const WriteNote`; `const WriteMaxCalls = 40`; `const MaxWriteBytes = 1 << 20`; `func Select(root string, read, write bool, lim Limits) ([]Tool, Limits, string)`; `func WriteTools(root string, lim Limits) []Tool` (`write_file{path, content}`, `edit_file{path, old, new}`). The four adapters choose tools with `toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))` and append the returned note to the system prompt.
+- Consumes: Phase 4 `toolloop.Tool`, `Limits`, `DefaultLimits`, `WithDeny`, `RepoTools`, `SystemNote`, `NoToolsNote`, `Note(want bool, cwd string, tools bool) string`, `Unavailable(root string) bool`, `Denied`, `ErrDenied`, `ErrOutsideRoot`, unexported `within`, `obj`, `newResolver()`, `(*resolver).exact(rr, rel string) bool`, `(*resolver).homeRel(dir string) (string, bool)` (the read tools' jail: exact on-disk spellings, home-anchored deny globs); Phase 6 `platform.ReservedPathName`, test helpers `setHome`, `symlinkOrSkip`, `mustWrite`; Ollama's `noteFor`, `FitPrompt`; Task 2 `worktree.CheckPath`; Task 5 `backend.WriteMode`.
+- Produces (package `toolloop`): `const WriteNote`; `const WriteMaxCalls = 40`; `const MaxWriteBytes = 1 << 20`; `func Select(root string, read, write bool, lim Limits) ([]Tool, Limits, string)` (no tools and `Note(...)`'s note when the root is missing or `Unavailable`); `func WriteTools(root string, lim Limits) []Tool` (`write_file{path, content}`, `edit_file{path, old, new}`; nil for an `Unavailable` root). The four adapters choose tools with `toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))` and append the returned note to the system prompt.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3320,6 +3391,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"herdr-dots/internal/platform"
 )
 
 // draftRoot is a worktree-like project with a file, a .git file, a link to a
@@ -3340,13 +3413,6 @@ func draftRoot(t *testing.T) (root, outside string) {
 		t.Fatal(err)
 	}
 	return root, outside
-}
-
-func writeLinkOrSkip(t *testing.T, target, link string) {
-	t.Helper()
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
 }
 
 func runWrite(t *testing.T, root, name string, args any) (string, error) {
@@ -3384,12 +3450,20 @@ func TestWriteFileCreatesAndReplacesInsideTheRoot(t *testing.T) {
 func TestWriteToolsRefuseGitSecretsAndEscapes(t *testing.T) {
 	root, outside := draftRoot(t)
 	for _, p := range []string{".git", ".git/HEAD", ".GIT/config", "vendor/x/.git/config", ".env", "keys/server.pem",
-		"../escape.txt", filepath.Join(outside, "abs.txt"), ".", "con.txt"} {
+		"../escape.txt", filepath.Join(outside, "abs.txt"), ".", "id_rſa", ".ENV", "Secrets/db.txt"} {
 		for _, name := range []string{"write_file", "edit_file"} {
 			_, err := runWrite(t, root, name, map[string]any{"path": p, "content": "x", "old": "gitdir", "new": "y"})
 			if !errors.Is(err, ErrDenied) && !errors.Is(err, ErrOutsideRoot) {
 				t.Errorf("%s %q: %v, want ErrDenied or ErrOutsideRoot", name, p, err)
 			}
+		}
+	}
+	// Windows-reserved names (streams, devices, trailing dots) are refused
+	// where platform.ReservedPathName says so, as for the read tools.
+	for _, p := range []string{"con.txt", "src/app.go:hidden", "notes.txt."} {
+		_, err := runWrite(t, root, "write_file", map[string]any{"path": p, "content": "x"})
+		if refused := errors.Is(err, ErrDenied); refused != platform.ReservedPathName(p) {
+			t.Errorf("write_file %q: %v, want refused=%v", p, err, platform.ReservedPathName(p))
 		}
 	}
 	if b, _ := os.ReadFile(filepath.Join(root, ".git")); string(b) != "gitdir: /elsewhere\n" {
@@ -3403,8 +3477,8 @@ func TestWriteToolsRefuseGitSecretsAndEscapes(t *testing.T) {
 // Review Focus 4: a symlink inside the worktree never carries a write out.
 func TestWriteToolsNeverWriteThroughSymlinks(t *testing.T) {
 	root, outside := draftRoot(t)
-	writeLinkOrSkip(t, outside, filepath.Join(root, "home"))
-	writeLinkOrSkip(t, filepath.Join(outside, ".bashrc"), filepath.Join(root, "rc"))
+	symlinkOrSkip(t, outside, filepath.Join(root, "home"))
+	symlinkOrSkip(t, filepath.Join(outside, ".bashrc"), filepath.Join(root, "rc"))
 	for _, c := range []struct{ tool, path string }{
 		{"write_file", "home/.bashrc"}, {"write_file", "home/new.txt"}, {"write_file", "rc"},
 		{"edit_file", "home/.bashrc"}, {"edit_file", "rc"},
@@ -3459,16 +3533,55 @@ func TestSelectOffersWriteToolsOnlyToDrafts(t *testing.T) {
 	if ts, lim, note := Select(root, false, true, DefaultLimits()); names(ts) != "read_file,grep,list_files,write_file,edit_file" || note != WriteNote || lim.MaxCalls != WriteMaxCalls {
 		t.Fatalf("draft: %s %q %d", names(ts), note, lim.MaxCalls)
 	}
-	for _, c := range []struct {
-		root        string
-		read, write bool
-	}{{root, false, false}, {"", true, true}} {
-		if ts, _, note := Select(c.root, c.read, c.write, DefaultLimits()); ts != nil || note != "" {
-			t.Errorf("%+v: %s %q", c, names(ts), note)
+	if ts, _, note := Select(root, false, false, DefaultLimits()); ts != nil || note != "" {
+		t.Errorf("neither: %s %q", names(ts), note)
+	}
+	// Phase 4: tools wanted but no usable root → no tools and NoToolsNote.
+	home := t.TempDir()
+	setHome(t, home)
+	for _, r := range []string{"", home, filepath.Dir(home)} {
+		if ts, lim, note := Select(r, true, true, DefaultLimits()); ts != nil || note != NoToolsNote || lim.MaxCalls != 8 {
+			t.Errorf("root %q: %s %q %d", r, names(ts), note, lim.MaxCalls)
 		}
+	}
+	if WriteTools(home, DefaultLimits()) != nil {
+		t.Fatal("no write tools for the home directory")
 	}
 	if strings.Contains(names(RepoTools(root, DefaultLimits())), "write") {
 		t.Fatal("RepoTools must stay read-only")
+	}
+}
+
+// The write tools use the read tools' jail: exact on-disk spellings and the
+// home-anchored deny globs.
+func TestWriteToolsUseTheReadJail(t *testing.T) {
+	root, _ := draftRoot(t)
+	if _, err := os.Stat(filepath.Join(root, "SRC", "APP.GO")); err == nil { // case-insensitive file system
+		for _, p := range []string{"SRC/APP.GO", "src/APP.go", "SRC/new.go"} {
+			if _, err := runWrite(t, root, "write_file", map[string]any{"path": p, "content": "x"}); err == nil {
+				t.Errorf("write_file %q wrote through another spelling", p)
+			}
+		}
+		if b, _ := os.ReadFile(filepath.Join(root, "src", "app.go")); !strings.HasPrefix(string(b), "package app") {
+			t.Fatalf("src/app.go changed: %q", b)
+		}
+	} else {
+		t.Log("case-sensitive file system: spelling variants are other files")
+	}
+	home := t.TempDir()
+	setHome(t, home)
+	mustWrite(t, filepath.Join(home, ".kube", "ok.txt"), "fine")
+	kube := filepath.Join(home, ".kube")
+	for _, name := range []string{"write_file", "edit_file"} {
+		if _, err := runWrite(t, kube, name, map[string]any{"path": "config", "content": "x", "old": "a", "new": "b"}); !errors.Is(err, ErrDenied) {
+			t.Errorf("%s ~/.kube/config: %v, want ErrDenied (home-anchored glob)", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(kube, "config")); !os.IsNotExist(err) {
+		t.Fatal("~/.kube/config was created")
+	}
+	if _, err := runWrite(t, kube, "write_file", map[string]any{"path": "notes.txt", "content": "x"}); err != nil {
+		t.Fatalf("an ordinary file below home: %v", err)
 	}
 }
 ```
@@ -3531,6 +3644,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -3549,25 +3663,33 @@ const MaxWriteBytes = 1 << 20
 
 // Select returns a run's tools, its limits and its system-prompt note. read
 // offers read_file, grep and list_files; write (a draft) adds write_file and
-// edit_file and raises MaxCalls to WriteMaxCalls. No root, or neither, means
-// no tools and no note.
+// edit_file and raises MaxCalls to WriteMaxCalls. Neither means no tools and
+// no note. A root that is missing or too broad (Unavailable: a file system
+// root, the home directory or an ancestor of it) gets no tools and, when
+// tools were wanted, NoToolsNote, exactly as Phase 4's Note says.
 func Select(root string, read, write bool, lim Limits) ([]Tool, Limits, string) {
-	if root == "" || (!read && !write) {
-		return nil, lim, ""
+	want := read || write
+	var tools []Tool
+	if want && root != "" {
+		tools = RepoTools(root, lim) // nil when Unavailable(root)
 	}
-	tools := RepoTools(root, lim)
-	if !write {
-		return tools, lim, SystemNote
+	if !write || len(tools) == 0 {
+		return tools, lim, Note(want, root, len(tools) > 0)
 	}
 	lim.MaxCalls = max(lim.MaxCalls, WriteMaxCalls)
 	return append(tools, WriteTools(root, lim)...), lim, WriteNote
 }
 
-// WriteTools returns write_file and edit_file jailed to root. They never
-// write through a symlink, never create anything outside root, never touch a
-// deny-listed path and never touch .git in any spelling, whatever the
-// deny-list says.
+// WriteTools returns write_file and edit_file jailed to root with the read
+// tools' jail: the same deny-list (Unicode case-folded, home-anchored globs
+// included), exact on-disk spellings, Windows-reserved names refused, and no
+// tools at all for an Unavailable root. They never write through a symlink,
+// never create anything outside root and never touch .git in any spelling,
+// whatever the deny-list says.
 func WriteTools(root string, lim Limits) []Tool {
+	if Unavailable(root) {
+		return nil
+	}
 	w := writer{root: root, lim: lim}
 	return []Tool{
 		{
@@ -3598,9 +3720,15 @@ type writer struct {
 }
 
 // resolveForWrite returns where rel may be written: inside the real root,
-// with every existing parent a real directory (no symlink), the target, if
-// it exists, a regular file (no symlink), and the path allowed.
+// with every existing parent a real directory (no symlink) and the target,
+// if it exists, a regular file (no symlink), each spelled exactly as on disk
+// (a case or Unicode variant would open another file on APFS or NTFS), and
+// the path allowed by the deny-list both relative to the root and, when the
+// root sits below the home directory, relative to home.
 func resolveForWrite(root, p string, deny []string) (abs, rel string, err error) {
+	if strings.ContainsRune(p, 0) {
+		return "", "", errors.New("invalid path")
+	}
 	p = strings.TrimSpace(p)
 	if p == "" {
 		return "", "", errors.New("path is required")
@@ -3630,9 +3758,10 @@ func resolveForWrite(root, p string, deny []string) (abs, rel string, err error)
 	if Denied(rel, deny) || platform.ReservedPathName(rel) {
 		return "", "", ErrDenied
 	}
+	res := newResolver()
 	dir := rr
 	parts := strings.Split(rel, "/")
-	for _, part := range parts[:len(parts)-1] {
+	for i, part := range parts[:len(parts)-1] {
 		dir = filepath.Join(dir, part)
 		fi, err := os.Lstat(dir)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -3641,13 +3770,27 @@ func resolveForWrite(root, p string, deny []string) (abs, rel string, err error)
 		if err != nil {
 			return "", "", err
 		}
+		sub := strings.Join(parts[:i+1], "/")
 		if !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
-			return "", "", fmt.Errorf("%w: %s is a symlink or a file, not a directory", ErrOutsideRoot, filepath.ToSlash(strings.TrimPrefix(dir, rr+string(filepath.Separator))))
+			return "", "", fmt.Errorf("%w: %s is a symlink or a file, not a directory", ErrOutsideRoot, sub)
+		}
+		if !res.exact(rr, sub) {
+			return "", "", fmt.Errorf("no such directory: %s (spell it exactly as on disk)", sub)
 		}
 	}
 	abs = filepath.Join(rr, filepath.FromSlash(rel))
-	if fi, err := os.Lstat(abs); err == nil && !fi.Mode().IsRegular() {
-		return "", "", fmt.Errorf("%s is not a regular file (symlinks are never written)", rel)
+	if fi, err := os.Lstat(abs); err == nil {
+		if !fi.Mode().IsRegular() {
+			return "", "", fmt.Errorf("%s is not a regular file (symlinks are never written)", rel)
+		}
+		if !res.exact(rr, rel) {
+			return "", "", fmt.Errorf("%s exists under another spelling: use the exact on-disk name", rel)
+		}
+	}
+	// Home-anchored globs (.config/gh/**, .kube/config) apply when the root
+	// sits below the home directory, as for the read tools.
+	if hr, ok := res.homeRel(filepath.Dir(abs)); ok && Denied(path.Join(hr, path.Base(rel)), deny) {
+		return "", "", ErrDenied
 	}
 	return abs, rel, nil
 }
@@ -3743,53 +3886,136 @@ func (w writer) editFile(_ context.Context, raw json.RawMessage) (string, error)
 
 - [ ] **Step 4: Switch the four adapters to `Select`**
 
-Each adapter's `Run` contains this block (Phase 4 plan, Tasks 10–13):
+Each Phase 4 adapter built `tools` with `toolloop.RepoTools` and its note with `toolloop.Note`; both now come from `toolloop.Select`. Ollama also sizes its prompt with a draft's tool schemas and `WriteNote` (`FitPrompt`, `noteFor`). Save this diff and `git apply` it:
 
-```go
-	var tools []toolloop.Tool
-	lim := toolloop.WithDeny(b.o.Deny)
-	if r.RepoRead && r.Cwd != "" && r.Pass != backend.PassMemory {
-		tools = toolloop.RepoTools(r.Cwd, lim)
-	}
+```diff
+diff --git a/internal/backend/anthropicapi/anthropic.go b/internal/backend/anthropicapi/anthropic.go
+--- a/internal/backend/anthropicapi/anthropic.go
++++ b/internal/backend/anthropicapi/anthropic.go
+@@ -130,13 +130,11 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
+ 	if model == "" {
+ 		model = DefaultModel
+ 	}
+-	var tools []toolloop.Tool
+-	lim := toolloop.WithDeny(b.o.Deny)
+-	if r.RepoRead && r.Cwd != "" && r.Pass != backend.PassMemory {
+-		tools = toolloop.RepoTools(r.Cwd, lim)
+-	}
++	// A draft (Phase 7) also gets write_file and edit_file, jailed to the
++	// worktree, and a larger tool budget; reviews and memory passes don't.
++	tools, lim, note := toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))
+ 	system := backend.SystemPrompt(r)
+-	if note := toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, len(tools) > 0); note != "" {
++	if note != "" {
+ 		system += "\n" + note + "\n"
+ 	}
+ 	params := anthropic.BetaMessageNewParams{
+diff --git a/internal/backend/ollama/ollama.go b/internal/backend/ollama/ollama.go
+--- a/internal/backend/ollama/ollama.go
++++ b/internal/backend/ollama/ollama.go
+@@ -187,8 +187,13 @@ const minToolRoom = 64
+ // errContextFull ends a run whose tool results no longer fit num_ctx.
+ var errContextFull = errors.New("ollama: context window full (raise context_window)")
+ 
+-// noteFor is the repo-tools note the system prompt carries (toolloop.Note).
++// noteFor is the repo-tools note the system prompt carries, as
++// toolloop.Select picks it: WriteNote for a draft with tools, else
++// toolloop.Note. FitPrompt sizes the prompt with it.
+ func noteFor(r backend.Request, tools bool) string {
++	if tools && backend.WriteMode(r) {
++		return toolloop.WriteNote
++	}
+ 	return toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, tools)
+ }
+ 
+@@ -254,7 +259,8 @@ func FitPrompt(r backend.Request, window int, tools bool) (backend.Request, bool
+ 	budget := promptBudget(r, window)
+ 	extra := EstimateTokens(noteFor(r, tools))
+ 	if tools {
+-		d := defsTokens(toolDefs(toolloop.RepoTools(r.Cwd, toolloop.DefaultLimits())))
++		ts, _, _ := toolloop.Select(r.Cwd, true, backend.WriteMode(r), toolloop.DefaultLimits()) // a draft's write tools count too
++		d := defsTokens(toolDefs(ts))
+ 		if d == 0 {
+ 			d = toolSchemaFallback
+ 		}
+@@ -301,17 +307,15 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
+ 	if window <= 0 {
+ 		window = backend.DefaultContextWindow
+ 	}
+-	var tools []toolloop.Tool
+-	lim := toolloop.WithDeny(b.o.Deny)
+-	if r.RepoRead && r.Cwd != "" && r.Pass != backend.PassMemory {
+-		tools = toolloop.RepoTools(r.Cwd, lim)
+-	}
++	// A draft (Phase 7) also gets write_file and edit_file, jailed to the
++	// worktree, and a larger tool budget; reviews and memory passes don't.
++	tools, lim, note := toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))
+ 	r, trimmed := FitPrompt(r, window, len(tools) > 0)
+ 	if trimmed {
+ 		b.logf("ollama: %s prompt trimmed to fit num_ctx %d", textutil.SanitizeModelText(r.DotName), window)
+ 	}
+ 	system := backend.SystemPrompt(r)
+-	if note := noteFor(r, len(tools) > 0); note != "" {
++	if note != "" {
+ 		system += "\n" + note + "\n"
+ 	}
+ 	base := b.BaseURL(r)
+diff --git a/internal/backend/openaiapi/openai.go b/internal/backend/openaiapi/openai.go
+--- a/internal/backend/openaiapi/openai.go
++++ b/internal/backend/openaiapi/openai.go
+@@ -111,13 +111,11 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
+ 	if err != nil {
+ 		return backend.Result{}, err
+ 	}
+-	var tools []toolloop.Tool
+-	lim := toolloop.WithDeny(b.o.Deny)
+-	if r.RepoRead && r.Cwd != "" && r.Pass != backend.PassMemory {
+-		tools = toolloop.RepoTools(r.Cwd, lim)
+-	}
++	// A draft (Phase 7) also gets write_file and edit_file, jailed to the
++	// worktree, and a larger tool budget; reviews and memory passes don't.
++	tools, lim, note := toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))
+ 	system := backend.SystemPrompt(r)
+-	if note := toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, len(tools) > 0); note != "" {
++	if note != "" {
+ 		system += "\n" + note + "\n"
+ 	}
+ 	input := responses.ResponseInputParam{
+diff --git a/internal/backend/openrouter/openrouter.go b/internal/backend/openrouter/openrouter.go
+--- a/internal/backend/openrouter/openrouter.go
++++ b/internal/backend/openrouter/openrouter.go
+@@ -173,14 +173,11 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
+ 	if err != nil {
+ 		return backend.Result{}, err
+ 	}
+-	var tools []toolloop.Tool
+-	lim := toolloop.WithDeny(b.o.Deny)
+-	wantTools := r.RepoRead && r.Cwd != "" && r.Pass != backend.PassMemory
+-	if wantTools {
+-		tools = toolloop.RepoTools(r.Cwd, lim)
+-	}
++	// A draft (Phase 7) also gets write_file and edit_file, jailed to the
++	// worktree, and a larger tool budget; reviews and memory passes don't.
++	tools, lim, note := toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))
+ 	system := backend.SystemPrompt(r)
+-	if note := toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, len(tools) > 0); note != "" {
++	if note != "" {
+ 		system += "\n" + note + "\n"
+ 	}
+ 	cr := chatRequest{
 ```
 
-and, a few lines later (in `ollama.go` after the `FitPrompt` call, elsewhere right after it):
-
-```go
-	system := backend.SystemPrompt(r)
-	if len(tools) > 0 {
-		system += "\n" + toolloop.SystemNote + "\n"
-	}
-```
-
-In `internal/backend/anthropicapi/anthropic.go`, `internal/backend/openaiapi/openai.go`, `internal/backend/openrouter/openrouter.go` and `internal/backend/ollama/ollama.go`, replace the first block with:
-
-```go
-	// A draft (Phase 7) also gets write_file and edit_file, jailed to the
-	// worktree, and a larger tool budget; reviews and memory passes don't.
-	tools, lim, note := toolloop.Select(r.Cwd, r.RepoRead && r.Pass != backend.PassMemory, backend.WriteMode(r), toolloop.WithDeny(b.o.Deny))
-```
-
-and the second with:
-
-```go
-	system := backend.SystemPrompt(r)
-	if note != "" {
-		system += "\n" + note + "\n"
-	}
-```
-
-Everything after it (`toolloop.Driver{Tools: tools, Limits: lim, ...}`, Ollama's `FitPrompt(r, window, len(tools) > 0)`) keeps using `tools` and `lim` unchanged. The reply of a draft is the ordinary verdict object (`backend.VerdictSchema` and `FinishAPI` treat `PassWrite` like a review), so nothing else changes.
+Everything after it (`toolloop.Driver{Tools: tools, Limits: lim, ...}`, Ollama's `FitPrompt(r, window, len(tools) > 0)`) keeps using `tools` and `lim` unchanged. The reply of a draft is the ordinary verdict object (`backend.VerdictSchema` and `FinishAPI` treat `PassWrite` like a review), so nothing else changes. A review gets exactly what it got before: `Select` returns `RepoTools` and `toolloop.Note`'s note (including `NoToolsNote` for a missing or too-broad root).
 
 - [ ] **Step 5: Run the tests to see them pass**
 
 Run: `gofmt -w internal/backend && GOTOOLCHAIN=local go test -race ./internal/backend/... -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected: PASS, including `TestWriteFileCreatesAndReplacesInsideTheRoot`, `TestWriteToolsRefuseGitSecretsAndEscapes`, `TestWriteToolsNeverWriteThroughSymlinks`, `TestEditFileNeedsExactlyOneOccurrence`, `TestSelectOffersWriteToolsOnlyToDrafts`, `TestEveryAPIAdapterPicksItsToolsThroughSelect`, and every Phase 4 adapter test (a review still gets exactly `read_file`, `grep`, `list_files` and `SystemNote`).
+Expected: PASS, including `TestWriteFileCreatesAndReplacesInsideTheRoot`, `TestWriteToolsRefuseGitSecretsAndEscapes`, `TestWriteToolsNeverWriteThroughSymlinks`, `TestEditFileNeedsExactlyOneOccurrence`, `TestSelectOffersWriteToolsOnlyToDrafts`, `TestWriteToolsUseTheReadJail`, `TestEveryAPIAdapterPicksItsToolsThroughSelect`, and every Phase 4 and Phase 6 toolloop and adapter test (a review still gets exactly `read_file`, `grep`, `list_files` and `SystemNote`, or `NoToolsNote` for a missing or too-broad root; `TestNoteForRepoAccess` and Ollama's `noteFor` test still pass).
 
 - [ ] **Step 6: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -4286,7 +4512,7 @@ diff --git a/internal/dots/dot.go b/internal/dots/dot.go
  }
  
  type BackendSpec struct {
-@@ -102,6 +104,8 @@ func New(name string) Dot {
+@@ -111,6 +113,8 @@ func New(name string) Dot {
  		Context:  ContextSpec{Turns: 3, RepoRead: true, Verbosity: "normal"},
  		Budget:   BudgetSpec{MaxCallsPerSession: 40},
  		Memory:   DefaultMemory(),
@@ -4295,11 +4521,12 @@ diff --git a/internal/dots/dot.go b/internal/dots/dot.go
  	}
  }
  
-@@ -171,5 +175,6 @@ func (d Dot) Validate() error {
+@@ -180,6 +184,7 @@ func (d Dot) Validate() error {
  		add("budget max_calls_per_session must be >= 1")
  	}
  	errs = append(errs, d.Memory.validate()...)
 +	errs = append(errs, d.Capabilities.validate(d.Backend.Kind)...)
+ 	errs = append(errs, validateAPI(d)...)
  	return errors.Join(errs...)
  }
 ```
@@ -4310,17 +4537,17 @@ diff --git a/internal/dots/dot.go b/internal/dots/dot.go
 diff --git a/internal/config/config.go b/internal/config/config.go
 --- a/internal/config/config.go
 +++ b/internal/config/config.go
-@@ -27,6 +27,9 @@ type Config struct {
- 	MemoryAutoApproveProject bool `toml:"memory_auto_approve_project"` // model-written project memory skips approval
+@@ -34,6 +34,9 @@ type Config struct {
  
  	Council CouncilConfig `toml:"council"` // [council] table (Phase 3)
-+
+ 
 +	WriteEnabled        bool `toml:"write_enabled"`         // global switch for write-capable dots (drafts); off by default
 +	MaxConcurrentDrafts int  `toml:"max_concurrent_drafts"` // drafts running at once, engine-wide (1-8)
- }
- 
- // Council merge modes ([council] merge).
-@@ -83,13 +86,16 @@ func Default() Config {
++
+ 	// Phase 4: API backends and dollar budgets.
+ 	SessionBudgetUSD float64                   `toml:"session_budget_usd"` // per pane; 0 = off
+ 	Providers        map[string]ProviderConfig `toml:"providers"`          // [providers.<name>]
+@@ -107,13 +110,16 @@ func Default() Config {
  		MemoryEnabled:       true,
  		MemoryRetentionDays: 180,
  		MemoryMaxEntries:    200,
@@ -4339,7 +4566,7 @@ diff --git a/internal/config/config.go b/internal/config/config.go
  func Load(path string) (Config, error) {
  	c := Default()
  	data, err := os.ReadFile(path)
-@@ -97,12 +103,12 @@ func Load(path string) (Config, error) {
+@@ -121,12 +127,12 @@ func Load(path string) (Config, error) {
  		return c, nil
  	}
  	if err != nil {
@@ -4354,14 +4581,14 @@ diff --git a/internal/config/config.go b/internal/config/config.go
  		return c, fmt.Errorf("config %s: %w", path, err)
  	}
  	if c.MaxParallelRuns < 1 {
-@@ -122,6 +128,7 @@ func Load(path string) (Config, error) {
- 	}
+@@ -147,6 +153,7 @@ func Load(path string) (Config, error) {
  	c.MemoryMaxEntries = min(max(c.MemoryMaxEntries, 10), 10000)
+ 	c.MCP = c.MCP.Normalized()
  	c.Council = c.Council.Normalized()
 +	c.MaxConcurrentDrafts = min(max(c.MaxConcurrentDrafts, 1), 8)
- 	return c, nil
- }
- 
+ 	if math.IsNaN(c.SessionBudgetUSD) || math.IsInf(c.SessionBudgetUSD, 0) || c.SessionBudgetUSD < 0 {
+ 		c.SessionBudgetUSD = 0
+ 	}
 ```
 
 `internal/paths/paths.go`:
@@ -4370,7 +4597,7 @@ diff --git a/internal/config/config.go b/internal/config/config.go
 diff --git a/internal/paths/paths.go b/internal/paths/paths.go
 --- a/internal/paths/paths.go
 +++ b/internal/paths/paths.go
-@@ -58,6 +58,11 @@ func (p Paths) FeedFile() string        { return filepath.Join(p.SessionDir, "fe
+@@ -56,6 +56,11 @@ func (p Paths) FeedFile() string        { return filepath.Join(p.SessionDir, "fe
  func (p Paths) UsageFile() string       { return filepath.Join(p.SessionDir, "usage.json") }
  func (p Paths) DotsPanesFile() string   { return filepath.Join(p.SessionDir, "dotspanes.json") }
  
@@ -4379,9 +4606,9 @@ diff --git a/internal/paths/paths.go b/internal/paths/paths.go
 +func (p Paths) WorktreesDir() string { return filepath.Join(p.SessionDir, "worktrees") }
 +func (p Paths) PatchesDir() string   { return filepath.Join(p.SessionDir, "patches") }
 +
- // sockFallbackDir returns a per-uid directory in the temp dir for socket fallback.
- // This ensures the directory is private to the user and protects against squatting.
- func (p Paths) sockFallbackDir() string {
+ func (p Paths) Ensure() error {
+ 	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir, p.MemoryDir()} {
+ 		if err := os.MkdirAll(d, 0o700); err != nil {
 ```
 
 `internal/queue/queue.go`:
@@ -4481,7 +4708,7 @@ diff --git a/internal/view/view.go b/internal/view/view.go
  	"herdr-dots/internal/council"
  	"herdr-dots/internal/queue"
  	"herdr-dots/internal/state"
-@@ -49,6 +51,23 @@ type Pane struct {
+@@ -60,6 +62,23 @@ type Pane struct {
  
  	Council          *CouncilState      `json:"council,omitempty"`           // a council in progress
  	CouncilPreflight *council.Preflight `json:"council_preflight,omitempty"` // the last preflight, for the popup
@@ -4505,7 +4732,7 @@ diff --git a/internal/view/view.go b/internal/view/view.go
  }
  
  // Council phases (CouncilState.Phase).
-@@ -75,6 +94,9 @@ type LibraryDot struct {
+@@ -86,6 +105,9 @@ type LibraryDot struct {
  	Backend string `json:"backend"`
  	Model   string `json:"model"`
  	Mode    string `json:"mode"`
@@ -4515,7 +4742,7 @@ diff --git a/internal/view/view.go b/internal/view/view.go
  }
  
  type Invalid struct {
-@@ -89,6 +111,7 @@ type Snapshot struct {
+@@ -100,6 +122,7 @@ type Snapshot struct {
  	Invalid       []Invalid    `json:"invalid"`
  	InjectEnabled bool         `json:"inject_enabled"`
  	PausedAll     bool         `json:"paused_all"`
@@ -4542,9 +4769,9 @@ diff --git a/internal/state/feed.go b/internal/state/feed.go
 +	OutcomeApplied = "applied"
 +)
 +
- // feedKeep is how many recent entries per pane stay in memory.
- const feedKeep = 50
- 
+ // OutcomeAsked: the main agent asked this dot (or a council, Dot "council")
+ // through the Dots MCP server (Phase 5). Detail starts with the severity, or
+ // "pass", followed by " · " and the run's cost detail when there is one.
 ```
 
 `internal/ipc/ipc.go`:
@@ -4553,8 +4780,8 @@ diff --git a/internal/state/feed.go b/internal/state/feed.go
 diff --git a/internal/ipc/ipc.go b/internal/ipc/ipc.go
 --- a/internal/ipc/ipc.go
 +++ b/internal/ipc/ipc.go
-@@ -53,6 +53,24 @@ type CouncilArgs struct {
- 	Slugs    []string `json:"slugs,omitempty"`
+@@ -56,6 +56,24 @@ type CouncilArgs struct {
+ 	Request  string   `json:"request,omitempty"` // council_preflight: the popup's id, echoed in Preflight.Request
  }
  
 +// Draft commands (Phase 7). Only the Dots pane and the diff viewer send
@@ -4649,7 +4876,7 @@ diff --git a/internal/delivery/delivery.go b/internal/delivery/delivery.go
  type Target interface {
  	PaneGet(ctx context.Context, paneID string) (herdr.PaneInfo, error)
  	AgentPrompt(ctx context.Context, target, text string) error
-@@ -81,6 +85,13 @@ func Send(ctx context.Context, t Target, paneID string, cards []queue.Card, inje
+@@ -82,6 +86,13 @@ func Send(ctx context.Context, t Target, paneID string, cards []queue.Card, inje
  	if len(cards) == 0 {
  		return Now, nil
  	}
@@ -4673,7 +4900,7 @@ Expected: every package `ok`, including `TestNoDotCanWriteByDefault`, `TestCapab
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -5249,7 +5476,7 @@ const patchHint = "  v view  A apply  ⏎ send to agent  x discard"
 diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
 --- a/internal/ui/pane/model.go
 +++ b/internal/ui/pane/model.go
-@@ -67,6 +67,12 @@ type Model struct {
+@@ -69,6 +69,12 @@ type Model struct {
  	// Council (council.go).
  	expandID string                    // council card whose member answers are shown
  	opener   func(target string) error // opens the council popup (WithOpener); nil = unavailable
@@ -5262,7 +5489,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  }
  
  const offlineHint = "offline: actions unavailable until the engine restarts"
-@@ -191,7 +197,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+@@ -193,7 +199,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
  			m.status = ""
  		}
  		m.reselect()
@@ -5274,7 +5501,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  	case DisconnectedMsg:
  		m.connected, m.seen = false, true
  		return m, nil
-@@ -200,6 +209,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+@@ -202,6 +211,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
  		return m, nil
  	case tea.KeyMsg:
  		switch {
@@ -5283,7 +5510,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  		case m.editing:
  			return m.updateEditor(msg)
  		case m.asking:
-@@ -287,6 +298,9 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+@@ -293,6 +304,9 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  	if mm, cmd, ok := m.councilKeys(k); ok {
  		return mm, cmd
  	}
@@ -5293,7 +5520,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  	switch k.String() {
  	case "enter", "a", "x", "e", "s", "m", "p", "d", "r", "M":
  		if !m.connected {
-@@ -342,7 +356,7 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+@@ -348,7 +362,7 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  	case "a":
  		var ids []string
  		for _, c := range m.pane().Cards {
@@ -5302,7 +5529,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  				ids = append(ids, c.ID)
  			}
  		}
-@@ -477,6 +491,9 @@ func (m Model) View() string {
+@@ -499,6 +513,9 @@ func (m Model) View() string {
  		// (fitRoster) counts it and it never scrolls away.
  		queueRule = style.Dim.Render(trunc(councilProgress(*p.Council), max(10, w))) + "\n" + queueRule
  	}
@@ -5312,7 +5539,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  
  	// Body: cards, feed and help, scrolled so the selected card stays visible.
  	b.Reset()
-@@ -491,7 +508,7 @@ func (m Model) View() string {
+@@ -513,7 +530,7 @@ func (m Model) View() string {
  		if sel {
  			marker = "▸"
  		}
@@ -5321,7 +5548,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  		switch {
  		case c.Status == queue.StatusOrphaned:
  			tags += " [orphaned]"
-@@ -500,7 +517,7 @@ func (m Model) View() string {
+@@ -522,7 +539,7 @@ func (m Model) View() string {
  		case c.Mode == string(dots.ModeSuggest):
  			tags += " [suggestion]"
  		}
@@ -5330,7 +5557,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  		text := c.Body
  		if !sel {
  			text = trunc(strings.ReplaceAll(text, "\n", " "), max(20, w*2))
-@@ -510,10 +527,14 @@ func (m Model) View() string {
+@@ -532,10 +549,14 @@ func (m Model) View() string {
  			b.WriteString(style.Err.Render("  delivery failed: "+c.Error) + "\n")
  		}
  		b.WriteString(councilDetail(c, m.expandID == c.ID, body))
@@ -5347,7 +5574,7 @@ diff --git a/internal/ui/pane/model.go b/internal/ui/pane/model.go
  				b.WriteString(style.Dim.Render("  ⏎ send  e edit  x dismiss"+councilHint(c)) + "\n")
  			}
  		}
-@@ -532,12 +553,15 @@ func (m Model) View() string {
+@@ -556,12 +577,15 @@ func (m Model) View() string {
  		}
  	}
  	if m.showHelp {
@@ -5374,7 +5601,7 @@ Expected: PASS, including `TestDraftConfirmShowsEverythingBeforeItRuns`, `TestDr
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -5404,10 +5631,10 @@ git commit -m "feat(ui): draft confirm, patch cards and draft progress in the Do
 - Test: `internal/engine/draft_test.go`
 
 **Interfaces:**
-- Consumes: Task 2/3 `worktree.Git`, `RepoRoot`, `NewID`, `ValidID`, `TakeSnapshot`, `DropSnapshot`, `Add`, `Remove`, `Prune`, `Capture`, `Validate`, `Caps`, `Apply`, `ErrEmptyPatch`, `ErrNotGit`, `RefPrefix`; Task 4 `patchstore.*`; Task 5 `backend.PassWrite`, `backend.WriteMode`; Task 7 `dots.CanWrite`, `CapabilitySpec.WriteTimeout`, `config.WriteEnabled`/`MaxConcurrentDrafts`, `queue.KindPatch`/`StatusApplied`/`FlagConflicts`/`SetStatusNote`, `view.DraftState`/`Draft*`, `state.OutcomeDrafted`/`OutcomeApplied`, `ipc.CmdDraft`/`CmdApplyPatch`/`CmdDiscardPatch`/`DraftArgs`, `memory.OutcomeApplied`/`OutcomeDiscarded`; Phase 4 `requestFor`, `deltaOf`, `OverUSD`, `Usage.Add`/`Cost`/`PaneCost`; v1/Phase 2 `loadMemory`, `touchMemory`, `spawnOutcome`, `reader`, `tail`, `feed`, `notify`, `reportPending`, `broadcast`, `spawn`, `delivery.CanDeliver`; test helpers `newRigWith`, `dot`, `pane`, `eventually`, `rig.attach`, `testProject`.
+- Consumes: Task 2/3 `worktree.Git`, `RepoRoot`, `NewID`, `ValidID`, `TakeSnapshot`, `DropSnapshot`, `Add`, `Remove`, `Prune`, `Capture`, `Validate`, `Caps`, `Apply`, `ErrEmptyPatch`, `ErrNotGit`, `RefPrefix`; Task 4 `patchstore.*`; Task 5 `backend.PassWrite`, `backend.WriteMode`; Task 7 `dots.CanWrite`, `CapabilitySpec.WriteTimeout`, `config.WriteEnabled`/`MaxConcurrentDrafts`, `queue.KindPatch`/`StatusApplied`/`FlagConflicts`/`SetStatusNote`, `view.DraftState`/`Draft*`, `state.OutcomeDrafted`/`OutcomeApplied`, `ipc.CmdDraft`/`CmdApplyPatch`/`CmdDiscardPatch`/`DraftArgs`, `memory.OutcomeApplied`/`OutcomeDiscarded`; Phase 4 `requestFor`, `deltaOf`, `OverUSD`, `redactErr`, `Usage.Calls`/`PaneCalls`/`Cost`/`PaneCost`; Phase 5 `charge` (no charge after the pane closed), `ErrBudget`, `ErrPaneClosed`, `e.asking` (in-flight asks count against the pane budget, as in `askBlockedLocked`), `Ask`, `AskCouncil`, `Summon`, `Council`; v1/Phase 2 `loadMemory`, `touchMemory`, `spawnOutcome`, `reader`, `tail`, `feed`, `notify`, `reportPending`, `broadcast`, `spawn`, `delivery.CanDeliver`; test helpers `newRigWith`, `dot`, `pane`, `eventually`, `rig.attach`, `rig.usage`, `testProject`.
 - Produces:
   - `engine.Deps.Patches *patchstore.Store`, `WorktreesDir string`, `Git worktree.Git` (`Patches == nil` means drafts are unavailable)
-  - `var engine.ErrWriteDisabled, ErrNotWriteCapable, ErrDraftLimit, ErrDraftRunning, ErrAgentBusy, ErrNotPatch error`
+  - `var engine.ErrWriteDisabled, ErrNotWriteCapable, ErrDraftLimit, ErrDraftRunning, ErrAgentBusy, ErrNotPatch error`; a spent budget is Phase 5's `ErrBudget`
   - `func (*Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardID string) (string, error)`; `func (*Engine) ApplyPatch(cardID string) error`; `func (*Engine) DiscardPatch(cardID string) error`
   - `Handle` routes `ipc.CmdDraft`, `CmdApplyPatch`, `CmdDiscardPatch`; `Dismiss` on a patch card discards it; `Edit` refuses a patch card; delivering a patch card sends the "Patch ready" message and marks the patch `sent`
   - `Snapshot` fills `WriteEnabled`, `LibraryDot.Write`/`WriteTimeoutSeconds` and `Pane.Drafts`; `Start` runs draft cleanup at start and daily
@@ -5619,6 +5846,21 @@ func (r *draftRig) draftsDone(t *testing.T) {
 	eventually(t, "no draft running", func() bool {
 		p, _ := r.e.Snapshot().Pane(pane)
 		return len(p.Drafts) == 0
+	})
+}
+
+// reviewsDone waits until the n turn reviews attaching started have been
+// charged and no dot is thinking.
+func (r *draftRig) reviewsDone(t *testing.T, n int) {
+	t.Helper()
+	eventually(t, "attach reviews done", func() bool {
+		p, _ := r.e.Snapshot().Pane(pane)
+		for _, d := range p.Dots {
+			if d.Status == view.StatusThinking {
+				return false
+			}
+		}
+		return r.usage.PaneCalls(pane) >= n
 	})
 }
 
@@ -5996,6 +6238,72 @@ func TestOnlyDraftsAskForWriteTools(t *testing.T) {
 		}
 	}
 }
+
+// A write-capable dot asked through MCP (ask_dot, ask_council), summoned, or
+// seated in a council runs read-only like any dot: no write tools, no
+// worktree, nothing changes on disk (decision 5; spec §10: no council patch).
+func TestAsksCouncilsAndSummonsOfAWriteDotNeverWrite(t *testing.T) {
+	r := newDraftRig(t, draftOpts{}, writeDot("Security"), writeDot("Backend"))
+	r.dr.set(fixJWT, nil)
+	r.attach(t, "security", "backend")
+	r.reviewsDone(t, 2) // attaching reviews the newest turn; an ask waits for it
+	if _, err := r.e.Ask(context.Background(), pane, "security", "is the token safe?", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.e.AskCouncil(context.Background(), pane, "is the token safe?"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.e.Summon(context.Background(), pane, "backend", "look again"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.e.Council(context.Background(), pane, "review the auth change", nil); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the council and the summon finished", func() bool {
+		p, _ := r.e.Snapshot().Pane(pane)
+		r.dr.mu.Lock()
+		n := len(r.dr.reqs)
+		r.dr.mu.Unlock()
+		return p.Council == nil && n >= 6 // ask 1 + ask_council 2 + summon 1 + council 2 (+ chairs)
+	})
+	r.dr.mu.Lock()
+	defer r.dr.mu.Unlock()
+	for i, req := range r.dr.reqs {
+		if req.Write || req.Pass == backend.PassWrite || backend.WriteMode(req) {
+			t.Errorf("run %d asked for write tools: %+v", i, req)
+		}
+		if strings.HasPrefix(req.Cwd, r.wts) {
+			t.Errorf("run %d ran in a draft worktree: %s", i, req.Cwd)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(r.repo, "auth.js")); strings.Contains(string(got), "setCookie") {
+		t.Fatal("a read-only run changed the user's files")
+	}
+	if ents, _ := os.ReadDir(r.wts); len(ents) != 0 || r.refs(t) != "" {
+		t.Fatalf("a read-only run made a worktree or a snapshot: %v", ents)
+	}
+}
+
+// A draft is one call: it is refused once the dot's call budget is spent.
+func TestDraftIsRefusedWhenTheBudgetIsSpent(t *testing.T) {
+	d := writeDot("Security")
+	d.Budget.MaxCallsPerSession = 2
+	r := newDraftRig(t, draftOpts{}, d)
+	r.dr.set(fixJWT, nil)
+	r.attach(t, "security")
+	r.reviewsDone(t, 1) // the attach review is call 1
+	if _, err := r.e.Draft(context.Background(), pane, "security", "fix", ""); err != nil {
+		t.Fatal(err)
+	}
+	r.patchCard(t)
+	r.draftsDone(t)
+	if n := r.usage.Calls(pane, "security"); n != 2 {
+		t.Fatalf("calls %d, want 2: the draft is one call", n)
+	}
+	if _, err := r.e.Draft(context.Background(), pane, "security", "again", ""); !errors.Is(err, ErrBudget) {
+		t.Fatalf("over budget: %v, want ErrBudget", err)
+	}
+}
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -6076,6 +6384,10 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 	}
 	e.mu.Lock()
 	d, ok := e.dots[slug]
+	var berr error
+	if ok {
+		berr = e.draftBudgetLocked(paneID, d)
+	}
 	e.mu.Unlock()
 	if !ok {
 		return "", fmt.Errorf("unknown dot %q", slug)
@@ -6083,8 +6395,8 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 	if !d.Capabilities.Write || !dots.CanWrite(d.Backend.Kind) {
 		return "", ErrNotWriteCapable
 	}
-	if err := e.draftBudget(paneID, d); err != nil {
-		return "", err
+	if berr != nil {
+		return "", berr
 	}
 	instruction = strings.TrimSpace(textutil.SanitizeModelText(instruction))
 	if instruction == "" && fromCardID != "" {
@@ -6125,6 +6437,12 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 		e.mu.Unlock()
 		return "", ErrDraftLimit
 	}
+	// Checked again with the draft about to be reserved: asks and drafts
+	// that started meanwhile count as calls already made.
+	if err := e.draftBudgetLocked(paneID, d); err != nil {
+		e.mu.Unlock()
+		return "", err
+	}
 	e.drafts[id] = &draftRun{pane: paneID, slug: slug, phase: view.DraftSnapshot, started: time.Now()}
 	e.mu.Unlock()
 	e.broadcast()
@@ -6132,13 +6450,26 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 	return id, nil
 }
 
-// draftBudget refuses a draft when the dot's or the pane's budget is spent:
-// a draft counts as one call (and its cost) like any run.
-func (e *Engine) draftBudget(paneID string, d dots.Dot) error {
+// draftBudgetLocked refuses a draft when the dot's or the pane's budget is
+// spent: a draft counts as one call (and its cost) like any run, and, as for
+// MCP asks (askBlockedLocked), asks and drafts in flight on the pane count as
+// calls already made. Caller holds e.mu (e.mu -> stores).
+func (e *Engine) draftBudgetLocked(paneID string, d dots.Dot) error {
 	cfg := e.config()
-	if e.d.Usage.Calls(paneID, d.Slug) >= d.Budget.MaxCallsPerSession || e.d.Usage.PaneCalls(paneID) >= cfg.SessionBudgetCalls ||
-		OverUSD(e.d.Usage.Cost(paneID, d.Slug), d.Budget.MaxUSDPerSession) || OverUSD(e.d.Usage.PaneCost(paneID), cfg.SessionBudgetUSD) {
-		return errors.New("budget reached; resets on a new agent session or press r")
+	inFlight := 0
+	for k := range e.asking {
+		if k.pane == paneID {
+			inFlight++
+		}
+	}
+	for _, dr := range e.drafts {
+		if dr.pane == paneID {
+			inFlight++
+		}
+	}
+	if e.d.Usage.Calls(paneID, d.Slug) >= d.Budget.MaxCallsPerSession || OverUSD(e.d.Usage.Cost(paneID, d.Slug), d.Budget.MaxUSDPerSession) ||
+		e.d.Usage.PaneCalls(paneID)+inFlight >= cfg.SessionBudgetCalls || OverUSD(e.d.Usage.PaneCost(paneID), cfg.SessionBudgetUSD) {
+		return fmt.Errorf("%w; resets on a new agent session or press r", ErrBudget)
 	}
 	return nil
 }
@@ -6168,10 +6499,13 @@ func (e *Engine) runDraft(id string, att state.Attachment, repo string, d dots.D
 		turn = turns[len(turns)-1].Index
 	}
 	fail := func(err error) {
+		// Run errors can carry provider text: keys redacted, no control
+		// characters in the log, the feed or a toast (as runFailed does).
+		msg := textutil.SanitizeModelText(redactErr(err).Error())
 		_ = e.d.Patches.Delete(id)
-		e.d.Logf("draft %s by %s on %s: %v", id, d.Slug, att.PaneID, err)
-		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "draft failed: "+err.Error())
-		e.notify(d, "draft failed: "+err.Error())
+		e.d.Logf("draft %s by %s on %s: %s", id, d.Slug, att.PaneID, msg)
+		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "draft failed: "+msg)
+		e.notify(d, "draft failed: "+msg)
 	}
 	// The metadata comes first, so a crash at any later point leaves a
 	// record the next engine start cleans up.
@@ -6222,7 +6556,7 @@ func (e *Engine) runDraft(id string, att state.Attachment, repo string, d dots.D
 	rctx, cancel := context.WithTimeout(ctx, d.Capabilities.WriteTimeout())
 	res, err := be.Run(rctx, req)
 	cancel()
-	_ = e.d.Usage.Add(att.PaneID, d.Slug, deltaOf(res))
+	e.charge(att.PaneID, d.Slug, deltaOf(res)) // not if the pane closed meanwhile (Phase 5)
 	if err != nil {
 		fail(err)
 		return
@@ -6241,9 +6575,10 @@ func (e *Engine) runDraft(id string, att state.Attachment, repo string, d dots.D
 			e.feed(att.PaneID, d.Slug, turn, state.OutcomePass, "draft produced no changes")
 			return
 		}
-		_, _ = e.d.Patches.Update(id, func(m *patchstore.Meta) { m.Status, m.Reason = patchstore.StatusRejected, err.Error() })
-		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "patch rejected ("+err.Error()+")")
-		e.notify(d, "patch rejected: "+err.Error())
+		reason := textutil.SanitizeModelText(err.Error()) // names paths the dot chose
+		_, _ = e.d.Patches.Update(id, func(m *patchstore.Meta) { m.Status, m.Reason = patchstore.StatusRejected, reason })
+		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "patch rejected ("+reason+")")
+		e.notify(d, "patch rejected: "+reason)
 		return
 	}
 	summary := strings.TrimSpace(textutil.SanitizeModelText(res.Verdict.Message))
@@ -6257,6 +6592,10 @@ func (e *Engine) runDraft(id string, att state.Attachment, repo string, d dots.D
 	meta.Summary, meta.Stat, meta.Files, meta.Paths, meta.Flags, meta.Status = summary, p.Stat, p.Files, p.Paths(), p.Flags, patchstore.StatusReady
 	if err := e.d.Patches.PutPatch(meta, p.Diff); err != nil {
 		fail(err)
+		return
+	}
+	if _, ok := e.d.Attachments.Get(att.PaneID); !ok {
+		fail(ErrPaneClosed) // no card for a pane that is gone: nobody could apply it
 		return
 	}
 	c, err := e.d.Queue.Add(queue.Card{Kind: queue.KindPatch, Dot: d.Slug, DotName: d.Name, Glyph: d.Glyph, PaneID: att.PaneID,
@@ -6550,20 +6889,21 @@ func (e *Engine) maintainDrafts() {
 diff --git a/internal/engine/engine.go b/internal/engine/engine.go
 --- a/internal/engine/engine.go
 +++ b/internal/engine/engine.go
-@@ -14,10 +14,12 @@ import (
+@@ -16,11 +16,13 @@ import (
  	"herdr-dots/internal/dots"
  	"herdr-dots/internal/herdr"
  	"herdr-dots/internal/memory"
 +	"herdr-dots/internal/patchstore"
  	"herdr-dots/internal/queue"
  	"herdr-dots/internal/state"
+ 	"herdr-dots/internal/textutil"
  	"herdr-dots/internal/transcript"
  	"herdr-dots/internal/view"
 +	"herdr-dots/internal/worktree"
  )
  
  type Deps struct {
-@@ -39,6 +41,11 @@ type Deps struct {
+@@ -42,6 +44,11 @@ type Deps struct {
  
  	Memory         *memory.Store                            // nil = memory off (v1 behavior)
  	ResolveProject func(cwd string) (memory.Project, error) // nil = memory.ResolveProject with git
@@ -6575,7 +6915,7 @@ diff --git a/internal/engine/engine.go b/internal/engine/engine.go
  }
  
  type key struct{ pane, slug string }
-@@ -87,6 +94,11 @@ type Engine struct {
+@@ -112,6 +119,11 @@ type Engine struct {
  	origBody map[string]string       // card id → body before its first edit
  	memToast bool                    // "memory write failed" already shown
  
@@ -6587,7 +6927,7 @@ diff --git a/internal/engine/engine.go b/internal/engine/engine.go
  	// wmu/wg/closed track background goroutines so Wait can drain them.
  	wmu    sync.Mutex
  	wg     sync.WaitGroup
-@@ -148,6 +160,8 @@ func New(d Deps) *Engine {
+@@ -173,6 +185,8 @@ func New(d Deps) *Engine {
  		learning: map[key]bool{},
  		memStats: map[string]memory.Stats{},
  		origBody: map[string]string{},
@@ -6596,7 +6936,7 @@ diff --git a/internal/engine/engine.go b/internal/engine/engine.go
  	}
  	if e.d.ConfigCheck <= 0 {
  		e.d.ConfigCheck = 3 * time.Second
-@@ -191,6 +205,9 @@ func (e *Engine) ReloadDots() {
+@@ -217,6 +231,9 @@ func (e *Engine) ReloadDots() {
  // and begins polling. Call once, before serving commands.
  func (e *Engine) Start(ctx context.Context) {
  	e.ctx = ctx
@@ -6606,7 +6946,7 @@ diff --git a/internal/engine/engine.go b/internal/engine/engine.go
  	for _, a := range e.d.Attachments.List() {
  		if _, err := e.d.Herdr.PaneGet(ctx, a.PaneID); err != nil {
  			if herdr.IsNotFound(err) {
-@@ -207,6 +224,9 @@ func (e *Engine) Start(ctx context.Context) {
+@@ -233,6 +250,9 @@ func (e *Engine) Start(ctx context.Context) {
  	if e.d.Memory != nil {
  		e.spawn(e.memoryLoop)
  	}
@@ -6616,7 +6956,7 @@ diff --git a/internal/engine/engine.go b/internal/engine/engine.go
  }
  
  func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) error {
-@@ -748,7 +768,7 @@ func (e *Engine) feed(paneID, slug string, turn int, outcome, detail string) {
+@@ -891,7 +911,7 @@ func (e *Engine) feed(paneID, slug string, turn int, outcome, detail string) {
  func (e *Engine) Snapshot() view.Snapshot {
  	e.mu.Lock()
  	defer e.mu.Unlock()
@@ -6625,7 +6965,7 @@ diff --git a/internal/engine/engine.go b/internal/engine/engine.go
  	slugs := make([]string, 0, len(e.dots))
  	for slug := range e.dots {
  		slugs = append(slugs, slug)
-@@ -759,7 +779,8 @@ func (e *Engine) Snapshot() view.Snapshot {
+@@ -902,7 +922,8 @@ func (e *Engine) Snapshot() view.Snapshot {
  	for _, slug := range slugs {
  		d := e.dots[slug]
  		s.Library = append(s.Library, view.LibraryDot{Slug: slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
@@ -6635,17 +6975,17 @@ diff --git a/internal/engine/engine.go b/internal/engine/engine.go
  	}
  	for _, le := range e.invalid {
  		s.Invalid = append(s.Invalid, view.Invalid{File: le.File, Line: le.Line, Error: le.Err.Error()})
-@@ -788,6 +809,7 @@ func (e *Engine) Snapshot() view.Snapshot {
- 				MemoryEntries: ms.Entries[da.Slug], Learning: e.learning[key{a.PaneID, da.Slug}]})
+@@ -935,6 +956,7 @@ func (e *Engine) Snapshot() view.Snapshot {
+ 				BudgetUSD: d.Budget.MaxUSDPerSession})
  		}
  		pv.Cards = e.d.Queue.Visible(a.PaneID)
 +		pv.Drafts = e.draftViews(a.PaneID)
  		pv.Feed = e.d.Feed.Recent(a.PaneID, 20)
+ 		pv.Council, pv.CouncilPreflight = e.councilViewLocked(a.PaneID)
  		s.Panes = append(s.Panes, pv)
- 		seen[a.PaneID] = true
 ```
 
-`internal/engine/handle.go` (add the three cases before the closing `}` of the `switch`; Phase 3 and Phase 5 added cases above):
+`internal/engine/handle.go` (three cases after `ipc.CmdMemoryChanged`):
 
 ```diff
 diff --git a/internal/engine/handle.go b/internal/engine/handle.go
@@ -6674,9 +7014,9 @@ diff --git a/internal/engine/handle.go b/internal/engine/handle.go
 +			return err
 +		}
 +		return e.DiscardPatch(a.ID)
- 	}
- 	return fmt.Errorf("unknown command %q", cmd)
- }
+ 	case ipc.CmdCouncil:
+ 		var a ipc.CouncilArgs
+ 		if err := decode(raw, &a); err != nil {
 ```
 
 `internal/engine/deliver.go`:
@@ -6730,12 +7070,13 @@ diff --git a/internal/engine/deliver.go b/internal/engine/deliver.go
 diff --git a/cmd/herdr-dots/engine.go b/cmd/herdr-dots/engine.go
 --- a/cmd/herdr-dots/engine.go
 +++ b/cmd/herdr-dots/engine.go
-@@ -20,10 +20,12 @@ import (
+@@ -19,11 +19,13 @@ import (
  	"herdr-dots/internal/herdr"
  	"herdr-dots/internal/ipc"
  	"herdr-dots/internal/lockfile"
 +	"herdr-dots/internal/patchstore"
  	"herdr-dots/internal/paths"
+ 	"herdr-dots/internal/platform"
  	"herdr-dots/internal/queue"
  	"herdr-dots/internal/state"
  	"herdr-dots/internal/transcript"
@@ -6743,7 +7084,7 @@ diff --git a/cmd/herdr-dots/engine.go b/cmd/herdr-dots/engine.go
  )
  
  const maxLogBytes = 5 << 20
-@@ -146,6 +148,10 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
+@@ -196,6 +198,10 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
  
  		Memory:         memoryStoreFor(p, cfg, logf),
  		ResolveProject: resolveProject,
@@ -6759,12 +7100,12 @@ diff --git a/cmd/herdr-dots/engine.go b/cmd/herdr-dots/engine.go
 - [ ] **Step 5: Run the tests to see them pass**
 
 Run: `gofmt -w internal/engine cmd/herdr-dots && GOTOOLCHAIN=local go test -race ./internal/engine/ ./cmd/herdr-dots/ -v 2>&1 | grep -E '^(--- FAIL|--- PASS: Test(Draft|Apply|Discard|Sending|Empty|Engine|Only)|ok|FAIL)'`
-Expected: PASS: `TestDraftHappyPathMakesAPatchCard`, `TestDraftNeedsBothOptInsAndAShellFreeBackend`, `TestDraftRefusesOutsideGitAndWithoutAnInstruction`, `TestDraftLimitsAndProgressInTheSnapshot`, `TestApplyPatchWaitsForAnIdleAgentAndTouchesOnlyTheWorkingTree`, `TestApplyPatchReportsConflictsAndRefusesAnotherRepository`, `TestDiscardAndDismissRemoveThePatchAndRecordALedgerLine`, `TestSendingAPatchDeliversWhereItIsNotTheDiff`, `TestEmptyRejectedAndFailedDraftsLeaveNothingBehind`, `TestEngineStartCleansUpAnInterruptedDraft`, `TestOnlyDraftsAskForWriteTools`, and every earlier engine and `cmd/herdr-dots` test.
+Expected: PASS: `TestDraftHappyPathMakesAPatchCard`, `TestDraftNeedsBothOptInsAndAShellFreeBackend`, `TestDraftRefusesOutsideGitAndWithoutAnInstruction`, `TestDraftLimitsAndProgressInTheSnapshot`, `TestApplyPatchWaitsForAnIdleAgentAndTouchesOnlyTheWorkingTree`, `TestApplyPatchReportsConflictsAndRefusesAnotherRepository`, `TestDiscardAndDismissRemoveThePatchAndRecordALedgerLine`, `TestSendingAPatchDeliversWhereItIsNotTheDiff`, `TestEmptyRejectedAndFailedDraftsLeaveNothingBehind`, `TestEngineStartCleansUpAnInterruptedDraft`, `TestOnlyDraftsAskForWriteTools`, `TestAsksCouncilsAndSummonsOfAWriteDotNeverWrite`, `TestDraftIsRefusedWhenTheBudgetIsSpent`, and every earlier engine and `cmd/herdr-dots` test.
 
 - [ ] **Step 6: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -7511,23 +7852,23 @@ func patchViewer(hc herdr.Client) func(target, patchID, cardID string, apply boo
 diff --git a/cmd/herdr-dots/main.go b/cmd/herdr-dots/main.go
 --- a/cmd/herdr-dots/main.go
 +++ b/cmd/herdr-dots/main.go
-@@ -26,6 +26,7 @@ var commands = map[string]handler{
- 	"action":     runAction,
+@@ -27,6 +27,7 @@ var commands = map[string]handler{
  	"setup-keys": runSetupKeys,
+ 	"setup-mcp":  runSetupMCP,
  	"memory":     runMemory,
 +	"diff-ui":    runDiffUI,
+ 	"keys":       runKeys,
+ 	"mcp":        runMCP,
  }
- 
- func usage() error {
 diff --git a/cmd/herdr-dots/ui.go b/cmd/herdr-dots/ui.go
 --- a/cmd/herdr-dots/ui.go
 +++ b/cmd/herdr-dots/ui.go
-@@ -101,7 +101,11 @@ func runPane([]string) error {
+@@ -103,7 +103,11 @@ func runPane([]string) error {
  	if err != nil {
  		return err
  	}
--	prog := tea.NewProgram(pane.New(resolveTarget(p.DotsPanesFile()), cl), tea.WithAltScreen())
-+	m := pane.New(resolveTarget(p.DotsPanesFile()), cl)
+-	prog := tea.NewProgram(pane.New(resolveTarget(p.DotsPanesFile()), cl).WithOpener(paneOpener), tea.WithAltScreen())
++	m := pane.New(resolveTarget(p.DotsPanesFile()), cl).WithOpener(paneOpener)
 +	if hc, err := herdr.NewFromEnv(); err == nil {
 +		m = m.WithPatchViewer(patchViewer(hc)) // v and A on a patch card open the diff pane
 +	}
@@ -7538,7 +7879,7 @@ diff --git a/cmd/herdr-dots/ui.go b/cmd/herdr-dots/ui.go
 diff --git a/herdr-plugin.toml b/herdr-plugin.toml
 --- a/herdr-plugin.toml
 +++ b/herdr-plugin.toml
-@@ -46,6 +46,12 @@ width = "80%"
+@@ -60,6 +60,12 @@ width = "80%"
  height = "80%"
  command = ["./bin/herdr-dots", "manage"]
  
@@ -7563,7 +7904,7 @@ Expected: PASS: `TestParseSplitsFilesHunksAndBinaries`, `TestViewShowsTheSummary
 - [ ] **Step 6: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -7590,7 +7931,7 @@ git commit -m "feat(ui): zoomed patch viewer with the apply confirm; Dots pane o
 
 **Files:**
 - Modify: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, `docs/superpowers/notes/2026-10-08-phase-7-verification.md`, `internal/version/version.go`, `herdr-plugin.toml` (the `version` line only)
-- Test: the version pin in `cmd/herdr-dots` (`grep -rn 'func TestVersionIsPhase' cmd/herdr-dots/` finds it; if nothing is found, create `cmd/herdr-dots/version_test.go`)
+- Test: `cmd/herdr-dots/memwire_test.go` (Phase 6's `TestVersionIsPhaseSix` becomes `TestVersionIsPhaseSeven`)
 
 **Interfaces:**
 - Consumes: the facts above (Plan decisions 1–3, 13–14, 20, 24–25; the notes' user gates).
@@ -7598,22 +7939,24 @@ git commit -m "feat(ui): zoomed patch viewer with the apply confirm; Dots pane o
 
 - [ ] **Step 1: Pin the new version in a test**
 
-Run `grep -rn 'func TestVersionIsPhase' cmd/herdr-dots/`. Rename the function it finds to `TestVersionIsPhaseSeven` and make it expect `0.7.0`; if it finds nothing, create `cmd/herdr-dots/version_test.go`:
+Phase 6's pin is `TestVersionIsPhaseSix` in `cmd/herdr-dots/memwire_test.go`. Rename it and make it expect `0.7.0` (`git apply`):
 
-```go
-package main
-
-import (
-	"testing"
-
-	"herdr-dots/internal/version"
-)
-
-func TestVersionIsPhaseSeven(t *testing.T) {
-	if version.Version != "0.7.0" {
-		t.Fatalf("version %s, want 0.7.0", version.Version)
-	}
-}
+```diff
+diff --git a/cmd/herdr-dots/memwire_test.go b/cmd/herdr-dots/memwire_test.go
+--- a/cmd/herdr-dots/memwire_test.go
++++ b/cmd/herdr-dots/memwire_test.go
+@@ -57,8 +57,8 @@ func TestBuildEngineWiresMemory(t *testing.T) {
+ 	}
+ }
+ 
+-func TestVersionIsPhaseSix(t *testing.T) {
+-	if version.Version != "0.6.0" {
+-		t.Fatalf("version %s, want 0.6.0", version.Version)
++func TestVersionIsPhaseSeven(t *testing.T) {
++	if version.Version != "0.7.0" {
++		t.Fatalf("version %s, want 0.7.0", version.Version)
+ 	}
+ }
 ```
 
 Run: `GOTOOLCHAIN=local go test ./cmd/herdr-dots/ -run 'TestVersionIsPhaseSeven|TestManifest'`
@@ -7628,7 +7971,7 @@ Expected: PASS (including Phase 6's `TestManifestDeclaresEveryPlatformAndOneBuil
 
 - [ ] **Step 3: README: status and the write-capable dots section**
 
-In `README.md` (post-Phase-6 form; anchor on headings):
+In `README.md` (anchor on headings and bullet starts, which Phase 6's README task keeps):
 
 1. Replace the status blockquote at the top (the paragraph starting `> **Status:`) with:
 
@@ -7640,10 +7983,10 @@ In `README.md` (post-Phase-6 form; anchor on headings):
 > [Roadmap](#roadmap) for what's missing.
 ```
 
-2. Add this section after the dot-memory section (before `## Files`):
+2. Add this section at the end of `## Using it`, directly before `## Files` (after the "Dots MCP server" section and any section Phase 6 added there):
 
 ````markdown
-## Write-capable dots (drafts)
+### Write-capable dots (drafts)
 
 A dot you trust can draft a fix instead of only describing it. It edits an isolated copy of your
 repository; nothing changes in your files until you read the diff and apply it.
@@ -7693,7 +8036,7 @@ the advice; a discarded one leaves only a ledger line.
 
 - [ ] **Step 4: README: privacy and safety, known gaps, roadmap**
 
-Under `## Privacy and safety`, replace the bullet that says dots are read-only with:
+Under `## Privacy and safety`, replace the bullet that starts `- Dots are read-only:` with:
 
 ```markdown
 - Dots are read-only unless you turn on writing twice (`write_enabled` and a dot's
@@ -7711,11 +8054,17 @@ Under `## Privacy and safety`, replace the bullet that says dots are read-only w
 - Patches that touch `.git`, reach outside the repository, add symlinks pointing outside, or go
   over the size or file caps are rejected before you see them. Every draft needs two approvals:
   one to start, one (with the diff on screen) to apply.
-- Forgetting is real: deleting a dot's memory in all projects (the manage popup) also removes the
-  ledger lines its cards left and the project conventions it proposed that you never approved.
 ```
 
-Under `## Known gaps`, add:
+Then extend the existing `- Forgetting is real:` bullet (Phase 2) with these two lines, so it ends:
+
+```markdown
+  and `purge` deletes a project's whole memory.
+  Deleting a dot's memory in all projects (the manage popup) also removes the ledger lines its
+  cards left and the project conventions it proposed that you never approved.
+```
+
+At the end of the list under `## Known gaps in this scaffold`, add:
 
 ```markdown
 - Write-capable dots (0.7.0) are unit-tested, with real git, on macOS only; a real draft inside
@@ -7725,10 +8074,11 @@ Under `## Known gaps`, add:
 - Drafts can't run tests or builds: write-capable dots get no shell.
 ```
 
-In the `## Roadmap` table, set the Phase 7 row (it may sit inside a "6–10" or "Later" row; split it out if so) to:
+In the `## Roadmap` table, Phase 6's README task splits the `| 6–10 |` row into a `| 6 |` row and a `| 7–10 |` row. Replace the `| 7–10 |` row with these two rows (if the README still has the `| 6–10 |` row, replace that one with a `| 6 | Windows support (0.6.0) |` row followed by these two):
 
 ```markdown
 | 7 | Write-capable dots (0.7.0): drafts in isolated git worktrees, patch cards, a diff viewer, apply to the working tree only. Built and unit-tested; **not run end to end in Herdr yet** |
+| 8–10 | Proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
 ```
 
 Keep the Phase 2 row exactly as it is (**VITAL**), keep Phase 6's row, and keep Phases 8–10 listed as not built.
@@ -7758,7 +8108,7 @@ Run:
 ```bash
 grep -n 'VITAL' README.md
 grep -n 'not been run end to end\|not run end to end' README.md
-grep -nE 'is (done|finished|complete|ready)|feature complete|production[- ]ready' README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md | grep -v 'only when\|until\|not \|after Phase 10'
+grep -nE 'is (done|finished|complete|ready)|feature complete|production[- ]ready' README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md | grep -v 'only when\|until\|not \|only after\|Phase 10\|"feature complete"'
 sh scripts/build.sh && ./bin/herdr-dots version
 ```
 
@@ -7767,7 +8117,7 @@ Expected: at least one `VITAL` line (Phase 2); at least two "not … run end to 
 - [ ] **Step 7: Cross-OS gate and whole-branch checks**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -7783,7 +8133,7 @@ Expected: `gofmt` prints nothing; every build, vet and test command succeeds; th
 - [ ] **Step 8: Commit**
 
 ```bash
-git add README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md docs/superpowers/notes/2026-10-08-phase-7-verification.md internal/version/version.go herdr-plugin.toml cmd/herdr-dots
+git add README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md docs/superpowers/notes/2026-10-08-phase-7-verification.md internal/version/version.go herdr-plugin.toml cmd/herdr-dots/memwire_test.go
 git commit -m "docs: write-capable dots in the README and roadmap; version 0.7.0 (product not done)"
 ```
 
@@ -7818,8 +8168,8 @@ Run against the spec (`docs/superpowers/specs/2026-10-08-herdr-dots-phase-7-writ
 
 Deviations from the spec, each with its reason in Plan decisions: codex can't draft (1), claude `--allowedTools` without `Edit,Write` (2), apply through a private index and no separate check (3, 4), escaping symlinks defanged (7), `internal/patchstore` (9), `runDraft` instead of `runOpts.write` (10), gate 2 in the viewer (13), `DraftState.StartedAt` (19), no summon-popup draft (21).
 
-**2. Placeholder scan.** No "TBD", "TODO", "implement later" or "similar to Task N". Every code step carries complete code or an exact diff; Task 6's adapter edits are exact find-and-replace blocks because the adapters exist only in the Phase 4 plan.
+**2. Placeholder scan.** No "TBD", "TODO", "implement later" or "similar to Task N". Every code step carries complete code or an exact diff; since the reconcile (2026-10-09) every diff, Task 6's adapter diff included, is `git diff` output against the merged Phases 2–6 code.
 
 **3. Type consistency.** `worktree.Snapshot`/`Checkout`/`Patch`/`Caps` and `Apply(ctx, g, repo, patchPath, paths)` (Tasks 2–3) are what Task 8 calls; `patchstore.Meta` fields (Task 4) match their use in Tasks 8 and 9 (`Card`, `Repo`, `Paths`, `Stat`, `Flags`, `Summary`, `Status`, `Conflicts`); `ipc.DraftArgs` (Task 7) is what the pane sends (Task 10, asserted byte for byte) and the engine decodes (Task 8); `pane.PatchViewer` (Task 10) is the signature of `patchViewer(hc)` (Task 9); `view.DraftState`/`LibraryDot.Write`/`WriteTimeoutSeconds`/`Snapshot.WriteEnabled` (Task 7) are filled by Task 8 and read by Task 10; `backend.WriteMode` (Task 5) is what Task 6's adapters and Task 8's `drafter` fake use; `memory.DotDeletion` (Task 0) is what the manage popup prints.
 
-**4. Review Focus.** Each of the five items names its tests and owning tasks (2, 3, 5, 6, 8). Found while planning and also tested: a swapped patch file (4, 9), escape sequences in a diff (9), hooks and fsmonitor programs (2, 3), a codex arg moving the working root (5), a damaged `project.json` during `DeleteDot` (0), a stale draft record from before the engine started versus a draft started right after (8, `startedAt`).
+**4. Review Focus.** Each of the five items names its tests and owning tasks (2, 3, 5, 6, 8). Found while planning and also tested: a swapped patch file (4, 9), escape sequences in a diff (9), hooks and fsmonitor programs (2, 3), a codex arg moving the working root (5), a damaged `project.json` during `DeleteDot` (0), a stale draft record from before the engine started versus a draft started right after (8, `startedAt`). Added by the reconcile: write tools that keep the read jail's exact spellings, folded deny names and home-anchored globs (6, `TestWriteToolsUseTheReadJail`), MCP asks, councils and summons of a write-capable dot staying read-only (8, `TestAsksCouncilsAndSummonsOfAWriteDotNeverWrite`), a draft counted against the budget (8, `TestDraftIsRefusedWhenTheBudgetIsSpent`), the worktrees' parent kept private (2), Windows-reserved names refused exactly where Phase 6 says (2, 3, 6), and the main agent's proposals surviving `DeleteDot` (0).
