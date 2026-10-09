@@ -16,6 +16,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
+	"herdr-dots/internal/state"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -53,10 +54,15 @@ type Model struct {
 	asking    bool
 	askSlug   string
 	question  textinput.Model
-	width     int
-	height    int // 0 = unknown: render everything
-	status    string
-	seen      bool // a snapshot or disconnect has been received
+	// M chooser: remember the selected card (f/r/c/g); r asks for a reason.
+	remembering bool
+	rememberID  string
+	reasoning   bool
+	reason      textinput.Model
+	width       int
+	height      int // 0 = unknown: render everything
+	status      string
+	seen        bool // a snapshot or disconnect has been received
 }
 
 const offlineHint = "offline: actions unavailable until the engine restarts"
@@ -69,7 +75,9 @@ func New(target string, c Caller) Model {
 	ta.ShowLineNumbers = false
 	ti := textinput.New()
 	ti.Placeholder = "optional question, enter to summon"
-	return Model{target: target, caller: c, editor: ta, question: ti}
+	ri := textinput.New()
+	ri.Placeholder = "optional reason, enter to save"
+	return Model{target: target, caller: c, editor: ta, question: ti, reason: ri}
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -192,6 +200,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateEditor(msg)
 		case m.asking:
 			return m.updateQuestion(msg)
+		case m.remembering:
+			return m.updateRemember(msg)
 		}
 		return m.updateKeys(msg)
 	}
@@ -227,17 +237,58 @@ func (m Model) updateQuestion(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateRemember handles the M chooser: f accepted finding, r rule (asks for
+// an optional reason), c project convention, g this dot everywhere.
+func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.reasoning {
+		switch k.String() {
+		case "esc":
+			m.remembering, m.reasoning = false, false
+			return m, nil
+		case "enter":
+			m.remembering, m.reasoning = false, false
+			m.status = "remembered as a rule"
+			return m, m.call(ipc.CmdRemember, ipc.RememberArgs{CardID: m.rememberID, As: "rule", Reason: strings.TrimSpace(m.reason.Value())})
+		}
+		var cmd tea.Cmd
+		m.reason, cmd = m.reason.Update(k)
+		return m, cmd
+	}
+	var as string
+	switch k.String() {
+	case "esc":
+		m.remembering = false
+		return m, nil
+	case "f":
+		as = "finding"
+	case "r":
+		m.reasoning = true
+		m.reason.SetValue("")
+		m.reason.Focus()
+		return m, textinput.Blink
+	case "c":
+		as = "convention"
+	case "g":
+		as = "global"
+	default:
+		return m, nil
+	}
+	m.remembering = false
+	m.status = "remembered as " + as
+	return m, m.call(ipc.CmdRemember, ipc.RememberArgs{CardID: m.rememberID, As: as})
+}
+
 func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	switch k.String() {
-	case "enter", "a", "x", "e", "s", "m", "p", "d", "r":
+	case "enter", "a", "x", "e", "s", "m", "p", "d", "r", "M":
 		if !m.connected {
 			m.status = offlineHint
 			return m, nil
 		}
 	}
 	switch k.String() {
-	case "enter", "x", "e":
+	case "enter", "x", "e", "M":
 		if m.area != areaQueue {
 			m.status = "tab to the queue to act on a card"
 			return m, nil
@@ -295,6 +346,10 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if c, ok := m.selectedCard(); ok {
 			return m, m.call(ipc.CmdDismiss, ipc.CardArgs{ID: c.ID})
 		}
+	case "M":
+		if c, ok := m.selectedCard(); ok {
+			m.remembering, m.reasoning, m.rememberID = true, false, c.ID
+		}
 	case "e":
 		if c, ok := m.selectedCard(); ok && sendable(c) {
 			m.editing, m.editID = true, c.ID
@@ -344,8 +399,23 @@ func rule(title string, w int) string {
 
 const helpText = `j/k move   tab roster/queue   t next agent
 ⏎ send card   a send all   e edit   x dismiss
+M remember card (finding, rule, convention, global)
 s summon dot   m cycle mode   p pause   d detach
 r reset dot+budget    f feed   ? help   q close`
+
+// feedOutcome shows memory outcomes with their detail: "learned 2",
+// "suppressed (d:m17)".
+func feedOutcome(e state.FeedEntry) string {
+	switch e.Outcome {
+	case state.OutcomeLearned:
+		if e.Detail != "" {
+			return e.Detail
+		}
+	case state.OutcomeSuppressed:
+		return "suppressed (" + strings.TrimPrefix(e.Detail, "similar to ") + ")"
+	}
+	return e.Outcome
+}
 
 func (m Model) View() string {
 	w := m.width
@@ -359,6 +429,12 @@ func (m Model) View() string {
 		agent = "agent"
 	}
 	title := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
+	if ok && p.ProjectName != "" {
+		title += fmt.Sprintf(" · %s · mem %d", p.ProjectName, p.MemoryEntries)
+		if p.MemoryProposals > 0 {
+			title += fmt.Sprintf(" (%d proposals)", p.MemoryProposals)
+		}
+	}
 	if ok {
 		title += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
 	}
@@ -378,7 +454,11 @@ func (m Model) View() string {
 	top := b.String() // title and banners: always on screen
 	roster := make([]string, 0, len(p.Dots))
 	for i, d := range p.Dots {
-		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, d.Status)
+		status := d.Status
+		if d.Learning {
+			status = "◌ learning…"
+		}
+		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, status)
 		if m.area == areaRoster && i == m.roster {
 			line = style.Selected.Render(line)
 		}
@@ -431,7 +511,7 @@ func (m Model) View() string {
 	if m.showFeed {
 		b.WriteString(rule("FEED", w))
 		for _, e := range p.Feed {
-			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), e.Outcome)
+			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
 			if e.Detail != "" && e.Outcome == "error" {
 				line += "  " + trunc(e.Detail, max(10, w-24))
 			}
@@ -450,6 +530,13 @@ func (m Model) View() string {
 	}
 	if m.asking {
 		b.WriteString(rule("SUMMON "+m.askSlug, w) + m.question.View() + "\n")
+	}
+	if m.remembering {
+		if m.reasoning {
+			b.WriteString(rule("REMEMBER AS A RULE", w) + m.reason.View() + "\n")
+		} else {
+			b.WriteString(rule("REMEMBER", w) + "f accepted finding · r rule: don't raise this again\nc project convention · g this dot everywhere · esc cancel\n")
+		}
 	}
 	footer := "j/k move · ⏎ send · a all · s summon · ? help"
 	if m.status != "" {
