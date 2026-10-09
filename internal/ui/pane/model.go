@@ -442,25 +442,30 @@ func (m Model) View() string {
 	if agent == "" {
 		agent = "agent"
 	}
-	title := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
+	lead := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
+	project, tail := "", ""
 	if ok && p.ProjectName != "" {
-		title += fmt.Sprintf(" · %s · mem %d", p.ProjectName, p.MemoryEntries)
+		project = fmt.Sprintf(" · %s · mem %d", p.ProjectName, p.MemoryEntries)
 		if p.MemoryProposals > 0 {
-			title += fmt.Sprintf(" (%d proposals)", p.MemoryProposals)
+			project += fmt.Sprintf(" (%d proposals)", p.MemoryProposals)
 		}
 	}
 	if ok {
-		title += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
-		if c := paneCost(p.CostUSD, p.BudgetUSD, p.CostUnknown); c != "" {
-			// Only a header carrying the cost part is cut to the width, so
-			// it never wraps; headers without cost stay as they were.
-			title = trunc(title+c, max(10, w))
-		}
+		tail = fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget) + paneCost(p.CostUSD, p.BudgetUSD, p.CostUnknown)
 	}
 	if m.snap.PausedAll {
-		title += "  ⏸ all paused"
+		tail += "  ⏸ all paused"
 	}
-	b.WriteString(style.Title.Render(title) + "\n")
+	// The project segment gives way first, so the budget and cost tail
+	// survives a narrow pane; one final cut keeps the header on one line.
+	if room := w - len([]rune(lead)) - len([]rune(tail)); room < len([]rune(project)) {
+		if room <= 0 {
+			project = ""
+		} else {
+			project = trunc(project, room)
+		}
+	}
+	b.WriteString(style.Title.Render(trunc(lead+project+tail, max(10, w))) + "\n")
 	if p.Source == "scrollback" {
 		b.WriteString(style.Dim.Render("(reading scrollback: transcript unavailable)") + "\n")
 	}
@@ -655,7 +660,7 @@ func paneCost(cost, budget float64, unknown bool) string {
 	if budget <= 0 && cost <= 0 && !unknown {
 		return ""
 	}
-	s := fmt.Sprintf("  $%.2f", cost)
+	s := "  " + usd(cost)
 	if unknown {
 		s += "?"
 	}
@@ -665,13 +670,22 @@ func paneCost(cost, budget float64, unknown bool) string {
 	return s
 }
 
+// usd formats a dollar amount; a spend under half a cent shows as "<$0.01"
+// so it doesn't look like nothing.
+func usd(v float64) string {
+	if v > 0 && v < 0.005 {
+		return "<$0.01"
+	}
+	return fmt.Sprintf("$%.2f", v)
+}
+
 // dotCost is a roster line session cost: " $0.12", " $0.12?" when some runs
 // had no price, "" when nothing was spent or priced.
 func dotCost(d view.DotState) string {
 	if d.CostUSD == 0 && !d.CostUnknown {
 		return ""
 	}
-	s := fmt.Sprintf(" $%.2f", d.CostUSD)
+	s := " " + usd(d.CostUSD)
 	if d.CostUnknown {
 		s += "?"
 	}
