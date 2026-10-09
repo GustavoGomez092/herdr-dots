@@ -32,7 +32,7 @@ type Snapshot struct {
 // RepoRoot returns the top-level directory of the repository dir is in.
 func RepoRoot(ctx context.Context, g Git, dir string) (string, error) {
 	top, err := g.Run(ctx, dir, nil, "rev-parse", "--show-toplevel")
-	if errors.Is(err, ErrTimeout) {
+	if errors.Is(err, ErrTimeout) || errors.Is(err, context.Canceled) {
 		return "", err
 	}
 	if err != nil || top == "" {
@@ -54,7 +54,7 @@ func TakeSnapshot(ctx context.Context, g Git, repo, id string, maxIndexBytes int
 		return Snapshot{}, err
 	}
 	head, err := g.Run(ctx, top, nil, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
-	if errors.Is(err, ErrTimeout) {
+	if errors.Is(err, ErrTimeout) || errors.Is(err, context.Canceled) {
 		return Snapshot{}, err
 	}
 	if err != nil || head == "" {

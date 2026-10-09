@@ -21,8 +21,18 @@ func Escapes(rel, target string) bool {
 	if joined == ".." || strings.HasPrefix(joined, "../") {
 		return true
 	}
-	first, _, _ := strings.Cut(joined, "/")
-	return strings.EqualFold(first, ".git")
+	for _, el := range strings.Split(joined, "/") {
+		if isGitElem(el) {
+			return true
+		}
+	}
+	return false
+}
+
+// isGitElem reports whether one path element names a .git directory in any
+// spelling git guards against: .GIT, ".git." / ".git " (NTFS) and GIT~1.
+func isGitElem(el string) bool {
+	return strings.EqualFold(strings.TrimRight(el, ". "), ".git") || strings.EqualFold(el, "git~1")
 }
 
 // CheckPath validates one slash-separated, repository-relative patch path.
@@ -38,7 +48,7 @@ func CheckPath(rel string) error {
 			return fmt.Errorf("%w: path %q", ErrEscape, rel)
 		}
 		// .git, .GIT, ".git." / ".git " (NTFS) and GIT~1 (8.3 short name).
-		if t := strings.TrimRight(el, ". "); strings.EqualFold(t, ".git") || strings.EqualFold(el, "git~1") {
+		if isGitElem(el) {
 			return fmt.Errorf("%w: %s", ErrGitDir, rel)
 		}
 	}

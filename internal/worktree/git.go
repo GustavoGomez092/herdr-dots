@@ -44,6 +44,42 @@ type Git struct {
 	Bin     string          // "" = "git"
 	Timeout time.Duration   // per command; 0 = DefaultTimeout
 	Environ func() []string // nil = os.Environ
+
+	// NoFilters names the filter drivers to switch off on every command
+	// (filter.<n>.clean/smudge/process emptied, required=false). Set it
+	// with WithoutFilters.
+	NoFilters []string
+}
+
+// WithoutFilters returns g with every filter driver configured for repo
+// switched off. Use it for every command that runs in a draft worktree: a
+// filter named in the user's config is the user's own code, but the draft's
+// files (and its .gitattributes) are model-written. The snapshot is taken
+// with the plain Git so the user's clean filters still define blob content.
+func (g Git) WithoutFilters(ctx context.Context, repo string) (Git, error) {
+	out, err := g.Output(ctx, repo, nil, "config", "--name-only", "--get-regexp", `^filter\.`)
+	if err != nil {
+		var ce *CmdError
+		if !errors.As(err, &ce) || strings.TrimSpace(ce.Stderr) != "" {
+			return g, err
+		}
+		out = nil // exit 1 with no output: no filters configured
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, key := range strings.Fields(string(out)) {
+		rest := strings.TrimPrefix(key, "filter.")
+		i := strings.LastIndex(rest, ".")
+		if i <= 0 || rest == key {
+			continue
+		}
+		if name := rest[:i]; !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	g.NoFilters = append([]string(nil), names...)
+	return g, nil
 }
 
 func (g Git) bin() string {
@@ -102,13 +138,20 @@ func (g Git) Run(ctx context.Context, dir string, env []string, args ...string) 
 func (g Git) Output(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, g.timeout())
 	defer cancel()
-	full := append([]string{"-C", dir,
+	full := []string{"-C", dir,
 		"-c", "core.hooksPath=" + platform.DevNull,
 		"-c", "core.fsmonitor=false",
 		"-c", "gc.auto=0",
 		"-c", "maintenance.auto=false",
 		"-c", "core.quotePath=false",
-	}, args...)
+	}
+	for _, n := range g.NoFilters {
+		for _, k := range []string{"clean", "smudge", "process"} {
+			full = append(full, "-c", "filter."+n+"."+k+"=")
+		}
+		full = append(full, "-c", "filter."+n+".required=false")
+	}
+	full = append(full, args...)
 	// platform.CommandContext, not exec: on Windows it resolves git.exe on
 	// PATH (never a repo-local git.exe in the cwd) and runs a .cmd shim safely.
 	cmd, err := platform.CommandContext(ctx, g.bin(), full)
@@ -123,6 +166,9 @@ func (g Git) Output(ctx context.Context, dir string, env []string, args ...strin
 	err = cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return stdout.Bytes(), fmt.Errorf("%w (git %s, %s)", ErrTimeout, args[0], g.timeout())
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return stdout.Bytes(), fmt.Errorf("git %s: %w", args[0], ctx.Err())
 	}
 	if err != nil {
 		return stdout.Bytes(), &CmdError{Args: args, Stderr: stderr.String(), Err: err}
