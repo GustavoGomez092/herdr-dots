@@ -163,7 +163,7 @@ func TestOpenRejectsParentSwappedForSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	symlinkOrSkip(t, outside, filepath.Join(root, "sub"))
-	f, err := openVerified(abs)
+	f, err := openVerified(root, abs, "sub/notes.txt")
 	if err == nil {
 		f.Close()
 		t.Fatal("openVerified followed a swapped parent symlink")

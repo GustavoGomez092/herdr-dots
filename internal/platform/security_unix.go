@@ -56,6 +56,15 @@ func OpenNoFollow(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 }
 
+// VerifyOpenedPath checks that f, opened as dir/rel, really is that file.
+// Unix has no junctions: O_NOFOLLOW and the caller's EvalSymlinks and
+// SameFile checks cover it, so it accepts.
+func VerifyOpenedPath(*os.File, string, string) error { return nil }
+
+// IsVolumeRoot reports whether p is a Windows drive or share root. Unix:
+// never ("C:" is an ordinary name; "/" is caught by callers).
+func IsVolumeRoot(string) bool { return false }
+
 // ReservedPathName reports whether a project-relative path names something
 // other than a plain file. Unix has no such names.
 func ReservedPathName(string) bool { return false }

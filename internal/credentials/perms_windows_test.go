@@ -5,7 +5,11 @@ package credentials
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -48,6 +52,46 @@ func symlinkOrSkip(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
+	}
+}
+
+// junction makes link a directory junction to target (mklink /J needs no
+// privilege).
+func junction(t *testing.T, link, target string) {
+	t.Helper()
+	if out, err := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink /J: %v: %s", err, out)
+	}
+}
+
+// Review Focus (Important): credentials.toml that is a junction (a reparse
+// point) is refused on the opened handle, never read and never reported as
+// missing.
+func TestCredentialsThroughAJunctionAreRefused(t *testing.T) {
+	f := credFile(t)
+	elsewhere := t.TempDir()
+	junction(t, f.Path, elsewhere)
+	_, _, err := f.Lookup("openai")
+	if err == nil || errors.Is(err, ErrNoCredentials) || errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("err = %v, want a refusal", err)
+	}
+	if !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("err = %v, want \"must be a regular file\"", err)
+	}
+}
+
+// A config dir that is itself reached through a junction (a relocated
+// profile) still works: only the file is checked.
+func TestCredentialsInAJunctionedConfigDirWork(t *testing.T) {
+	real := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "cfg")
+	junction(t, alias, real)
+	f := File{Path: filepath.Join(alias, "credentials.toml"), Env: envOf(nil)}
+	if err := f.Set("openai", "sk-yyyyyyyyyyyyyyyyyyyy"); err != nil {
+		t.Fatal(err)
+	}
+	if key, _, err := f.Lookup("openai"); err != nil || key != "sk-yyyyyyyyyyyyyyyyyyyy" {
+		t.Fatalf("lookup through a junctioned dir: %v", err)
 	}
 }
 
