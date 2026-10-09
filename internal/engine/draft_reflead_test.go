@@ -67,6 +67,32 @@ func TestAFailedRefDropKeepsTheRecordForTheNextSweep(t *testing.T) {
 	}
 }
 
+func TestAnAppliedPatchsStuckRefIsDroppedByTheNextSweep(t *testing.T) {
+	r := newDraftRig(t, draftOpts{}, writeDot("Security"))
+	r.dr.set(fixJWT, nil)
+	r.attach(t, "security")
+	if _, err := r.e.Draft(context.Background(), pane, "security", "fix", ""); err != nil {
+		t.Fatal(err)
+	}
+	c := r.patchCard(t)
+	r.draftsDone(t)
+	unlock := lockRef(t, r.repo, c.PatchID)
+	if err := r.applyReviewed(c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !hasRef(t, r.repo, c.PatchID) {
+		t.Fatal("the locked ref went anyway")
+	}
+	unlock()
+	r.e.maintainDrafts()
+	if hasRef(t, r.repo, c.PatchID) {
+		t.Fatal("the sweep left an applied patch's ref")
+	}
+	if m, err := r.patches.Get(c.PatchID); err != nil || m.Status != patchstore.StatusApplied {
+		t.Fatalf("the applied record must stay until it expires: %+v %v", m, err)
+	}
+}
+
 func TestAnExpiredRecordWhoseRefWontDropIsKept(t *testing.T) {
 	r := newDraftRig(t, draftOpts{}, writeDot("Security"))
 	id := worktree.NewID()
