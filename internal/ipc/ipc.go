@@ -27,7 +27,17 @@ const (
 	CmdPauseAll   = "pause_all"
 	CmdReset      = "reset"
 	CmdReloadDots = "reload_dots"
+
+	CmdRemember      = "remember"       // RememberArgs: turn a card into a memory entry
+	CmdMemoryChanged = "memory_changed" // no args: a UI edited memory; refresh snapshot counts
 )
+
+// RememberArgs.As is finding, rule, convention or global.
+type RememberArgs struct {
+	CardID string `json:"card_id"`
+	As     string `json:"as"`
+	Reason string `json:"reason,omitempty"`
+}
 
 type AttachArgs struct {
 	PaneID string   `json:"pane_id"`

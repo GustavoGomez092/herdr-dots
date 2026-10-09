@@ -52,6 +52,7 @@ type Dot struct {
 	Trigger  TriggerSpec  `toml:"trigger"`
 	Context  ContextSpec  `toml:"context"`
 	Budget   BudgetSpec   `toml:"budget"`
+	Memory   MemorySpec   `toml:"memory"`
 }
 
 type BackendSpec struct {
@@ -92,6 +93,7 @@ func New(name string) Dot {
 		Trigger:  TriggerSpec{OnTurn: true, FileGlobs: []string{}},
 		Context:  ContextSpec{Turns: 3, RepoRead: true, Verbosity: "normal"},
 		Budget:   BudgetSpec{MaxCallsPerSession: 40},
+		Memory:   DefaultMemory(),
 	}
 }
 
@@ -157,5 +159,6 @@ func (d Dot) Validate() error {
 	if d.Budget.MaxCallsPerSession < 1 {
 		add("budget max_calls_per_session must be >= 1")
 	}
+	errs = append(errs, d.Memory.validate()...)
 	return errors.Join(errs...)
 }

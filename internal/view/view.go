@@ -26,6 +26,9 @@ type DotState struct {
 	Paused bool   `json:"paused"`
 	Calls  int    `json:"calls"`
 	Budget int    `json:"budget"`
+
+	MemoryEntries int  `json:"memory_entries"` // this dot's entries for the pane's project
+	Learning      bool `json:"learning"`       // a memory pass is running
 }
 
 type Pane struct {
@@ -37,6 +40,11 @@ type Pane struct {
 	Dots   []DotState        `json:"dots"`
 	Cards  []queue.Card      `json:"cards"`
 	Feed   []state.FeedEntry `json:"feed"`
+
+	ProjectID       string `json:"project_id,omitempty"`
+	ProjectName     string `json:"project_name,omitempty"`
+	MemoryEntries   int    `json:"memory_entries"`   // project + dot entries for this project
+	MemoryProposals int    `json:"memory_proposals"` // project entries awaiting approval
 }
 
 type LibraryDot struct {
