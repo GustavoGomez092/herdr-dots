@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -154,8 +153,12 @@ func validEntryID(id string) bool {
 	if len(id) < 2 || id[0] != 'm' {
 		return false
 	}
-	_, err := strconv.Atoi(id[1:])
-	return err == nil
+	for _, c := range id[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // GlobalID is the reserved directory for global scope.
@@ -218,3 +221,13 @@ var (
 	ErrDenied   = errors.New("not allowed to change this memory entry")
 	ErrSecret   = errors.New("memory text looks like a secret")
 )
+
+// Valid reports whether s is a known status.
+func (s Status) Valid() bool {
+	return s == StatusActive || s == StatusProposed || s == StatusArchived
+}
+
+// Valid reports whether s is a known source.
+func (s Source) Valid() bool {
+	return s == SourceUser || s == SourceModel || s == SourceOutcome || s == SourceImport
+}
