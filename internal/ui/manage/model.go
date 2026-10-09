@@ -31,6 +31,14 @@ type Deps struct {
 
 	Memory  *memory.Store                               // nil: memory off (no M/P, no memory step on delete)
 	Project func(target string) (memory.Project, error) // the target pane's project when the snapshot lacks it; may be nil
+
+	// Phase 4 (all optional).
+	CheckDot  func(ctx context.Context, d dots.Dot) error              // runs on save instead of Check: key + model
+	Models    func(ctx context.Context, kind string) ([]string, error) // ctrl+space model picker
+	Estimate  func(d dots.Dot) string                                  // editor cost line
+	Keys      KeyStore                                                 // Providers screen
+	TestKey   func(ctx context.Context, provider string) error         // Providers screen "t"
+	OllamaURL string                                                   // shown on the ollama row
 }
 
 type SnapshotMsg view.Snapshot
@@ -53,6 +61,11 @@ type (
 		name  string
 		files int
 	}
+	modelsMsg struct {
+		kind string
+		ids  []string
+		err  error
+	}
 )
 
 type screen int
@@ -64,6 +77,7 @@ const (
 	scrConfirm
 	scrMemory        // the memory browser (memui)
 	scrConfirmMemory // after deleting a dot: also delete its memory?
+	scrProviders     // API keys and the Ollama server (Phase 4)
 )
 
 type Model struct {
@@ -85,10 +99,11 @@ type Model struct {
 	width     int
 	height    int
 	mem       *memui.Model // open memory browser (scrMemory)
+	prov      *providers
 }
 
 func New(target string, d Deps) Model {
-	return Model{d: d, target: target, selected: map[string]bool{}, attached: map[string]bool{}, templates: dots.Templates()}
+	return Model{d: d, target: target, selected: map[string]bool{}, attached: map[string]bool{}, templates: dots.Templates(), prov: newProviders()}
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -184,6 +199,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.reload()
 	case reloadedMsg:
+	case providersMsg, keyStoredMsg, keyTestedMsg, refreshedMsg:
+		return m.providersUpdate(msg)
+	case modelsMsg:
+		if m.form != nil {
+			if msg.err != nil {
+				m.form.SetError(msg.err.Error())
+			} else {
+				m.form.SetModels(msg.kind, msg.ids)
+			}
+		}
 	case doneMsg:
 		return m, tea.Quit
 	case tea.KeyMsg:
@@ -196,6 +221,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.keysConfirm(msg)
 		case scrConfirmMemory:
 			return m.keysConfirmMemory(msg)
+		case scrProviders:
+			return m.providersUpdate(msg)
 		}
 		return m.keysLibrary(msg)
 	}
@@ -236,9 +263,12 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.d.NewDot != nil {
 			blank = m.d.NewDot()
 		}
-		m.form, m.scr = NewForm(blank, true), scrEditor
+		m.form, m.scr = m.newForm(blank, true), scrEditor
 	case "t":
 		m.scr, m.tcursor = scrTemplates, 0
+	case "K":
+		m.scr = scrProviders
+		return m, m.loadProviders()
 	case "e":
 		if d, ok := m.current(); ok {
 			full, err := dots.Load(m.d.DotsDir, d.Slug)
@@ -246,7 +276,7 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.status = err.Error()
 				return m, nil
 			}
-			m.form, m.scr = NewForm(full, false), scrEditor
+			m.form, m.scr = m.newForm(full, false), scrEditor
 		}
 	case "D":
 		if d, ok := m.current(); ok {
@@ -340,14 +370,36 @@ func (m Model) keysTemplates(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.tcursor = max(m.tcursor-1, 0)
 	case "enter":
 		if m.tcursor >= 0 && m.tcursor < len(m.templates) {
-			m.form, m.scr = NewForm(m.templates[m.tcursor], true), scrEditor
+			m.form, m.scr = m.newForm(m.templates[m.tcursor], true), scrEditor
 		}
 	}
 	return m, nil
 }
 
+func (m Model) newForm(d dots.Dot, isNew bool) *Form {
+	f := NewForm(d, isNew)
+	f.SetEstimator(m.d.Estimate)
+	return f
+}
+
+// fetchModels loads ctrl+space choices for kind.
+func (m Model) fetchModels(kind string) tea.Cmd {
+	list := m.d.Models
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		ids, err := list(ctx, kind)
+		return modelsMsg{kind: kind, ids: ids, err: err}
+	}
+}
+
 func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
+	case "ctrl+@", "ctrl+ ":
+		if m.form.OnModel() && !m.saving && !m.form.NextModel() && m.d.Models != nil {
+			return m, m.fetchModels(m.form.Kind())
+		}
+		return m, nil
 	case "esc":
 		m.form, m.scr, m.saving = nil, scrLibrary, false
 		return m, nil
@@ -373,14 +425,18 @@ func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
-	dir, check := m.d.DotsDir, m.d.Check
+	dir, check, checkDot := m.d.DotsDir, m.d.Check, m.d.CheckDot
 	return func() tea.Msg {
 		if err := d.Validate(); err != nil {
 			return formErrMsg{err}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := check(ctx, d.Backend.Kind); err != nil {
+		if checkDot != nil {
+			if err := checkDot(ctx, d); err != nil {
+				return formErrMsg{err}
+			}
+		} else if err := check(ctx, d.Backend.Kind); err != nil {
 			return formErrMsg{err}
 		}
 		if err := dots.Save(dir, d, isNew); err != nil {
@@ -467,6 +523,8 @@ func (m Model) View() string {
 		if m.mem != nil {
 			return m.mem.View()
 		}
+	case scrProviders:
+		return m.providersView()
 	}
 	var b strings.Builder
 	head := "DOTS LIBRARY ─ target: " + m.target
@@ -494,7 +552,7 @@ func (m Model) View() string {
 	if m.status != "" {
 		b.WriteString("\n" + m.status + "\n")
 	}
-	help := "space toggle · enter apply · n new · t template · e edit · D delete · esc close"
+	help := "space toggle · enter apply · n new · t template · e edit · D delete · K providers · esc close"
 	if m.d.Memory != nil {
 		help += " · M memory · P project memory"
 	}
