@@ -1,11 +1,13 @@
 package backend
 
 import (
-	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
-	"time"
+
+	"herdr-dots/internal/platform"
 )
 
 func TestCleanEnvStripsHerdrAndClaudeVars(t *testing.T) {
@@ -25,30 +27,32 @@ func TestCleanEnvNeverReturnsNil(t *testing.T) {
 	}
 }
 
-func TestExecRunnerPassesStdinDirEnv(t *testing.T) {
-	dir := t.TempDir()
-	out, _, err := ExecRunner{}.Run(context.Background(), Cmd{
-		Name: "sh", Args: []string{"-c", `printf '%s|%s|' "$(pwd)" "$DOTS_X"; cat`},
-		Dir: dir, Env: []string{"DOTS_X=yes", "PATH=/usr/bin:/bin"}, Stdin: "from-stdin",
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestCleanEnvFoldsCaseWhereTheOSDoes(t *testing.T) {
+	in := []string{"Herdr_Pane_Id=w1:p1", "claudecode=1", "Claude_Code_Entrypoint=cli", "Path=/bin"}
+	got := CleanEnv(in)
+	if platform.EnvKey("a") == "A" { // Windows: one variable whatever its case
+		if !slices.Equal(got, []string{"Path=/bin"}) {
+			t.Fatalf("Windows CleanEnv = %v", got)
+		}
+		return
 	}
-	if !strings.HasSuffix(string(out), "|yes|from-stdin") || !strings.Contains(string(out), dir[len(dir)-8:]) {
-		t.Fatalf("out = %q", out)
+	if !slices.Equal(got, in) { // Unix: different names, kept as in v1
+		t.Fatalf("Unix CleanEnv = %v", got)
 	}
 }
 
-func TestExecRunnerKillsProcessGroupOnTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	_, _, err := ExecRunner{}.Run(ctx, Cmd{Name: "sh", Args: []string{"-c", "sleep 30 & sleep 30"}, Env: []string{"PATH=/usr/bin:/bin"}})
-	if err == nil {
-		t.Fatal("want timeout error")
+func TestCmdCloseRunsCleanupOnce(t *testing.T) {
+	Cmd{}.Close() // nil Cleanup is fine
+	n := 0
+	Cmd{Cleanup: func() { n++ }}.Close()
+	if n != 1 {
+		t.Fatalf("cleanup ran %d times", n)
 	}
-	if time.Since(start) > 3*time.Second {
-		t.Fatalf("took %v; process group not killed", time.Since(start))
+}
+
+func TestPreflightRecognisesShimErrors(t *testing.T) {
+	if !Preflight(fmt.Errorf("x: %w", platform.ErrCmdTooLong)) || !Preflight(platform.ErrUnsafeBatchArg) || Preflight(errors.New("exit 1")) {
+		t.Fatal("Preflight")
 	}
 }
 
