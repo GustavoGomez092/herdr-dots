@@ -170,6 +170,12 @@ func TestInboxClaimChild(t *testing.T) {
 	}
 	in := OpenInbox(filepath.Join(dir, "inbox.json"))
 	in.Timeout = 20 * time.Second
+	// Start barrier: wait for the go-file so every child claims at once.
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(dir, "go")); err == nil {
+			break
+		}
+	}
 	n, err := q.Claim(in, "g-0123456789abcdef", "w1:p1")
 	if err != nil {
 		t.Fatal(err)
@@ -196,6 +202,9 @@ func TestInboxClaimHasOneWinnerAcrossProcesses(t *testing.T) {
 		if err := cmds[i].Start(); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go"), nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	winners, total := 0, 0
 	for i, c := range cmds {
@@ -225,5 +234,171 @@ func TestInboxClaimHasOneWinnerAcrossProcesses(t *testing.T) {
 	}
 	if left, _ := in.List("g-0123456789abcdef"); len(left) != 0 {
 		t.Fatalf("inbox not empty: %+v", left)
+	}
+}
+
+const proj = "g-0123456789abcdef"
+
+func putN(t *testing.T, in *Inbox, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if err := in.Put(Card{Body: fmt.Sprintf("c%d", i), Project: proj}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestClaimCrashAfterMarkKeepsCardsAndRecoversAfterTTL(t *testing.T) {
+	in, q, _ := inboxRig(t)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	in.Now = func() time.Time { return now }
+	putN(t, in, 3)
+	// Claimer A marks, then "crashes": it never adds or deletes.
+	if got, err := in.mark(proj, "crashed-session"); err != nil || len(got) != 3 {
+		t.Fatalf("mark %d %v", len(got), err)
+	}
+	if cs, _ := in.List(proj); len(cs) != 3 {
+		t.Fatalf("a marked card stays in the inbox: %d", len(cs))
+	}
+	now = now.Add(4 * time.Minute)
+	if n, err := q.Claim(in, proj, "w1:p1"); n != 0 || err != nil {
+		t.Fatalf("a live claim is not stolen: %d %v", n, err)
+	}
+	now = now.Add(2 * time.Minute) // past the 5 minute TTL
+	n, err := q.Claim(in, proj, "w1:p1")
+	if err != nil || n != 3 {
+		t.Fatalf("stale marks are claimable again: %d %v", n, err)
+	}
+	if n, _ := q.Claim(in, proj, "w1:p1"); n != 0 {
+		t.Fatalf("exactly once: second claim got %d", n)
+	}
+	got := q.Pending("w1:p1")
+	if len(got) != 3 || got[0].ClaimedBy != "" || !got[0].ClaimedAt.IsZero() {
+		t.Fatalf("claimed cards carry no marks: %+v", got)
+	}
+	if left, _ := in.List(proj); len(left) != 0 {
+		t.Fatalf("inbox not empty: %+v", left)
+	}
+}
+
+func TestClaimCrashAfterAddBeforeDeleteAddsNoDuplicate(t *testing.T) {
+	in, q, _ := inboxRig(t)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	in.Now = func() time.Time { return now }
+	putN(t, in, 2)
+	cards, err := in.mark(proj, q.token())
+	if err != nil || len(cards) != 2 {
+		t.Fatal(err, cards)
+	}
+	for _, c := range cards { // phase (b) done, then the process dies before phase (c)
+		c.PaneID, c.SourceID, c.ClaimedBy = "w1:p1", c.ID, ""
+		if _, err := q.Add(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now = now.Add(6 * time.Minute)
+	n, err := q.Claim(in, proj, "w1:p1")
+	if err != nil || n != 0 {
+		t.Fatalf("re-claim adds nothing new: %d %v", n, err)
+	}
+	if got := q.All(); len(got) != 2 {
+		t.Fatalf("duplicate cards: %+v", got)
+	}
+	if left, _ := in.List(proj); len(left) != 0 {
+		t.Fatalf("the re-claim still deletes the inbox copies: %+v", left)
+	}
+}
+
+func TestFailedClaimLeavesInboxIntactAndQueueUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	qdir := filepath.Join(dir, "session")
+	q, err := Open(filepath.Join(qdir, "queue.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := OpenInbox(filepath.Join(dir, "inbox.json"))
+	putN(t, in, 3)
+	before, _ := in.List(proj)
+	if err := os.WriteFile(qdir, []byte("x"), 0o600); err != nil { // a file where the queue dir should be: save() fails
+		t.Fatal(err)
+	}
+	n, err := q.Claim(in, proj, "w1:p1")
+	if err == nil || n != 0 {
+		t.Fatalf("claim should fail: %d %v", n, err)
+	}
+	if len(q.All()) != 0 {
+		t.Fatalf("nothing stays in memory un-persisted: %+v", q.All())
+	}
+	if c, err := q.Add(Card{Body: "z"}); err == nil {
+		t.Fatalf("still failing: %+v", c)
+	}
+	after, _ := in.List(proj)
+	if len(after) != 3 {
+		t.Fatalf("inbox lost cards: %+v", after)
+	}
+	for i := range before {
+		if after[i].ID != before[i].ID || !after[i].CreatedAt.Equal(before[i].CreatedAt) || after[i].Body != before[i].Body || after[i].ClaimedBy != "" {
+			t.Fatalf("card %d changed: %+v vs %+v", i, after[i], before[i])
+		}
+	}
+	if err := os.Remove(qdir); err != nil {
+		t.Fatal(err)
+	}
+	n, err = q.Claim(in, proj, "w1:p1")
+	if err != nil || n != 3 {
+		t.Fatalf("next claim: %d %v", n, err)
+	}
+	got := q.Pending("w1:p1")
+	for i := range before {
+		if got[i].Body != before[i].Body || !got[i].CreatedAt.Equal(before[i].CreatedAt) || got[i].SourceID != before[i].ID {
+			t.Fatalf("order/CreatedAt/SourceID not kept: %+v vs %+v", got[i], before[i])
+		}
+	}
+}
+
+func TestInboxRefusesUnknownOrigin(t *testing.T) {
+	in, _, _ := inboxRig(t)
+	for _, o := range []string{"", "research", "scheduled", "commit"} {
+		if err := in.Put(Card{Body: "x", Project: proj, Origin: o}); err != nil {
+			t.Fatalf("origin %q: %v", o, err)
+		}
+	}
+	if err := in.Put(Card{Body: "x", Project: proj, Origin: "model-said-so"}); err == nil {
+		t.Fatal("an unknown origin is refused")
+	}
+}
+
+func TestInboxSanitizesGlyphDotAndPartFields(t *testing.T) {
+	in, _, _ := inboxRig(t)
+	err := in.Put(Card{Project: proj, Dot: "a\x1b[2J", Glyph: "g\x07", Body: "b",
+		Parts: []CardPart{{Dot: "d\x1b", Glyph: "p\x07", Stance: "s\x1b[0m", Body: "x"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := in.List(proj)
+	c := cs[0]
+	all := c.Dot + c.Glyph + c.Parts[0].Dot + c.Parts[0].Glyph + c.Parts[0].Stance
+	if strings.ContainsAny(all, "\x1b\x07") {
+		t.Fatalf("control characters stored: %+v", c)
+	}
+}
+
+func TestPutMovesACorruptInboxAsideAndStoresTheResult(t *testing.T) {
+	in, _, p := inboxRig(t)
+	if err := os.WriteFile(p, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Put(Card{Body: "paid result", Project: proj}); err != nil {
+		t.Fatalf("a corrupt inbox must not drop the new result: %v", err)
+	}
+	if cs, _ := in.List(proj); len(cs) != 1 || cs[0].Body != "paid result" {
+		t.Fatalf("%+v", cs)
+	}
+	m, _ := filepath.Glob(p + ".corrupt-*")
+	if len(m) != 1 {
+		t.Fatalf("corrupt file not kept aside: %v", m)
+	}
+	if b, _ := os.ReadFile(m[0]); string(b) != "{not json" {
+		t.Fatalf("moved file content %q", b)
 	}
 }
