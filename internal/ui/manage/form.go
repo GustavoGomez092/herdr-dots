@@ -142,6 +142,14 @@ func (f *Form) Kind() string { return f.fields[iBackend].choices[f.fields[iBacke
 // OnModel reports whether the Model field has focus (ctrl+space completes it).
 func (f *Form) OnModel() bool { return f.focus == iModel }
 
+// BaseURL is the Base URL field when the kind shows it, else "".
+func (f *Form) BaseURL() string {
+	if !f.visible(iBaseURL) {
+		return ""
+	}
+	return f.val(iBaseURL)
+}
+
 // SetModels loads ctrl+space choices for kind and fills in the first one.
 func (f *Form) SetModels(kind string, ids []string) {
 	if kind != f.Kind() || len(ids) == 0 {

@@ -94,6 +94,10 @@ type PlanInput struct {
 	MaxMembers int         // 0 = no limit
 	PaneLeft   int         // calls left in the pane's session budget
 	Chair      bool        // merge = "chair": a council of 2+ members may cost one more call
+	// ChairUnavailable is why the chair can't run ("" = it can), e.g. no
+	// model for its backend. The council then merges plainly, so the
+	// estimate leaves the chair call out.
+	ChairUnavailable string
 
 	// Phase 4: the pane's known spend and its session_budget_usd (0 = off).
 	PaneCostUSD   float64
@@ -103,17 +107,18 @@ type PlanInput struct {
 // Preflight is who would sit on a council and what it would cost. The engine
 // publishes it in the snapshot (view.Pane.CouncilPreflight) for the popup.
 type Preflight struct {
-	Members        []string          `json:"members"`           // eligible slugs, attachment order
-	Skipped        []string          `json:"skipped,omitempty"` // ineligible slugs
-	Reasons        map[string]string `json:"reasons,omitempty"` // slug → Reason*
-	Rounds         int               `json:"rounds"`
-	PaneLeft       int               `json:"pane_left"`
-	Chair          bool              `json:"chair"`
-	EstimatedCalls int               `json:"estimated_calls"`
-	Allowed        bool              `json:"allowed"`
-	Refusal        string            `json:"refusal,omitempty"`
-	PaneCostUSD    float64           `json:"pane_cost_usd,omitempty"`   // known spend on the pane (Phase 4)
-	PaneBudgetUSD  float64           `json:"pane_budget_usd,omitempty"` // session_budget_usd; 0 = off
+	Members          []string          `json:"members"`           // eligible slugs, attachment order
+	Skipped          []string          `json:"skipped,omitempty"` // ineligible slugs
+	Reasons          map[string]string `json:"reasons,omitempty"` // slug → Reason*
+	Rounds           int               `json:"rounds"`
+	PaneLeft         int               `json:"pane_left"`
+	Chair            bool              `json:"chair"`
+	ChairUnavailable string            `json:"chair_unavailable,omitempty"` // why merge = "chair" has no chair (Phase 4)
+	EstimatedCalls   int               `json:"estimated_calls"`
+	Allowed          bool              `json:"allowed"`
+	Refusal          string            `json:"refusal,omitempty"`
+	PaneCostUSD      float64           `json:"pane_cost_usd,omitempty"`   // known spend on the pane (Phase 4)
+	PaneBudgetUSD    float64           `json:"pane_budget_usd,omitempty"` // session_budget_usd; 0 = off
 	// Seq grows with every preflight the engine computes (0: not stamped);
 	// Request echoes the asking popup's id. A popup shows only its own
 	// preflight or a newer one, never one an earlier popup left behind.
@@ -136,6 +141,9 @@ func EstimateCalls(members, rounds int, chair bool) int {
 func Plan(in PlanInput) Preflight {
 	p := Preflight{Rounds: max(1, in.Rounds), PaneLeft: in.PaneLeft, Chair: in.Chair,
 		PaneCostUSD: in.PaneCostUSD, PaneBudgetUSD: in.PaneBudgetUSD}
+	if in.Chair && in.ChairUnavailable != "" {
+		p.Chair, p.ChairUnavailable = false, in.ChairUnavailable
+	}
 	for _, c := range in.Candidates {
 		reason := ""
 		switch {

@@ -105,9 +105,9 @@ func TestSaveUsesCheckDotWhenSet(t *testing.T) {
 	var checked dots.Dot
 	d := Deps{Caller: &fakeCaller{}, DotsDir: t.TempDir(),
 		Check: func(context.Context, string) error { t.Fatal("Check must not run when CheckDot is set"); return nil },
-		CheckDot: func(_ context.Context, d dots.Dot) error {
+		CheckDot: func(_ context.Context, d dots.Dot) (string, error) {
 			checked = d
-			return errors.New("model \"x\" not available to this key")
+			return "", errors.New("model \"x\" not available to this key")
 		},
 		NewDot: func() dots.Dot {
 			d := dots.New("")
@@ -125,9 +125,60 @@ func TestSaveUsesCheckDotWhenSet(t *testing.T) {
 	}
 }
 
+// Final review item 2: an unreachable provider is a warning; the dot saves.
+func TestSaveGoesThroughWithACheckWarning(t *testing.T) {
+	dir := t.TempDir()
+	d := Deps{Caller: &fakeCaller{}, DotsDir: dir,
+		CheckDot: func(context.Context, dots.Dot) (string, error) {
+			return "not checked: Ollama isn't running at http://gpu:11434", nil
+		},
+		NewDot: func() dots.Dot {
+			d := dots.New("")
+			d.Backend = dots.BackendSpec{Kind: dots.KindOllama, Model: "llama3", Args: []string{}}
+			return d
+		}}
+	m := tea.Model(New("", d))
+	m = press(m, "n")
+	m = typeText(m, "Local")
+	mm := m.(Model)
+	mm.form.fields[iPurpose].area.SetValue("p")
+	m = press(mm, "ctrl+s")
+	if _, err := dots.Load(dir, "local"); err != nil {
+		t.Fatalf("the dot must be saved: %v\n%s", err, m.View())
+	}
+	if v := m.View(); !strings.Contains(v, "saved local") || !strings.Contains(v, "isn't running") {
+		t.Fatalf("view:\n%s", v)
+	}
+}
+
+// Final review item 2: ctrl+space asks the dot's own base_url.
+func TestCtrlSpacePassesTheBaseURL(t *testing.T) {
+	var gotBase string
+	d := Deps{Caller: &fakeCaller{}, Models: func(_ context.Context, kind, base string) ([]string, error) {
+		gotBase = base
+		return []string{"llama3:latest"}, nil
+	}, NewDot: func() dots.Dot {
+		d := dots.New("")
+		d.Backend = dots.BackendSpec{Kind: dots.KindOllama, BaseURL: "http://gpu:11434", Args: []string{}}
+		return d
+	}}
+	m := tea.Model(New("", d))
+	m = press(m, "n")
+	mm := m.(Model)
+	focusOn(mm.form, "Model")
+	_, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyCtrlAt})
+	if cmd == nil {
+		t.Fatal("ctrl+space must fetch models")
+	}
+	cmd()
+	if gotBase != "http://gpu:11434" {
+		t.Fatalf("base %q", gotBase)
+	}
+}
+
 func TestCtrlSpaceFetchesModels(t *testing.T) {
 	var asked []string
-	d := Deps{Caller: &fakeCaller{}, Models: func(_ context.Context, kind string) ([]string, error) {
+	d := Deps{Caller: &fakeCaller{}, Models: func(_ context.Context, kind, _ string) ([]string, error) {
 		asked = append(asked, kind)
 		return []string{"claude-haiku-4-5", "claude-opus-5-5"}, nil
 	}, NewDot: func() dots.Dot {

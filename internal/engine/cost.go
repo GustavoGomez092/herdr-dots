@@ -7,6 +7,7 @@ import (
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/pricing"
 	"herdr-dots/internal/state"
 )
 
@@ -24,11 +25,19 @@ func requestFor(d dots.Dot, cwd string) backend.Request {
 	}
 }
 
-// deltaOf is the usage a run adds to state.Usage.
+// deltaOf is the usage a run adds to state.Usage. A run that reported no
+// tokens and no cost never reached the provider (no key, connection refused):
+// it cost a known $0, so it doesn't mark the dot's spend unknown. An unpriced
+// run with tokens (codex, a model missing from prices.toml) stays unknown.
 func deltaOf(res backend.Result) state.Delta {
+	known := res.CostKnown
+	if !known && res.CostUSD == 0 && res.InputTokens == 0 && res.OutputTokens == 0 &&
+		res.CacheReadTokens == 0 && res.CacheWriteTokens == 0 {
+		known = true
+	}
 	return state.Delta{Calls: 1, In: res.InputTokens, Out: res.OutputTokens,
 		CacheRead: res.CacheReadTokens, CacheWrite: res.CacheWriteTokens,
-		CostUSD: res.CostUSD, CostKnown: res.CostKnown}
+		CostUSD: res.CostUSD, CostKnown: known}
 }
 
 // costDetail is the feed suffix for a finished run:
@@ -45,7 +54,14 @@ func costDetail(d dots.Dot, res backend.Result) string {
 			s += " (cap)"
 		}
 	}
-	if res.Model != "" && d.Backend.Model != "" && res.Model != d.Backend.Model {
+	// The model that answered, when it isn't the one asked for: a refusal
+	// fallback. A dated snapshot of the asked model ("gpt-6-sol-2026-08-01")
+	// is the same model; a dot with no model asked for the kind's default.
+	want := d.Backend.Model
+	if want == "" {
+		want = dots.DefaultModelFor(d.Backend.Kind)
+	}
+	if res.Model != "" && want != "" && !pricing.SameModel(res.Model, want) {
 		s += " model=" + res.Model
 	}
 	return s

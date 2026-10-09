@@ -141,3 +141,46 @@ func TestEstimate(t *testing.T) {
 		t.Fatalf("estimate = %v", usd)
 	}
 }
+
+// Final review item 1: providers answer with dated snapshot ids.
+func TestStripDateAndSameModel(t *testing.T) {
+	for in, want := range map[string]string{
+		"gpt-6-sol-2026-08-01":      "gpt-6-sol",
+		"claude-haiku-4-5-20251001": "claude-haiku-4-5",
+		"gpt-6-sol":                 "gpt-6-sol",
+		"model-2026-13":             "model-2026-13",
+		"x-99999999":                "x-99999999",
+		"anthropic/claude-opus-5-5": "anthropic/claude-opus-5-5",
+		"qwen3:30b":                 "qwen3:30b",
+		"2026-08-01":                "2026-08-01",
+	} {
+		if got := StripDate(in); got != want {
+			t.Errorf("StripDate(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if !SameModel("gpt-6-sol-2026-08-01", "gpt-6-sol") || !SameModel("a", "a") || SameModel("gpt-6-sol", "gpt-6-astra") {
+		t.Fatal("SameModel")
+	}
+}
+
+func TestCostServedTriesServedThenUndatedThenRequested(t *testing.T) {
+	tab := Default()
+	u := Usage{In: 1000, Out: 100}
+	want, _ := tab.Cost("openai", "gpt-6-sol", u)
+	if usd, ok := tab.CostServed("openai", "gpt-6-sol-2026-08-01", "gpt-6-sol", u); !ok || !near(usd, want) {
+		t.Fatalf("dated served id: %v %v", usd, ok)
+	}
+	if usd, ok := tab.CostServed("openai", "some-alias", "gpt-6-sol", u); !ok || !near(usd, want) {
+		t.Fatalf("falls back to the requested id: %v %v", usd, ok)
+	}
+	astra, _ := tab.Cost("openai", "gpt-6-astra", u)
+	if usd, ok := tab.CostServed("openai", "gpt-6-astra", "gpt-6-sol", u); !ok || !near(usd, astra) {
+		t.Fatalf("a served id with its own price wins: %v %v", usd, ok)
+	}
+	if _, ok := tab.CostServed("openai", "", "nope", u); ok {
+		t.Fatal("unknown stays unknown")
+	}
+	if usd, ok := tab.CostServed("openai", "", "gpt-6-sol", u); !ok || !near(usd, want) {
+		t.Fatal("empty served id uses the requested id")
+	}
+}

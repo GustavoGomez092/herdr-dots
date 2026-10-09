@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"syscall"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -15,9 +16,11 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/backend/httpx"
 	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/pricing"
+	"herdr-dots/internal/textutil"
 )
 
 // DefaultModel is used when a dot sets no model (decision 7).
@@ -60,9 +63,11 @@ func (b *Backend) client() (anthropic.Client, string, error) {
 		return anthropic.Client{}, "", err
 	}
 	opts = append(opts, option.WithMaxRetries(2))
-	if b.o.HTTP != nil {
-		opts = append(opts, option.WithHTTPClient(b.o.HTTP))
+	hc := b.o.HTTP
+	if hc == nil {
+		hc = httpx.SameHostClient() // never forward the key to another host on a redirect
 	}
+	opts = append(opts, option.WithHTTPClient(hc))
 	if u := b.o.Provider.BaseURL; u != "" {
 		opts = append(opts, option.WithBaseURL(u))
 	}
@@ -82,8 +87,9 @@ func (b *Backend) Check(ctx context.Context) error {
 	return mapErr(err, key, "")
 }
 
-// CheckModel confirms model is available to this key.
-func (b *Backend) CheckModel(ctx context.Context, model string) error {
+// CheckModel confirms r.Model (or the default) is available to this key.
+func (b *Backend) CheckModel(ctx context.Context, r backend.Request) error {
+	model := r.Model
 	if model == "" {
 		model = DefaultModel
 	}
@@ -96,7 +102,7 @@ func (b *Backend) CheckModel(ctx context.Context, model string) error {
 }
 
 // Models lists the model ids this key can use.
-func (b *Backend) Models(ctx context.Context) ([]string, error) {
+func (b *Backend) Models(ctx context.Context, _ backend.Request) ([]string, error) {
 	c, key, err := b.client()
 	if err != nil {
 		return nil, err
@@ -130,11 +136,8 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		tools = toolloop.RepoTools(r.Cwd, lim)
 	}
 	system := backend.SystemPrompt(r)
-	switch {
-	case len(tools) > 0:
-		system += "\n" + toolloop.SystemNote + "\n"
-	case r.RepoRead && r.Pass != backend.PassMemory && toolloop.Unavailable(r.Cwd):
-		system += "\n" + toolloop.NoToolsNote + "\n"
+	if note := toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, len(tools) > 0); note != "" {
+		system += "\n" + note + "\n"
 	}
 	params := anthropic.BetaMessageNewParams{
 		Model:     anthropic.Model(model),
@@ -190,7 +193,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		if served == "" {
 			served = model
 		}
-		usd, known := prices.Cost(Provider, served, u)
+		usd, known := prices.CostServed(Provider, served, model, u)
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		if resp.StopReason == anthropic.BetaStopReasonRefusal {
 			return reply, backend.Refused(string(resp.StopDetails.Category))
@@ -216,7 +219,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		return backend.PartialAPI(run), err
 	}
 	if out.Model != "" && out.Model != model {
-		b.o.Log("anthropic-api: %s answered for %s (refusal fallback)", out.Model, model)
+		b.o.Log("anthropic-api: %s answered for %s (refusal fallback)", textutil.SanitizeModelText(out.Model), textutil.SanitizeModelText(model))
 	}
 	return backend.FinishAPI(r, run)
 }
@@ -263,7 +266,11 @@ func mapErr(err error, key, model string) error {
 			return fmt.Errorf("anthropic rejected the request (%d): %s", code, clip(credentials.Redact(apierr.Error(), key), 300))
 		}
 	}
-	return errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	msg := errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return backend.MarkUnreachable(msg)
+	}
+	return msg
 }
 
 func clip(s string, n int) string {

@@ -42,6 +42,7 @@ func (e *Engine) ReloadConfig() {
 		e.d.Logf("config: %v (keeping the last good settings; inject and memory disabled until it is fixed)", err)
 	}
 	e.cfg.Store(&c)
+	e.noteChairConfig(c)
 	e.broadcast()
 }
 

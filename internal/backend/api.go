@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"syscall"
 	"time"
 
 	"herdr-dots/internal/pricing"
+	"herdr-dots/internal/textutil"
 )
 
 // Backend kinds (a dot's [backend].kind).
@@ -43,24 +45,55 @@ func ProviderFor(kind string) string {
 }
 
 // ModelLister is implemented by backends that can list their models (the
-// editor's ctrl+space picker).
+// editor's ctrl+space picker). r carries the dot's settings; adapters use
+// r.BaseURL (ollama, openrouter) so a dot's own server is the one asked.
 type ModelLister interface {
-	Models(ctx context.Context) ([]string, error)
+	Models(ctx context.Context, r Request) ([]string, error)
 }
 
-// ModelChecker is implemented by backends that can confirm one model is
-// usable with the current credentials (the editor runs it on save).
+// ModelChecker is implemented by backends that can confirm one model
+// (r.Model) is usable with the current credentials at the dot's endpoint
+// (r.BaseURL). The editor runs it on save.
 type ModelChecker interface {
-	CheckModel(ctx context.Context, model string) error
+	CheckModel(ctx context.Context, r Request) error
+}
+
+// ErrUnreachable marks a provider that could not be reached at all
+// (connection refused). The editor's save check treats it, and a timeout, as
+// a warning rather than a validation failure.
+var ErrUnreachable = errors.New("provider unreachable")
+
+// MarkUnreachable returns err unchanged in text, but errors.Is(…,
+// ErrUnreachable) reports true.
+func MarkUnreachable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return unreachable{err}
+}
+
+type unreachable struct{ error }
+
+func (u unreachable) Is(target error) bool { return target == ErrUnreachable }
+func (u unreachable) Unwrap() error        { return u.error }
+
+// Unreachable reports whether err means the provider never answered:
+// connection refused or a timeout. Validation errors (bad key, unknown
+// model) are not.
+func Unreachable(err error) bool {
+	return errors.Is(err, ErrUnreachable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // ErrRefused marks a provider safety refusal. It is a run error: it reaches
 // the feed and counts toward the failure stop.
 var ErrRefused = errors.New("refused")
 
-// Refused is the run error for a refusal: "refused (cyber)".
+// Refused is the run error for a refusal: "refused (cyber)". category is
+// provider text (a category or the refusal itself): control characters are
+// stripped, since the error reaches the engine log and the feed.
 func Refused(category string) error {
-	if strings.TrimSpace(category) == "" {
+	category = strings.Join(strings.Fields(textutil.SanitizeModelText(category)), " ")
+	if category == "" {
 		category = "unspecified"
 	}
 	return fmt.Errorf("%w (%s)", ErrRefused, category)

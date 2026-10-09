@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -18,9 +20,11 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/backend/httpx"
 	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/pricing"
+	"herdr-dots/internal/textutil"
 )
 
 const (
@@ -51,9 +55,11 @@ func (b *Backend) client() (openai.Client, string, error) {
 		base = DefaultBaseURL // explicit, so OPENAI_BASE_URL can't redirect a dot
 	}
 	opts := []option.RequestOption{option.WithAPIKey(key), option.WithBaseURL(base), option.WithMaxRetries(2)}
-	if b.o.HTTP != nil {
-		opts = append(opts, option.WithHTTPClient(b.o.HTTP))
+	hc := b.o.HTTP
+	if hc == nil {
+		hc = httpx.SameHostClient() // never forward the key to another host on a redirect
 	}
+	opts = append(opts, option.WithHTTPClient(hc))
 	for k, v := range b.o.Provider.ExtraHeaders {
 		opts = append(opts, option.WithHeader(k, v))
 	}
@@ -70,7 +76,8 @@ func (b *Backend) Check(ctx context.Context) error {
 	return mapErr(pager.Err(), key, "")
 }
 
-func (b *Backend) CheckModel(ctx context.Context, model string) error {
+func (b *Backend) CheckModel(ctx context.Context, r backend.Request) error {
+	model := r.Model
 	if model == "" {
 		return errors.New("openai-api needs a model: set [backend] model")
 	}
@@ -82,7 +89,7 @@ func (b *Backend) CheckModel(ctx context.Context, model string) error {
 	return mapErr(err, key, model)
 }
 
-func (b *Backend) Models(ctx context.Context) ([]string, error) {
+func (b *Backend) Models(ctx context.Context, _ backend.Request) ([]string, error) {
 	c, key, err := b.client()
 	if err != nil {
 		return nil, err
@@ -110,11 +117,8 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		tools = toolloop.RepoTools(r.Cwd, lim)
 	}
 	system := backend.SystemPrompt(r)
-	switch {
-	case len(tools) > 0:
-		system += "\n" + toolloop.SystemNote + "\n"
-	case r.RepoRead && r.Pass != backend.PassMemory && toolloop.Unavailable(r.Cwd):
-		system += "\n" + toolloop.NoToolsNote + "\n"
+	if note := toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, len(tools) > 0); note != "" {
+		system += "\n" + note + "\n"
 	}
 	input := responses.ResponseInputParam{
 		responses.ResponseInputItemParamOfMessage(backend.UserPrompt(r), responses.EasyInputMessageRoleUser),
@@ -165,7 +169,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		if served == "" {
 			served = r.Model
 		}
-		usd, known := prices.Cost(Provider, served, u)
+		usd, known := prices.CostServed(Provider, served, r.Model, u)
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		var refusal string
 		for _, it := range resp.Output {
@@ -192,6 +196,13 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		}
 		if refusal != "" {
 			return reply, backend.Refused(clip(refusal, 80))
+		}
+		if resp.Status == responses.ResponseStatusFailed || resp.Error.Message != "" || resp.Error.Code != "" {
+			code := string(resp.Error.Code)
+			if code == "" {
+				code = "unspecified"
+			}
+			return reply, fmt.Errorf("openai run failed (%s): %s", providerText(code, key), providerText(resp.Error.Message, key))
 		}
 		if resp.Status == responses.ResponseStatusIncomplete && len(reply.Calls) == 0 {
 			return reply, fmt.Errorf("reply incomplete (%s): raise [backend] max_tokens", resp.IncompleteDetails.Reason)
@@ -254,10 +265,29 @@ func mapErr(err error, key, model string) error {
 		case code >= 500:
 			return fmt.Errorf("provider overloaded (openai %d, after retries)", code)
 		default:
-			return fmt.Errorf("openai rejected the request (%d): %s", code, clip(credentials.Redact(apierr.Error(), key), 300))
+			// apierr.Error() is only the status line: add the provider's
+			// message and param so a 4xx says what was wrong.
+			detail := providerText(apierr.Message, key)
+			if detail == "" {
+				detail = providerText(apierr.Error(), key)
+			}
+			if p := providerText(apierr.Param, key); p != "" {
+				detail += " (param " + clip(p, 80) + ")"
+			}
+			return fmt.Errorf("openai rejected the request (%d): %s", code, detail)
 		}
 	}
-	return errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	msg := errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return backend.MarkUnreachable(msg)
+	}
+	return msg
+}
+
+// providerText is provider-written text made safe for errors: the key
+// redacted, control characters stripped, one line, at most 300 runes.
+func providerText(s, key string) string {
+	return clip(strings.Join(strings.Fields(textutil.SanitizeModelText(credentials.Redact(s, key))), " "), 300)
 }
 
 func clip(s string, n int) string {

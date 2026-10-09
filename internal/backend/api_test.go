@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +21,12 @@ func (fakeAPI) Kind() string                                 { return "fake-api"
 func (fakeAPI) Check(context.Context) error                  { return nil }
 func (fakeAPI) Run(context.Context, Request) (Result, error) { return Result{}, nil }
 
+// registerFake registers the fake kind once per test binary: the registry is
+// global, so a second Register (go test -count=2) would panic.
+var registerFake = sync.OnceFunc(func() {
+	Register("fake-api", func(o Options) (Backend, error) { return fakeAPI{o: o}, nil })
+})
+
 func TestRegistryKeepsV1ConstructorAndAddsKinds(t *testing.T) {
 	b, err := New("claude-cli", &fakeRunner{})
 	if err != nil || b.Kind() != KindClaudeCLI {
@@ -29,7 +38,7 @@ func TestRegistryKeepsV1ConstructorAndAddsKinds(t *testing.T) {
 	if _, err := NewWith("nope", Options{}); err == nil || !strings.Contains(err.Error(), `unknown backend "nope"`) {
 		t.Fatalf("unknown kind: %v", err)
 	}
-	Register("fake-api", func(o Options) (Backend, error) { return fakeAPI{o: o}, nil })
+	registerFake()
 	got, err := NewWith("fake-api", Options{Deny: []string{"x"}})
 	if err != nil || got.(fakeAPI).o.Deny[0] != "x" {
 		t.Fatalf("NewWith passes options: %+v %v", got, err)
@@ -43,6 +52,20 @@ func TestRegistryKeepsV1ConstructorAndAddsKinds(t *testing.T) {
 		}
 	}()
 	Register("fake-api", func(o Options) (Backend, error) { return fakeAPI{}, nil })
+}
+
+// Final review item 2: only "never answered" counts as unreachable.
+func TestUnreachable(t *testing.T) {
+	base := errors.New("Ollama isn't running at http://gpu:11434")
+	if m := MarkUnreachable(base); !Unreachable(m) || m.Error() != base.Error() || !errors.Is(m, base) {
+		t.Fatalf("marked: %v", m)
+	}
+	if !Unreachable(fmt.Errorf("timed out: %w", context.DeadlineExceeded)) || !Unreachable(fmt.Errorf("x: %w", syscall.ECONNREFUSED)) {
+		t.Fatal("timeout and connection refused are unreachable")
+	}
+	if Unreachable(errors.New(`model "x" not available to this key`)) || Unreachable(nil) || MarkUnreachable(nil) != nil {
+		t.Fatal("validation errors are not")
+	}
 }
 
 func TestProviderFor(t *testing.T) {
@@ -111,6 +134,10 @@ func TestRefusedError(t *testing.T) {
 	}
 	if Refused("").Error() != "refused (unspecified)" {
 		t.Fatal("empty category")
+	}
+	// Final review item 11: refusal text is model text.
+	if err := Refused("I can't\x1b]0;x\x07\nhelp"); strings.ContainsAny(err.Error(), "\x1b\x07\n") || !errors.Is(err, ErrRefused) {
+		t.Fatalf("unsanitized refusal %q", err)
 	}
 }
 

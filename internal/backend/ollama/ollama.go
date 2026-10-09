@@ -123,15 +123,16 @@ type (
 )
 
 // Check confirms the server answers.
-func (b *Backend) Check(ctx context.Context) error {
-	base := b.BaseURL(backend.Request{})
+func (b *Backend) Check(ctx context.Context) error { return b.check(ctx, b.BaseURL(backend.Request{})) }
+
+func (b *Backend) check(ctx context.Context, base string) error {
 	_, err := b.client().Do(ctx, "GET", base+"/api/version", nil, nil)
 	return mapErr(err, base, "")
 }
 
-// Models lists pulled models (GET /api/tags).
-func (b *Backend) Models(ctx context.Context) ([]string, error) {
-	return b.models(ctx, b.BaseURL(backend.Request{}))
+// Models lists the models pulled on the dot's server (GET /api/tags).
+func (b *Backend) Models(ctx context.Context, r backend.Request) ([]string, error) {
+	return b.models(ctx, b.BaseURL(r))
 }
 
 func (b *Backend) models(ctx context.Context, base string) ([]string, error) {
@@ -150,16 +151,18 @@ func (b *Backend) models(ctx context.Context, base string) ([]string, error) {
 	return ids, nil
 }
 
-// CheckModel confirms the server runs and model is pulled ("qwen3" matches
-// "qwen3:latest").
-func (b *Backend) CheckModel(ctx context.Context, model string) error {
+// CheckModel confirms the dot's server runs and r.Model is pulled ("qwen3"
+// matches "qwen3:latest").
+func (b *Backend) CheckModel(ctx context.Context, r backend.Request) error {
+	model := r.Model
 	if model == "" {
 		return errors.New("ollama needs a model, e.g. qwen3-coder:30b")
 	}
-	if err := b.Check(ctx); err != nil {
+	base := b.BaseURL(r)
+	if err := b.check(ctx, base); err != nil {
 		return err
 	}
-	ids, err := b.models(ctx, b.BaseURL(backend.Request{}))
+	ids, err := b.models(ctx, base)
 	if err != nil {
 		return err
 	}
@@ -184,16 +187,9 @@ const minToolRoom = 64
 // errContextFull ends a run whose tool results no longer fit num_ctx.
 var errContextFull = errors.New("ollama: context window full (raise context_window)")
 
-// noteFor is the repo-tools note the system prompt carries: SystemNote when
-// tools are offered, NoToolsNote when the pane's directory is too broad.
+// noteFor is the repo-tools note the system prompt carries (toolloop.Note).
 func noteFor(r backend.Request, tools bool) string {
-	switch {
-	case tools:
-		return toolloop.SystemNote
-	case r.RepoRead && r.Pass != backend.PassMemory && toolloop.Unavailable(r.Cwd):
-		return toolloop.NoToolsNote
-	}
-	return ""
+	return toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, tools)
 }
 
 func toolDefs(tools []toolloop.Tool) []toolDef {
@@ -424,7 +420,7 @@ func mapErr(err error, base, model string) error {
 		return fmt.Errorf("ollama error: %s", textutil.SanitizeModelText(se.Error()))
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(err.Error(), "connection refused") {
-		return fmt.Errorf("Ollama isn't running at %s: start it with `ollama serve`", base)
+		return backend.MarkUnreachable(fmt.Errorf("Ollama isn't running at %s: start it with `ollama serve`", base))
 	}
 	return fmt.Errorf("ollama at %s: %s", base, textutil.SanitizeModelText(err.Error()))
 }

@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -85,6 +86,31 @@ func Decide(in FilterInput) Decision {
 		return Decision{Reason: ReasonSessionBudget}
 	}
 	return Decision{Run: true, Reason: ReasonRun, Turns: turns}
+}
+
+// budgetMessage is the toast for a dot stopped by a budget: which budget
+// (the dot's or the pane's, calls or dollars) and how it resets. r resets
+// only the dot's own counters, so a pane budget doesn't suggest it.
+func budgetMessage(in FilterInput, reason Reason) string {
+	if reason == ReasonSessionBudget {
+		const resets = "; resets on a new agent session"
+		if in.PaneCalls < in.PaneBudget && OverUSD(in.PaneCostUSD, in.PaneBudgetUSD) {
+			return fmt.Sprintf("pane dollar budget reached ($%.2f of $%.2f)%s", in.PaneCostUSD, in.PaneBudgetUSD, resets)
+		}
+		return fmt.Sprintf("pane call budget reached (%s)%s", calls(in.PaneBudget), resets)
+	}
+	const resets = "; resets on a new agent session or press r"
+	if in.DotCalls < in.Dot.Budget.MaxCallsPerSession && OverUSD(in.DotCostUSD, in.DotBudgetUSD) {
+		return fmt.Sprintf("dot dollar budget reached ($%.2f of $%.2f)%s", in.DotCostUSD, in.DotBudgetUSD, resets)
+	}
+	return fmt.Sprintf("dot call budget reached (%s)%s", calls(in.Dot.Budget.MaxCallsPerSession), resets)
+}
+
+func calls(n int) string {
+	if n == 1 {
+		return "1 call"
+	}
+	return fmt.Sprintf("%d calls", n)
 }
 
 // globsMatch tries each touched path as-is, without its leading slash, and by

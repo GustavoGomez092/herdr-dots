@@ -253,6 +253,9 @@ func estimateLine(p council.Preflight) string {
 		s += " + chair"
 	}
 	s += fmt.Sprintf(") · %d left", p.PaneLeft)
+	if p.ChairUnavailable != "" && len(p.Members) >= 2 {
+		s += " · chair unavailable (" + p.ChairUnavailable + ")"
+	}
 	if p.PaneBudgetUSD > 0 { // Phase 4: API dots spend dollars too
 		s += fmt.Sprintf(" · $%.2f of $%.2f spent", p.PaneCostUSD, p.PaneBudgetUSD)
 	}

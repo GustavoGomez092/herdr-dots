@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"regexp"
 
 	"github.com/BurntSushi/toml"
 )
@@ -151,6 +152,42 @@ func (t Table) Cost(provider, model string, u Usage) (usd float64, known bool) {
 	}
 	usd = (float64(u.In)*p.Input + float64(u.Out)*p.Output + float64(u.CacheRead)*cr + float64(u.CacheWrite)*cw) / 1e6
 	return usd, true
+}
+
+// datedSuffix is a trailing snapshot date: -YYYY-MM-DD (OpenAI) or -YYYYMMDD
+// (Anthropic).
+var datedSuffix = regexp.MustCompile(`.-(\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])|\d{4}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01]))$`)
+
+// StripDate drops a trailing snapshot date from a model id:
+// "gpt-6-sol-2026-08-01" → "gpt-6-sol", "claude-haiku-4-5-20251001" →
+// "claude-haiku-4-5". Ids without one come back unchanged.
+func StripDate(model string) string {
+	loc := datedSuffix.FindStringIndex(model)
+	if loc == nil {
+		return model
+	}
+	return model[:loc[0]+1]
+}
+
+// SameModel reports whether two ids name the same model, ignoring a dated
+// snapshot suffix on either.
+func SameModel(a, b string) bool {
+	return a == b || StripDate(a) == StripDate(b)
+}
+
+// CostServed prices a run by the id the provider served, then that id without
+// a dated snapshot suffix, then the id that was requested. Providers answer
+// with snapshot ids ("gpt-6-sol-2026-08-01") the price table doesn't list.
+func (t Table) CostServed(provider, served, requested string, u Usage) (usd float64, known bool) {
+	for _, m := range []string{served, StripDate(served), requested} {
+		if m == "" {
+			continue
+		}
+		if usd, ok := t.Cost(provider, m, u); ok {
+			return usd, true
+		}
+	}
+	return 0, false
 }
 
 // Estimate prices a typical review run for the editor: ~1,200 tokens of

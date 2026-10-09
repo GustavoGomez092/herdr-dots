@@ -18,6 +18,7 @@ import (
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
+	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/transcript"
 	"herdr-dots/internal/view"
 )
@@ -82,10 +83,11 @@ type Engine struct {
 	dmu sync.Mutex
 	sem chan struct{}
 
-	cfg        atomic.Pointer[config.Config] // current settings; read via e.config()
-	cfgMu      sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked
-	cfgStamp   string
-	cfgChecked time.Time
+	cfg         atomic.Pointer[config.Config] // current settings; read via e.config()
+	cfgMu       sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked, chairWarned
+	cfgStamp    string
+	cfgChecked  time.Time
+	chairWarned bool // the "chair needs a model" line was logged for the current settings
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
@@ -170,6 +172,7 @@ func New(d Deps) *Engine {
 	cfg := d.Config
 	e.cfg.Store(&cfg)
 	e.cfgStamp = configStamp(d.ConfigPath)
+	e.noteChairConfig(cfg)
 	e.ReloadDots()
 	return e
 }
@@ -430,8 +433,8 @@ func (e *Engine) processPane(paneID string) {
 	jobs, budgetHit := e.processPaneLocked(paneID)
 	pl.Unlock()
 
-	for _, d := range budgetHit {
-		e.notify(d, "budget reached; resets on a new agent session or press r")
+	for _, b := range budgetHit {
+		e.notify(b.dot, b.msg)
 	}
 	for _, j := range jobs {
 		e.spawn(func() {
@@ -441,8 +444,14 @@ func (e *Engine) processPane(paneID string) {
 	e.broadcast()
 }
 
+// budgetNote is a budget toast to send once the pane lock is released.
+type budgetNote struct {
+	dot dots.Dot
+	msg string
+}
+
 // processPaneLocked runs with the pane lock held.
-func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
+func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
 		return nil, nil
@@ -465,7 +474,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 	}
 
 	var jobs []job
-	var budgetHit []dots.Dot
+	var budgetHit []budgetNote
 	e.mu.Lock()
 	paneCalls := e.d.Usage.PaneCalls(paneID)
 	paneCost := e.d.Usage.PaneCost(paneID)
@@ -493,13 +502,14 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 				e.rerun[k] = true // pick these turns up when the current run ends
 				continue
 			}
-			dec := Decide(FilterInput{
+			in := FilterInput{
 				Dot: d, Att: *da, NewTurns: newTurns, PausedAll: e.pausedAll,
 				DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls,
 				PaneBudget: e.config().SessionBudgetCalls,
 				DotCostUSD: e.d.Usage.Cost(paneID, da.Slug), PaneCostUSD: paneCost,
 				DotBudgetUSD: d.Budget.MaxUSDPerSession, PaneBudgetUSD: e.config().SessionBudgetUSD,
-			})
+			}
+			dec := Decide(in)
 			da.LastSeenTurn = len(turns)
 			switch dec.Reason {
 			case ReasonCooldown:
@@ -508,7 +518,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 				e.status[k] = view.StatusBudget
 				if !e.warned[k] {
 					e.warned[k] = true
-					budgetHit = append(budgetHit, d)
+					budgetHit = append(budgetHit, budgetNote{dot: d, msg: budgetMessage(in, dec.Reason)})
 				}
 			}
 			if dec.Reason == ReasonObserve && e.memOn(d) {
@@ -713,8 +723,11 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 
 func (e *Engine) runFailed(k key, d dots.Dot, turn int, err error) {
 	err = redactErr(err) // defense in depth: adapters redact already
-	e.d.Logf("dot %s on %s: %v", d.Slug, k.pane, err)
-	e.feed(k.pane, d.Slug, turn, state.OutcomeError, err.Error())
+	// Run errors can carry provider text (a refusal): no control characters
+	// in the log, the feed or a toast.
+	msg := textutil.SanitizeModelText(err.Error())
+	e.d.Logf("dot %s on %s: %s", d.Slug, k.pane, msg)
+	e.feed(k.pane, d.Slug, turn, state.OutcomeError, msg)
 	e.setStatus(k, view.StatusError)
 	stopped := false
 	_ = e.d.Attachments.Update(k.pane, func(a *state.Attachment) {
@@ -726,7 +739,7 @@ func (e *Engine) runFailed(k key, d dots.Dot, turn int, err error) {
 		}
 	})
 	if stopped {
-		e.notify(d, fmt.Sprintf("stopped after %d failures: %s (press r in the Dots pane to reset)", e.d.MaxFailures, err))
+		e.notify(d, fmt.Sprintf("stopped after %d failures: %s (press r in the Dots pane to reset)", e.d.MaxFailures, msg))
 	}
 }
 

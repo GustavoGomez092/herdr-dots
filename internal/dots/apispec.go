@@ -3,6 +3,7 @@ package dots
 import (
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -47,6 +48,15 @@ func DefaultModelFor(kind string) string {
 	return ""
 }
 
+// loopback reports whether host is this machine (localhost or a loopback IP).
+func loopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // validateAPI checks the Phase 4 backend and budget fields against the kind.
 func validateAPI(d Dot) []error {
 	var errs []error
@@ -77,10 +87,13 @@ func validateAPI(d Dot) []error {
 	if b.BaseURL != "" {
 		if kind != KindOllama && kind != KindOpenRouter {
 			add("backend base_url applies to ollama and openrouter only")
-		} else if u, err := url.Parse(b.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		} else if u, err := url.Parse(b.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 			add("backend base_url %q must be an http(s) URL", b.BaseURL)
 		} else if u.User != nil {
 			add("backend base_url must not contain credentials")
+		} else if kind != KindOllama && u.Scheme != "https" && !loopback(u.Hostname()) {
+			// The API key travels in a header: never in clear text off the machine.
+			add("backend base_url for %s must use https (plain http only for localhost)", kind)
 		}
 	}
 	if b.ContextWindow != 0 {

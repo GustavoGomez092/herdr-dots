@@ -66,6 +66,41 @@ func TestAPIFieldsRejectedPerKind(t *testing.T) {
 	}
 }
 
+// Final review item 10: a keyed provider's base_url must be https unless it
+// is loopback (the key travels in a header), and a URL needs a host name.
+func TestBaseURLSchemeAndHost(t *testing.T) {
+	cases := []struct {
+		kind, url string
+		ok        bool
+	}{
+		{KindOpenRouter, "https://openrouter.ai/api/v1", true},
+		{KindOpenRouter, "http://127.0.0.1:8080/v1", true},
+		{KindOpenRouter, "http://localhost:8080/v1", true},
+		{KindOpenRouter, "http://[::1]:8080/v1", true},
+		{KindOpenRouter, "http://openrouter.example/api/v1", false},
+		{KindOpenRouter, "http://10.0.0.5:8080/v1", false},
+		{KindOllama, "http://10.0.0.5:11434", true}, // no key: plain http is fine
+		{KindOllama, "http://:8080", false},
+		{KindOpenRouter, "https://:8443", false},
+	}
+	for _, c := range cases {
+		d := apiDot(c.kind, "m")
+		d.Backend.BaseURL = c.url
+		err := d.Validate()
+		if c.ok && err != nil {
+			t.Errorf("%s %s: %v", c.kind, c.url, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("%s %s: want an error", c.kind, c.url)
+		}
+	}
+	d := apiDot(KindOpenRouter, "m")
+	d.Backend.BaseURL = "http://openrouter.example/api/v1"
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("error should say https: %v", err)
+	}
+}
+
 func TestDefaultModelFor(t *testing.T) {
 	if DefaultModelFor("claude-cli") != "sonnet" || DefaultModelFor(KindAnthropicAPI) != "claude-opus-5-5" || DefaultModelFor(KindOpenAIAPI) != "" {
 		t.Fatal("DefaultModelFor")

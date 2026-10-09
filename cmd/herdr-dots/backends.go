@@ -123,20 +123,29 @@ func (s *backendSet) Get(kind string) (backend.Backend, error) {
 }
 
 // CheckDot is the editor's save check: the CLI is installed, or the key works
-// and the model is available (or pulled).
-func (s *backendSet) CheckDot(ctx context.Context, d dots.Dot) error {
+// and the model is available (or pulled) at the dot's own base_url. A
+// provider that can't be reached (connection refused, timeout) doesn't block
+// the save: it comes back as warn, and err is nil. Real validation errors
+// (bad key, unknown model) still block.
+func (s *backendSet) CheckDot(ctx context.Context, d dots.Dot) (warn string, err error) {
 	be, err := s.Get(d.Backend.Kind)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if mc, ok := be.(backend.ModelChecker); ok {
-		return mc.CheckModel(ctx, d.Backend.Model)
+		err = mc.CheckModel(ctx, backend.Request{Model: d.Backend.Model, BaseURL: d.Backend.BaseURL})
+	} else {
+		err = be.Check(ctx)
 	}
-	return be.Check(ctx)
+	if err != nil && dots.IsAPIKind(d.Backend.Kind) && backend.Unreachable(err) {
+		return "not checked: " + err.Error(), nil
+	}
+	return "", err
 }
 
-// Models lists models for the editor's picker.
-func (s *backendSet) Models(ctx context.Context, kind string) ([]string, error) {
+// Models lists models for the editor's picker, from baseURL when the dot sets
+// one (ollama, openrouter).
+func (s *backendSet) Models(ctx context.Context, kind, baseURL string) ([]string, error) {
 	be, err := s.Get(kind)
 	if err != nil {
 		return nil, err
@@ -145,7 +154,7 @@ func (s *backendSet) Models(ctx context.Context, kind string) ([]string, error) 
 	if !ok {
 		return nil, fmt.Errorf("%s can't list models: type the model name", kind)
 	}
-	return ml.Models(ctx)
+	return ml.Models(ctx, backend.Request{BaseURL: baseURL})
 }
 
 // kindForProvider maps a credentials provider to its backend kind.

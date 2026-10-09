@@ -112,16 +112,19 @@ type (
 	}
 )
 
-func (b *Backend) Check(ctx context.Context) error {
+func (b *Backend) Check(ctx context.Context) error { return b.check(ctx, backend.Request{}) }
+
+// check validates the key at r's endpoint.
+func (b *Backend) check(ctx context.Context, r backend.Request) error {
 	c, err := b.client()
 	if err != nil {
 		return err
 	}
-	_, err = c.Do(ctx, "GET", b.base(backend.Request{})+"/key", nil, nil)
+	_, err = c.Do(ctx, "GET", b.base(r)+"/key", nil, nil)
 	return mapErr(err, "")
 }
 
-func (b *Backend) Models(ctx context.Context) ([]string, error) {
+func (b *Backend) Models(ctx context.Context, r backend.Request) ([]string, error) {
 	c, err := b.client()
 	if err != nil {
 		return nil, err
@@ -131,7 +134,7 @@ func (b *Backend) Models(ctx context.Context) ([]string, error) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if _, err := c.Do(ctx, "GET", b.base(backend.Request{})+"/models", nil, &out); err != nil {
+	if _, err := c.Do(ctx, "GET", b.base(r)+"/models", nil, &out); err != nil {
 		return nil, mapErr(err, "")
 	}
 	ids := make([]string, 0, len(out.Data))
@@ -141,14 +144,15 @@ func (b *Backend) Models(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-func (b *Backend) CheckModel(ctx context.Context, model string) error {
+func (b *Backend) CheckModel(ctx context.Context, r backend.Request) error {
+	model := r.Model
 	if model == "" {
 		return errors.New("openrouter needs a model, e.g. anthropic/claude-opus-5-5")
 	}
-	if err := b.Check(ctx); err != nil {
+	if err := b.check(ctx, r); err != nil {
 		return err
 	}
-	ids, err := b.Models(ctx)
+	ids, err := b.Models(ctx, r)
 	if err != nil {
 		return err
 	}
@@ -176,11 +180,8 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		tools = toolloop.RepoTools(r.Cwd, lim)
 	}
 	system := backend.SystemPrompt(r)
-	switch {
-	case len(tools) > 0:
-		system += "\n" + toolloop.SystemNote + "\n"
-	case wantTools && toolloop.Unavailable(r.Cwd):
-		system += "\n" + toolloop.NoToolsNote + "\n"
+	if note := toolloop.Note(r.RepoRead && r.Pass != backend.PassMemory, r.Cwd, len(tools) > 0); note != "" {
+		system += "\n" + note + "\n"
 	}
 	cr := chatRequest{
 		Model:     r.Model,
@@ -195,6 +196,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		cr.Tools = append(cr.Tools, d)
 	}
 	url := b.base(r) + "/chat/completions"
+	prices := b.o.PriceTable()
 	turn := func(ctx context.Context, results []toolloop.Result, final bool) (toolloop.Reply, error) {
 		for _, res := range results {
 			content := res.Content
@@ -234,6 +236,10 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		}
 		if resp.Usage.Cost != nil {
 			reply.CostUSD, reply.CostKnown = *resp.Usage.Cost, true
+		} else {
+			// No usage.cost: a [openrouter."<model>"] entry in prices.toml
+			// still prices the run (served id, undated, then requested).
+			reply.CostUSD, reply.CostKnown = prices.CostServed(Provider, resp.Model, r.Model, reply.Usage)
 		}
 		if len(resp.Choices) == 0 {
 			return reply, errors.New("openrouter returned no choices")
