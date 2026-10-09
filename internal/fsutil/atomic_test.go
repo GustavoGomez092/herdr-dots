@@ -38,3 +38,25 @@ func TestWriteFileAtomicReplacesAndLeavesNoTemp(t *testing.T) {
 		t.Fatalf("leftover files: %v", entries)
 	}
 }
+
+// The temp file must be private before it holds any secret byte: restrict runs
+// right after creation, while the file is still empty.
+func TestWriteFileAtomicRestrictsBeforeWriting(t *testing.T) {
+	var size int64 = -1
+	old := restrictFn
+	restrictFn = func(path string, perm os.FileMode) error {
+		st, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		size = st.Size()
+		return old(path, perm)
+	}
+	defer func() { restrictFn = old }()
+	if err := WriteFileAtomic(filepath.Join(t.TempDir(), "f"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if size != 0 {
+		t.Fatalf("restrict ran when the temp file held %d bytes, want 0", size)
+	}
+}

@@ -39,6 +39,10 @@ func rename(from, to string) error {
 	return err
 }
 
+// busy reports errors worth retrying. ERROR_ACCESS_DENIED is included because
+// that is what a rename onto a file another process has open returns, so a
+// genuinely denied write is also retried for about a second (40 x 25 ms)
+// before the error surfaces.
 func busy(err error) bool {
 	return errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_LOCK_VIOLATION)
 }

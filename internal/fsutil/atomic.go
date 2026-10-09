@@ -6,12 +6,15 @@ import (
 	"path/filepath"
 )
 
+// restrictFn is a test seam for restrict.
+var restrictFn = restrict
+
 // WriteFileAtomic writes data to a temp file in the same directory and renames
 // it over path, so readers never observe a half-written file. The parent
 // directory is created with 0700. A private perm (no group or other bits)
-// also gets an owner-only DACL on Windows, and a write whose privacy can't be
-// set fails. On Windows the rename is retried briefly while another process
-// has the old file open.
+// also gets an owner-only DACL on Windows, applied to the temp file before any
+// byte is written, and a write whose privacy can't be set fails. On Windows
+// the rename is retried briefly while another process has the old file open.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -23,15 +26,15 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp) // no-op once renamed
+	if err := restrictFn(tmp, perm); err != nil {
+		f.Close()
+		return err
+	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		return err
 	}
 	if err := f.Chmod(perm); err != nil {
-		f.Close()
-		return err
-	}
-	if err := restrict(tmp, perm); err != nil {
 		f.Close()
 		return err
 	}
