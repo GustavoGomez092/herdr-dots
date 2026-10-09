@@ -87,9 +87,48 @@ func TestImportRejectsBadDocuments(t *testing.T) {
 	}
 }
 
-func TestImportRefusesSecrets(t *testing.T) {
-	doc := "version = 1\n[[entry]]\nscope = \"project\"\nkind = \"note\"\ntext = \"use AKIAIOSFODNN7EXAMPLE for deploys\"\n"
-	if _, err := ImportTOML([]byte(doc)); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("secret text must be refused, got %v", err)
+func TestSecretHitsAndUneditedSecretStillImports(t *testing.T) {
+	entries := []Entry{
+		{ID: "m1", Scope: ScopeProject, Kind: KindNote, Text: "use AKIAIOSFODNN7EXAMPLE for deploys", Status: StatusActive, Source: SourceUser},
+		{ID: "m2", Scope: ScopeProject, Kind: KindNote, Text: "plain note", Status: StatusActive, Source: SourceUser},
+	}
+	data, err := ExportTOML(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := ImportTOML(data)
+	if err != nil {
+		t.Fatalf("secret-like text must still import: %v", err)
+	}
+	adds, updates, deletes := DiffTOML(entries, back)
+	if len(adds)+len(updates)+len(deletes) != 0 {
+		t.Fatalf("unedited round trip: %+v %+v %+v", adds, updates, deletes)
+	}
+	hits := SecretHits(back)
+	if len(hits) != 1 || hits[0].String() != "p:m1" {
+		t.Fatalf("hits %+v", hits)
+	}
+	if len(SecretHits(adds)) != 0 {
+		t.Fatal("no hits expected in an empty diff")
+	}
+}
+
+func TestImportValidatesStatusSourceDotAndRef(t *testing.T) {
+	base := "version = 1\n[[entry]]\nscope = \"dot\"\nkind = \"note\"\ntext = \"x\"\n"
+	for name, doc := range map[string]string{
+		"status": base + "dot = \"security\"\nstatus = \"deleted\"\n",
+		"source": base + "dot = \"security\"\nsource = \"robot\"\n",
+		"dot":    base + "dot = \"../../x\"\n",
+		"ref+5":  base + "dot = \"security\"\nref = \"d:m+5\"\n",
+		"ref-1":  base + "dot = \"security\"\nref = \"d:m-1\"\n",
+	} {
+		if _, err := ImportTOML([]byte(doc)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+		}
+	}
+	ok := base + "dot = \"security\"\nstatus = \"proposed\"\nsource = \"model\"\nref = \"d:m5\"\n"
+	got, err := ImportTOML([]byte(ok))
+	if err != nil || got[0].Source != SourceModel || got[0].ID != "m5" {
+		t.Fatalf("valid doc: %+v %v", got, err)
 	}
 }

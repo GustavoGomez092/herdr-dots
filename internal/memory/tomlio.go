@@ -3,6 +3,7 @@ package memory
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -13,6 +14,8 @@ const exportHeader = `# herdr-dots memory. Edit text, kind, paths, pinned or sta
 # Delete an [[entry]] block to forget it. Add a block without "ref" to create an entry.
 # Leave "ref", "scope" and "dot" alone on existing entries.
 `
+
+var dotSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,127}$`)
 
 type tomlEntry struct {
 	Ref    string   `toml:"ref,omitempty"`
@@ -69,12 +72,17 @@ func ImportTOML(data []byte) ([]Entry, error) {
 		if !e.Scope.Valid() {
 			return nil, fmt.Errorf("%w: entry %d: scope %q must be project, dot or global", ErrInvalid, i+1, te.Scope)
 		}
-		// Imported text is untrusted: it never lands in memory with a credential in it.
-		if found, kind := ScanSecrets(e.Text); found {
-			return nil, fmt.Errorf("%w: entry %d: text looks like a secret (%s)", ErrInvalid, i+1, kind)
-		}
 		if !e.Kind.Valid() {
 			return nil, fmt.Errorf("%w: entry %d: kind %q", ErrInvalid, i+1, te.Kind)
+		}
+		if e.Dot != "" && !dotSlugRe.MatchString(e.Dot) {
+			return nil, fmt.Errorf("%w: entry %d: dot %q is not a valid dot name", ErrInvalid, i+1, e.Dot)
+		}
+		if e.Status != "" && !e.Status.Valid() {
+			return nil, fmt.Errorf("%w: entry %d: status %q must be active, proposed or archived", ErrInvalid, i+1, e.Status)
+		}
+		if e.Source != "" && !e.Source.Valid() {
+			return nil, fmt.Errorf("%w: entry %d: source %q", ErrInvalid, i+1, e.Source)
 		}
 		if e.Scope != ScopeProject && e.Dot == "" {
 			return nil, fmt.Errorf("%w: entry %d: %s memory needs a dot", ErrInvalid, i+1, e.Scope)
@@ -128,4 +136,18 @@ func DiffTOML(before, after []Entry) (adds, updates []Entry, deletes []Ref) {
 		}
 	}
 	return adds, updates, deletes
+}
+
+// SecretHits returns the refs (or, for entries without an id, a ref with an
+// empty ID) of entries whose text looks like a credential. Importing never
+// refuses such text; callers run this on the adds and updates from DiffTOML
+// and ask the developer to confirm.
+func SecretHits(entries []Entry) []Ref {
+	var hits []Ref
+	for _, e := range entries {
+		if found, _ := ScanSecrets(e.Text); found {
+			hits = append(hits, e.Ref())
+		}
+	}
+	return hits
 }
