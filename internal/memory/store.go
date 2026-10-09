@@ -358,8 +358,10 @@ func (s *Store) prepare(e Entry) (Entry, error) {
 	switch e.Status {
 	case StatusActive, StatusArchived:
 	case StatusProposed:
-		if e.Scope != ScopeProject {
-			return e, fmt.Errorf("%w: only project memory can be proposed", ErrInvalid)
+		// Imported dot memory waits for approval too (Phase 9): a shared
+		// "don't raise this" must not silence a dot unreviewed.
+		if e.Scope != ScopeProject && !(e.Scope == ScopeDot && e.Source == SourceImport) {
+			return e, fmt.Errorf("%w: only project memory (or imported dot memory) can be proposed", ErrInvalid)
 		}
 	default:
 		return e, fmt.Errorf("%w: status %q", ErrInvalid, e.Status)
@@ -415,8 +417,11 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		// reshape an entry of its own source and dot that is not an approved
 		// project convention; otherwise it just bumps uses.
 		// The main agent never rewrites anything, not even its own proposal.
+		// An import rewrites only an import still waiting for review, never
+		// one the developer approved (Phase 9).
 		rewrite := e.Source == SourceUser ||
-			(e.Source != SourceAgent && x.Source != SourceUser && x.Source == e.Source && x.Dot == e.Dot && !(x.Scope == ScopeProject && x.Status != StatusProposed))
+			(e.Source != SourceAgent && x.Source != SourceUser && x.Source == e.Source && x.Dot == e.Dot && !(x.Scope == ScopeProject && x.Status != StatusProposed) &&
+				!(e.Source == SourceImport && x.Status != StatusProposed))
 		if rewrite {
 			x.Paths = cleanPaths(append(x.Paths, e.Paths...))
 			if bestScore < 1 {
@@ -433,13 +438,18 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		// the card's (spec M10): only sent and user findings suppress
 		// repeats, so a model must not keep a sent finding from counting by
 		// writing it first. Never the reverse, and never over a user entry.
-		if e.Source == SourceOutcome && x.Source == SourceModel && x.Scope == ScopeDot && x.Dot == e.Dot {
+		// The same holds for an imported entry (Phase 9): the developer's own
+		// verdict on a card is theirs, not someone else's shared conclusion.
+		if e.Source == SourceOutcome && (x.Source == SourceModel || x.Source == SourceImport) && x.Scope == ScopeDot && x.Dot == e.Dot {
 			x.Source = SourceOutcome
 			if e.Evidence != (Evidence{}) {
 				x.Evidence = e.Evidence
 			}
 		}
-		if x.Status == StatusProposed && e.Status == StatusActive {
+		// Only the developer approves an imported proposal: a model's matching
+		// add (active in dot scope, or with AutoApproveProject) leaves it
+		// waiting. The developer's add and card outcome made it theirs above.
+		if x.Status == StatusProposed && e.Status == StatusActive && x.Source != SourceImport {
 			x.Status = StatusActive
 		}
 		if rewrite && e.Pinned {
@@ -508,11 +518,16 @@ func (s *Store) capFor(sc Scope) int {
 // the developer hasn't reviewed. When keep is itself research and no older
 // research (proposed or active) can make room, keep is archived instead of any
 // non-research entry. A pinned or developer-written keep is never archived.
+//
+// Imported proposals (Phase 9) are someone else's unreviewed conclusions:
+// among proposals they go right after research, before this project's own,
+// and a new import makes room only by archiving older imports. Imports are
+// capped per scope file (MaxPendingImports) instead.
 func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) int {
 	if limit <= 0 {
 		return 0
 	}
-	live, active, keepProposed, keepResearch, keepAt := 0, 0, false, false, -1
+	live, active, keepProposed, keepResearch, keepImport, keepAt := 0, 0, false, false, false, -1
 	var proposed, cands []int
 	for i, e := range f.Entries {
 		if e.Status == StatusArchived {
@@ -525,6 +540,7 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		if e.ID == keep {
 			keepProposed = e.Status == StatusProposed
 			keepResearch = isResearchKind(e.Kind) && !e.Pinned && e.Source != SourceUser
+			keepImport = e.Source == SourceImport && e.Status == StatusProposed
 			keepAt = i
 			continue
 		}
@@ -546,6 +562,10 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		if ra != rb {
 			return ra
 		}
+		ia, ib := f.Entries[proposed[a]].Source == SourceImport, f.Entries[proposed[b]].Source == SourceImport
+		if ia != ib {
+			return ia
+		}
 		return f.Entries[proposed[a]].CreatedAt.Before(f.Entries[proposed[b]].CreatedAt)
 	})
 	n := 0
@@ -555,6 +575,9 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		}
 		if keepResearch && !isResearchKind(f.Entries[i].Kind) {
 			break // research never pushes out an unreviewed non-research proposal
+		}
+		if keepImport && f.Entries[i].Source != SourceImport {
+			continue // an import never pushes out this project's own proposals
 		}
 		archive(i)
 		n++
@@ -883,7 +906,9 @@ func sortEntries(es []Entry) {
 
 // Candidates loads what a run of dot may see: its dot scope, project scope
 // (active entries plus its own proposals) when readProject, and its global
-// scope. Archived entries are left out.
+// scope. Archived entries are left out, and so are imported proposals
+// (Phase 9): attributed to the importing dot, they would otherwise reach its
+// suppression check unreviewed.
 func (s *Store) Candidates(p, dot string, readProject bool) ([]Entry, error) {
 	var out []Entry
 	d, derr := s.List(p, Filter{Scope: ScopeDot, Dot: dot, Statuses: []Status{StatusActive}})
@@ -893,7 +918,7 @@ func (s *Store) Candidates(p, dot string, readProject bool) ([]Entry, error) {
 		var pe []Entry
 		pe, perr = s.List(p, Filter{Scope: ScopeProject})
 		for _, e := range pe {
-			if e.Status == StatusActive || e.Dot == dot {
+			if e.Status == StatusActive || (e.Dot == dot && e.Source != SourceImport) {
 				out = append(out, e)
 			}
 		}

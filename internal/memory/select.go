@@ -27,12 +27,13 @@ type Query struct {
 }
 
 // eligible: active entries, plus the reading dot's own project proposals;
-// never another dot's dot or global entries.
+// never another dot's dot or global entries. An imported proposal stays out
+// of every prompt until the developer approves it (Phase 9).
 func eligible(e Entry, dot string) bool {
 	switch e.Status {
 	case StatusActive:
 	case StatusProposed:
-		if e.Scope != ScopeProject || e.Dot != dot {
+		if e.Scope != ScopeProject || e.Dot != dot || e.Source == SourceImport {
 			return false
 		}
 	default:
@@ -174,7 +175,9 @@ func inSection(sec section, k Kind) bool {
 func author(e Entry) string {
 	var who string
 	switch {
-	case e.Source == SourceUser || e.Source == SourceImport:
+	case e.Source == SourceImport:
+		who = "imported" // someone else's conclusion, shared in a dot pack (Phase 9)
+	case e.Source == SourceUser:
 		who = "developer"
 	case e.Source == SourceOutcome:
 		who = "outcome"
@@ -189,6 +192,15 @@ func author(e Entry) string {
 		who += ", unapproved"
 	}
 	return who
+}
+
+// importedMark labels an imported line whose kind has no author label, so a
+// dot never mistakes a shared pack's entry for its own or the developer's.
+func importedMark(e Entry) string {
+	if e.Source == SourceImport {
+		return " (imported)"
+	}
+	return ""
 }
 
 // Render formats selected entries as the MEMORY block (spec §6.3), one line
@@ -218,9 +230,9 @@ func Render(sel []Entry) string {
 				if e.Evidence.Turn > 0 {
 					line += " (turn " + strconv.Itoa(e.Evidence.Turn) + ")"
 				}
-				b.WriteString(line)
+				b.WriteString(line + importedMark(e))
 			default:
-				b.WriteString("\n- [" + e.Ref().String() + "] " + text)
+				b.WriteString("\n- [" + e.Ref().String() + "] " + text + importedMark(e))
 			}
 		}
 	}

@@ -423,6 +423,9 @@ func (m Model) approveScreen(w int) []string {
 	case by == "":
 		by = "the developer"
 	}
+	if e.Source == memory.SourceImport {
+		by += " (imported from a dot pack)"
+	}
 	paths := clean(strings.Join(e.Paths, ", "))
 	if paths == "" {
 		paths = "(none)"
@@ -570,6 +573,11 @@ func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.mutate("saved "+ref.String(), func(st *memory.Store) error {
 				_, err := st.Update(pid, ref, func(x *memory.Entry) error {
 					x.Text, x.Kind, x.Paths, x.Source = text, kind, paths, memory.SourceUser
+					// Only imports propose dot memory (Phase 9); the developer's
+					// own dot memory is active, so editing one approves it.
+					if x.Status == memory.StatusProposed && x.Scope != memory.ScopeProject {
+						x.Status = memory.StatusActive
+					}
 					return nil
 				})
 				return err
@@ -618,7 +626,13 @@ func (m Model) row(e memory.Entry) string {
 		star = "★"
 	}
 	var who string
+	text := clean(e.Text)
 	switch {
+	case e.Source == memory.SourceImport:
+		who = "(imported)"
+		if from := clean(e.Dot); from != "" {
+			text = "from " + from + ": " + text // whose pack it came from
+		}
 	case e.Source == memory.SourceUser:
 		who = "(you)"
 	case e.Source == memory.SourceAgent:
@@ -628,7 +642,7 @@ func (m Model) row(e memory.Entry) string {
 	default:
 		who = fmt.Sprintf("used %d×", e.Uses)
 	}
-	return fmt.Sprintf("%-7s %s %-10s %-9s %s", clean(e.Ref().String()), star, clean(string(e.Kind)), who, clean(e.Text))
+	return fmt.Sprintf("%-7s %s %-10s %-9s %s", clean(e.Ref().String()), star, clean(string(e.Kind)), who, text)
 }
 
 // list renders the rows with their section headers and reports the line the
