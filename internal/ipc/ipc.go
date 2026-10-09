@@ -97,10 +97,11 @@ type Request struct {
 }
 
 type Response struct {
-	ID       int            `json:"id"`
-	OK       bool           `json:"ok"`
-	Error    string         `json:"error,omitempty"`
-	Snapshot *view.Snapshot `json:"snapshot,omitempty"`
+	ID       int             `json:"id"`
+	OK       bool            `json:"ok"`
+	Error    string          `json:"error,omitempty"`
+	Snapshot *view.Snapshot  `json:"snapshot,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"` // query commands only (query.go)
 }
 
 type Handler interface {
@@ -136,6 +137,10 @@ func serveConn(ctx context.Context, conn net.Conn, h Handler) {
 			stream(ctx, conn, enc, req.ID, h)
 			return
 		}
+		if isQuery(req.Cmd) {
+			serveQuery(ctx, conn, dec, enc, req, h) // one query per connection
+			return
+		}
 		resp := Response{ID: req.ID, OK: true}
 		if err := h.Handle(ctx, req.Cmd, req.Args); err != nil {
 			resp.OK, resp.Error = false, err.Error()
@@ -169,6 +174,10 @@ func stream(ctx context.Context, conn net.Conn, enc *json.Encoder, id int, h Han
 	}
 }
 
+// callTimeout is Call's deadline when its context has none. Query has no
+// default: a dot run can take longer (Phase 5).
+var callTimeout = 30 * time.Second
+
 type Client struct{ Path string }
 
 func (c Client) dial(ctx context.Context) (net.Conn, error) {
@@ -182,7 +191,7 @@ func (c Client) Call(ctx context.Context, cmd string, args any) error {
 		return err
 	}
 	defer conn.Close()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(callTimeout)
 	if d, ok := ctx.Deadline(); ok {
 		deadline = d
 	}
