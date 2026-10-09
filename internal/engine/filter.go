@@ -1,0 +1,98 @@
+// Package engine runs dots: it watches main agent panes, decides which dots
+// should look at each finished turn, runs them, and routes their verdicts.
+package engine
+
+import (
+	"path/filepath"
+	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
+
+	"herdr-dots/internal/dots"
+	"herdr-dots/internal/state"
+	"herdr-dots/internal/transcript"
+)
+
+type Reason string
+
+const (
+	ReasonRun           Reason = "run"
+	ReasonPausedAll     Reason = "paused_all"
+	ReasonPaused        Reason = "paused"
+	ReasonObserve       Reason = "observe"
+	ReasonOff           Reason = "on_turn_off"
+	ReasonFromDot       Reason = "from_dot"
+	ReasonCooldown      Reason = "cooldown"
+	ReasonGlobs         Reason = "globs"
+	ReasonBudget        Reason = "budget"
+	ReasonSessionBudget Reason = "session_budget"
+)
+
+type FilterInput struct {
+	Dot        dots.Dot
+	Att        state.DotAttachment
+	NewTurns   []transcript.Turn
+	PausedAll  bool
+	DotCalls   int
+	PaneCalls  int
+	PaneBudget int
+}
+
+type Decision struct {
+	Run    bool
+	Reason Reason
+	Turns  []transcript.Turn // new turns minus the ones this dot started
+}
+
+// Decide applies the spec's trigger filter (§6.3) to one dot.
+func Decide(in FilterInput) Decision {
+	switch {
+	case in.PausedAll:
+		return Decision{Reason: ReasonPausedAll}
+	case in.Att.Paused:
+		return Decision{Reason: ReasonPaused}
+	case in.Dot.Delivery.Mode == dots.ModeObserve:
+		return Decision{Reason: ReasonObserve}
+	case !in.Dot.Trigger.OnTurn:
+		return Decision{Reason: ReasonOff}
+	}
+	var turns []transcript.Turn
+	for _, t := range in.NewTurns {
+		if !t.IsFromDot(in.Dot.Name) {
+			turns = append(turns, t)
+		}
+	}
+	if len(turns) == 0 {
+		return Decision{Reason: ReasonFromDot}
+	}
+	if in.Att.CooldownLeft > 0 {
+		return Decision{Reason: ReasonCooldown}
+	}
+	if len(in.Dot.Trigger.FileGlobs) > 0 && !globsMatch(in.Dot.Trigger.FileGlobs, turns) {
+		return Decision{Reason: ReasonGlobs}
+	}
+	if in.DotCalls >= in.Dot.Budget.MaxCallsPerSession {
+		return Decision{Reason: ReasonBudget}
+	}
+	if in.PaneCalls >= in.PaneBudget {
+		return Decision{Reason: ReasonSessionBudget}
+	}
+	return Decision{Run: true, Reason: ReasonRun, Turns: turns}
+}
+
+// globsMatch tries each touched path as-is, without its leading slash, and by
+// base name, so "**/*.tsx" and "*.tsx" both match "/repo/web/app.tsx".
+func globsMatch(globs []string, turns []transcript.Turn) bool {
+	for _, t := range turns {
+		for _, p := range t.TouchedPaths() {
+			for _, g := range globs {
+				for _, cand := range []string{p, strings.TrimPrefix(p, "/"), filepath.Base(p)} {
+					if ok, _ := doublestar.Match(g, cand); ok {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
