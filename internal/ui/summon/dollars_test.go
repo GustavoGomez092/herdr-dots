@@ -9,6 +9,21 @@ import (
 	"herdr-dots/internal/council"
 )
 
+// Final review item 4: a chair that can't run (no model for its backend) is
+// left out of the estimate and shown as unavailable.
+func TestCouncilEstimateShowsAnUnavailableChair(t *testing.T) {
+	in := council.PlanInput{Candidates: []council.Candidate{{Slug: "security", CallsLeft: 40}, {Slug: "frontend", CallsLeft: 40}},
+		Rounds: 1, MaxMembers: 8, PaneLeft: 50, Chair: true, ChairUnavailable: "set [council] chair_model"}
+	pf := council.Plan(in)
+	if pf.Chair || pf.EstimatedCalls != 2 || pf.ChairUnavailable == "" {
+		t.Fatalf("preflight %+v", pf)
+	}
+	want := "estimate: 2 calls (2 dots × 1 round) · 50 left · chair unavailable (set [council] chair_model)"
+	if got := estimateLine(pf); got != want {
+		t.Fatalf("estimate %q, want %q", got, want)
+	}
+}
+
 // Phase 4: the council estimate shows the pane's dollar spend when a pane
 // dollar budget is set, and a pane past it refuses the council.
 func TestCouncilEstimateShowsDollarSpend(t *testing.T) {

@@ -83,10 +83,11 @@ type Engine struct {
 	dmu sync.Mutex
 	sem chan struct{}
 
-	cfg        atomic.Pointer[config.Config] // current settings; read via e.config()
-	cfgMu      sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked
-	cfgStamp   string
-	cfgChecked time.Time
+	cfg         atomic.Pointer[config.Config] // current settings; read via e.config()
+	cfgMu       sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked, chairWarned
+	cfgStamp    string
+	cfgChecked  time.Time
+	chairWarned bool // the "chair needs a model" line was logged for the current settings
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
@@ -171,6 +172,7 @@ func New(d Deps) *Engine {
 	cfg := d.Config
 	e.cfg.Store(&cfg)
 	e.cfgStamp = configStamp(d.ConfigPath)
+	e.noteChairConfig(cfg)
 	e.ReloadDots()
 	return e
 }

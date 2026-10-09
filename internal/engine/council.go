@@ -113,11 +113,15 @@ func (e *Engine) councilPlan(att state.Attachment, slugs []string) (council.Pref
 		}
 		cands = append(cands, c)
 	}
-	pf := council.Plan(council.PlanInput{
+	in := council.PlanInput{
 		Candidates: cands, Rounds: cc.Rounds, MaxMembers: cc.MaxMembers,
 		PaneLeft: callsLeft(cfg.SessionBudgetCalls, e.d.Usage.PaneCalls(att.PaneID)), Chair: cc.Merge == config.MergeChair,
 		PaneCostUSD: e.d.Usage.PaneCost(att.PaneID), PaneBudgetUSD: cfg.SessionBudgetUSD,
-	})
+	}
+	if _, _, err := chairSpec(cfg); err != nil {
+		in.ChairUnavailable = chairModelHint
+	}
+	pf := council.Plan(in)
 	if slugs != nil { // nil = every eligible dot; an explicit empty selection leaves no members
 		pf = pf.Select(slugs)
 	}
@@ -378,17 +382,9 @@ func (e *Engine) mergeCouncil(run *councilRun, parts []council.Part) (body, note
 // and counts against the pane budget, never a dot's.
 func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.CouncilConfig) (string, error) {
 	cfg := e.config()
-	kind, model := cc.ChairBackend, cc.ChairModel
-	if kind == "" {
-		kind = cfg.DefaultBackend
-	}
-	if model == "" {
-		model = cfg.DefaultModel
-		if kind != cfg.DefaultBackend {
-			// default_model belongs to default_backend: an anthropic-api chair
-			// must not be asked for "sonnet" (Phase 4).
-			model = dots.DefaultModelFor(kind)
-		}
+	kind, model, err := chairSpec(cfg)
+	if err != nil {
+		return "", err // no model to ask: no call, no charge
 	}
 	be, err := e.d.Backend(kind)
 	if err != nil {
@@ -422,6 +418,45 @@ func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.Counc
 		return "", errors.New("the chair returned no digest")
 	}
 	return strings.TrimSpace(textutil.SanitizeModelText(res.Verdict.Message)), nil
+}
+
+// chairModelHint is what the preflight shows when the chair can't run.
+const chairModelHint = "set [council] chair_model"
+
+// chairSpec resolves the chair's backend kind and model from [council]
+// chair_backend / chair_model and the defaults. default_model belongs to
+// default_backend: a chair on another kind gets that kind's default model
+// (never "sonnet" for an API chair). An API kind with no default model
+// (openai-api, openrouter, ollama) needs chair_model; without it err says so.
+func chairSpec(cfg config.Config) (kind, model string, err error) {
+	cc := cfg.Council.Normalized()
+	kind, model = cc.ChairBackend, cc.ChairModel
+	if kind == "" {
+		kind = cfg.DefaultBackend
+	}
+	if model == "" {
+		model = cfg.DefaultModel
+		if kind != cfg.DefaultBackend {
+			model = dots.DefaultModelFor(kind)
+		}
+	}
+	if model == "" && dots.IsAPIKind(kind) && dots.DefaultModelFor(kind) == "" {
+		return kind, "", fmt.Errorf("the %s chair needs a model: %s", kind, chairModelHint)
+	}
+	return kind, model, nil
+}
+
+// noteChairConfig logs once (per stretch of bad settings, not per reload)
+// when the configured chair can't run for lack of a model.
+func (e *Engine) noteChairConfig(c config.Config) {
+	_, _, err := chairSpec(c)
+	e.cfgMu.Lock()
+	log := err != nil && !e.chairWarned
+	e.chairWarned = err != nil
+	e.cfgMu.Unlock()
+	if log && c.Council.Normalized().Merge == config.MergeChair {
+		e.d.Logf("config: %v (councils merge without a chair until it is set)", err)
+	}
 }
 
 // addCouncilCard queues the council card (always queue mode) unless the pane
