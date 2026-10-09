@@ -747,13 +747,15 @@ func (c *dotsCLI) trustFile(args []string) error {
 	if len(pos) != 1 {
 		return errors.New("usage: herdr-dots dots trust FILE [--allow CAP,...] [--yes]")
 	}
+	// The file and its name are someone else's: errors about them reach the
+	// terminal cleaned (no bidi or control characters).
 	pr, f, err := c.projectFile(pos[0])
 	if err != nil {
-		return err
+		return errors.New(one(err.Error()))
 	}
 	d, err := dots.DecodeProject(f, pr.ID)
 	if err != nil {
-		return fmt.Errorf("%s: %w", f.Rel, err)
+		return fmt.Errorf("%s: %s", one(f.Rel), one(err.Error()))
 	}
 	allow := splitCSV(*allowCSV)
 	if err := dots.CheckCapabilities(allow); err != nil {
@@ -772,7 +774,7 @@ func (c *dotsCLI) trustFile(args []string) error {
 	// The whole file, not just the purpose: research topics and a schedule
 	// task (Phase 8) reach prompts too, and trust covers every byte.
 	fmt.Fprintf(c.out, "TRUST %s in %s\nsha256:  %s\nname:    %s (%s)\nbackend: %s/%s\nthe file, exactly as it will be trusted:\n%s\n",
-		one(f.Rel), one(pr.Name), projectdots.Hex(sum), one(d.Name), dots.DisplaySlug(d.Slug), d.Backend.Kind, one(d.Backend.Model), indentBlock(string(f.Data)))
+		one(f.Rel), one(pr.Name), projectdots.Hex(sum), one(d.Name), dots.DisplaySlug(d.Slug), d.Backend.Kind, one(d.Backend.Model), "    "+strings.Join(dots.VisibleLines(f.Data), "\n    "))
 	if at := c.trustedElsewhere(pr)(projectdots.Item{Rel: f.Rel, Sum: sum}); at != "" {
 		fmt.Fprintf(c.out, "this exact file is already trusted at %s (clones of a repository share trust)\n", at)
 	}

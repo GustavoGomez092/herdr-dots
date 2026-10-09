@@ -616,7 +616,9 @@ func (e *Engine) projectLibraryLocked() []view.LibraryDot {
 				WriteTimeoutSeconds: it.Effective.Capabilities.WriteTimeoutSeconds,
 				Origin:              dots.OriginProject, Trusted: it.Trusted, Clamped: clamped, Requested: slices.Clone(it.Requested),
 				ProjectID: ps.pr.ID, ProjectName: cleanLine(ps.pr.Name), Path: itemPath(root, it.Rel), SHA256: projectdots.Hex(it.Sum),
-				Rel: it.Rel, TrustedAt: ps.trustedAt[slug], Root: root})
+				Rel: it.Rel, TrustedAt: ps.trustedAt[slug], Root: root,
+				// What runs, for the profile: the file may have changed since.
+				Purpose: ps.runnable[slug].Purpose})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {

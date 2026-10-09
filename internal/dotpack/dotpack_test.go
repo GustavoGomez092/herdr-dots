@@ -421,31 +421,6 @@ func TestParseRefusesTOMLBombsFast(t *testing.T) {
 	}
 }
 
-func TestPreScanLimits(t *testing.T) {
-	for _, s := range []string{
-		"x = [[[[{a=[[[1]]]}]]]]",
-		"a.b.c.d.e.f.g.h = 1",
-		"[a.b.c.d.e.f.g.h]",
-		"\"a\" . 'b' . c.d.e.f.g.h = 1",
-		"x = 1.5\ny = 2026-10-21T10:00:00Z",
-	} {
-		if err := preScan(s); err != nil {
-			t.Errorf("%q: %v", s, err)
-		}
-	}
-	for _, s := range []string{
-		"x = [[[[{a=[[[[1]]]]}]]]]",
-		"a.b.c.d.e.f.g.h.i = 1",
-		"[a.b.c.d.e.f.g.h.i]",
-		"\"a\" . 'b' . c.d.e.f.g.h.\"\"\"i\"\"\" = 1",
-		"x = {a={b={c={d={e={f={g={h={i=1}}}}}}}}}",
-	} {
-		if err := preScan(s); err == nil {
-			t.Errorf("%q accepted", s)
-		}
-	}
-}
-
 func TestEveryTemplateRoundTrips(t *testing.T) {
 	for _, tpl := range dots.Templates() {
 		data, err := Export(tpl, dpMem(), ExportOptions{Now: dpNow, Version: "0.9.0"})
@@ -479,7 +454,7 @@ func TestPreScanSkipsStringsAndComments(t *testing.T) {
 		t.Fatalf("strings changed:\n%q\n%q", p.Dot.Purpose, p.Memory[0].Text)
 	}
 	lit := "[pack]\nformat = 1\nnote = 'C:\\{{{{{{{{{{'\n[dot]\nname = '''multi {{{{{{{{{\n[[[[[[[[[ line'''\n"
-	if err := preScan(lit); err != nil {
+	if err := dots.PreScanTOML([]byte(lit)); err != nil {
 		t.Fatalf("literal strings counted: %v", err)
 	}
 }

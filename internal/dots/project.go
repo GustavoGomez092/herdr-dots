@@ -254,19 +254,24 @@ func DecodeProject(f ProjectFile, projectID string) (Dot, error) {
 
 // DecodeStrict decodes a dot from TOML over the defaults and refuses keys it
 // doesn't know. It does not validate. The origin in the data is never
-// trusted (P9-R7): Origin comes back "" and every caller sets it.
+// trusted (P9-R7): Origin comes back "" and every caller sets it. The data
+// is someone else's until trusted: PreScanTOML runs first (a TOML bomb
+// would otherwise hang the engine), and every error is cleaned and bounded.
 func DecodeStrict(data []byte) (Dot, error) {
+	if err := PreScanTOML(data); err != nil {
+		return Dot{}, err
+	}
 	d := New("")
 	md, err := toml.Decode(string(data), &d)
 	if err != nil {
-		return Dot{}, err
+		return Dot{}, cleanDecodeErr(err)
 	}
 	if un := md.Undecoded(); len(un) > 0 {
 		keys := make([]string, len(un))
 		for i, k := range un {
 			keys[i] = k.String()
 		}
-		return Dot{}, fmt.Errorf("unknown keys %s: this herdr-dots can't tell what they do, so it won't load them", strings.Join(keys, ", "))
+		return Dot{}, fmt.Errorf("unknown keys %s: this herdr-dots can't tell what they do, so it won't load them", UnknownKeysText(keys))
 	}
 	d.Origin = ""
 	return d, nil

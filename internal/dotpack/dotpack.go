@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
@@ -55,9 +54,9 @@ func metaProblem(name, text string, max int) error {
 }
 
 // formatErr is a decode or scan error from an untrusted file, escaped like
-// cleanKey (the library echoes input) and capped.
+// dots.CleanText (the library echoes input) and capped.
 func formatErr(err error) error {
-	return fmt.Errorf("%w: %s", ErrFormat, cleanText(err.Error(), 300))
+	return fmt.Errorf("%w: %s", ErrFormat, dots.CleanText(err.Error(), 300))
 }
 
 var (
@@ -374,150 +373,8 @@ func insertBeforeSubtable(doc, block string) string {
 	return strings.TrimRight(doc, "\n") + "\n" + block + "\n"
 }
 
-// Pre-scan limits: no pack needs deeper nesting or longer key paths, and the
-// TOML decoder takes seconds and hundreds of MB on files that go far past
-// them (nested inline tables, a 32k-segment dotted key).
-const (
-	maxNesting     = 8
-	maxKeySegments = 8
-)
-
-// preScan refuses bracket/brace nesting deeper than maxNesting and dotted
-// key paths longer than maxKeySegments, in one pass that skips comments and
-// all four kinds of TOML string. It leaves every other syntax question to
-// the decoder.
-func preScan(s string) error {
-	depth, segs := 0, 0
-	inKey, afterDot := false, false // a run of key segments; the last token was "."
-	segment := func() error {
-		if inKey && afterDot {
-			segs++
-		} else {
-			segs = 1
-		}
-		inKey, afterDot = true, false
-		if segs > maxKeySegments {
-			return fmt.Errorf("a key path has more than %d parts", maxKeySegments)
-		}
-		return nil
-	}
-	for i := 0; i < len(s); {
-		c := s[i]
-		switch {
-		case c == '#':
-			j := strings.IndexByte(s[i:], '\n')
-			if j < 0 {
-				return nil
-			}
-			i += j
-			continue
-		case c == '"' || c == '\'':
-			end := stringEnd(s, i)
-			if end < 0 {
-				return nil // unterminated: the decoder reports it
-			}
-			i = end
-			if err := segment(); err != nil {
-				return err
-			}
-			continue
-		case c == '[' || c == '{':
-			depth++
-			if depth > maxNesting {
-				return fmt.Errorf("brackets or braces nest more than %d deep", maxNesting)
-			}
-			inKey, afterDot = false, false
-		case c == ']' || c == '}':
-			if depth > 0 {
-				depth--
-			}
-			inKey, afterDot = false, false
-		case c == '.':
-			afterDot = true
-		case c == ' ' || c == '\t':
-			// whitespace may surround the dots of a key
-		case bareKeyByte(c):
-			j := i
-			for j < len(s) && bareKeyByte(s[j]) {
-				j++
-			}
-			i = j
-			if err := segment(); err != nil {
-				return err
-			}
-			continue
-		default:
-			inKey, afterDot = false, false
-		}
-		i++
-	}
-	return nil
-}
-
-func bareKeyByte(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
-}
-
-// stringEnd returns the index just past the TOML string starting at s[i]
-// (basic, literal, or either multi-line form), or -1 when it doesn't end.
-// Single-line strings end at a newline at the latest.
-func stringEnd(s string, i int) int {
-	q := s[i]
-	escapes := q == '"'
-	if strings.HasPrefix(s[i:], strings.Repeat(string(q), 3)) {
-		for j := i + 3; j < len(s); j++ {
-			switch {
-			case escapes && s[j] == '\\':
-				j++
-			case s[j] == q && strings.HasPrefix(s[j:], strings.Repeat(string(q), 3)):
-				end := j + 3
-				for k := 0; k < 2 && end < len(s) && s[end] == q; k++ {
-					end++ // up to two quotes may end the content
-				}
-				return end
-			}
-		}
-		return -1
-	}
-	for j := i + 1; j < len(s); j++ {
-		switch {
-		case s[j] == '\n':
-			return -1
-		case escapes && s[j] == '\\':
-			j++
-		case s[j] == q:
-			return j + 1
-		}
-	}
-	return -1
-}
-
-// cleanKey shows a key from an untrusted file in an error: every rune that
-// doesn't print as itself (controls, bidi and other format characters) as
-// \u escapes, clipped to 80 runes.
-func cleanKey(k string) string { return cleanText(k, 80) }
-
-// cleanText escapes what doesn't print as itself and clips to max runes.
-func cleanText(k string, max int) string {
-	var b strings.Builder
-	n := 0
-	for _, r := range k {
-		if n == max {
-			b.WriteString("…")
-			break
-		}
-		n++
-		if unicode.IsPrint(r) {
-			b.WriteRune(r)
-		} else {
-			fmt.Fprintf(&b, "\\u%04x", r)
-		}
-	}
-	return b.String()
-}
-
 // Parse reads a pack. It refuses oversized files, nesting and key paths no
-// pack needs (preScan), other formats (checked first, so a newer pack says
+// pack needs (dots.PreScanTOML), other formats (checked first, so a newer pack says
 // so), keys this version doesn't know (a capability it doesn't know can't be
 // clamped), unsafe text in the note, version and memory, and memory it
 // wouldn't import. The dot is returned as written, except that its origin is
@@ -527,7 +384,7 @@ func Parse(data []byte) (Pack, error) {
 		return Pack{}, ErrTooLarge
 	}
 	text := string(data)
-	if err := preScan(text); err != nil {
+	if err := dots.PreScanTOML(data); err != nil {
 		return Pack{}, formatErr(err)
 	}
 	var probe struct {
@@ -547,15 +404,11 @@ func Parse(data []byte) (Pack, error) {
 		return Pack{}, formatErr(err)
 	}
 	if un := md.Undecoded(); len(un) > 0 {
-		var keys []string
-		for _, k := range un[:min(len(un), 5)] {
-			keys = append(keys, cleanKey(k.String()))
+		keys := make([]string, len(un))
+		for i, k := range un {
+			keys[i] = k.String()
 		}
-		more := ""
-		if len(un) > 5 {
-			more = fmt.Sprintf(" and %d more", len(un)-5)
-		}
-		return Pack{}, fmt.Errorf("%w: unknown keys %s%s (exported by a newer herdr-dots?)", ErrFormat, strings.Join(keys, ", "), more)
+		return Pack{}, fmt.Errorf("%w: unknown keys %s (exported by a newer herdr-dots?)", ErrFormat, dots.UnknownKeysText(keys))
 	}
 	var errs []error
 	for _, f := range []struct {

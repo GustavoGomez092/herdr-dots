@@ -199,7 +199,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.startExport(msg.Slug)
 		case profile.MemoryMsg:
 			return m, m.openMemory(msg.Slug, msg.Name)
+		case profile.TrustMsg:
+			if m.target == "" {
+				m.status = "focus an agent pane in that repository to trust its dots"
+				return m, nil
+			}
+			return m, m.openTrust(msg.Dot)
 		case memOpenMsg: // handled below: the memory browser opens over the profile
+		case trustOpenMsg: // handled below: the trust preview opens over the profile
 		default:
 			if ws, ok := msg.(tea.WindowSizeMsg); ok {
 				m.width, m.height = ws.Width, ws.Height
@@ -265,7 +272,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = style.Clean(msg.err.Error())
 			return m, nil
 		}
-		m.trust, m.scr, m.status = msg.st, scrTrust, ""
+		// Opened from a profile, the preview replaces it: done or cancelled,
+		// it goes back to the library, and nothing returns to a stale profile.
+		m.trust, m.scr, m.status, m.prof = msg.st, scrTrust, "", nil
 		m.trust.pg.fit(len(m.trustLines()), m.bodyHeight(), m.measured())
 		return m, nil
 	case trustDoneMsg:

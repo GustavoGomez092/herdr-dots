@@ -496,7 +496,8 @@ summary; plain tuning hints ("Mostly dismissed", "Rarely speaks", "Your most exp
 repeating dismissed advice", "Fails often"); and its recent history (`enter` shows the full
 message). The same data is available from the shell: `herdr-dots dots profile <slug>`.
 
-There are 14 built-in templates (`t` in the library), all with every risky feature off.
+There are 14 built-in templates (`t` in the library). In every template, write, research, web,
+schedules and commit reviews are off; MCP asks from your agent are allowed (your own dots).
 
 **Share a dot** as one `.dotpack.toml` file (a dotpack): `x` in the profile, `I` in the library to
 import, or
@@ -509,7 +510,10 @@ herdr-dots dots import security.dotpack.toml            # or an https:// URL
 Export refuses a dot or memory entry that looks like it holds a secret and names the fields only,
 never the text; `--force` drops the flagged memory entries and exports the rest. Absolute paths
 (`schedule.projects`) are dropped. Packs never contain credentials, history, global memory or
-preferences. Fetching a pack by URL is https only (a redirect that leaves https is refused).
+preferences. Fetching a pack by URL is https only (a redirect that leaves https is refused), and a
+redirect to another host is refused too: every redirect must stay on the host you typed. Some
+raw-file hosts redirect downloads to a CDN on another host, so their URLs are refused; download
+the file and import it from disk instead (`herdr-dots dots import ./file.dotpack.toml`).
 
 Import clamps every risky capability by default: a shared dot keeps only `--model` and `--effort`
 backend args, its budgets are clamped, and **inject delivery, write, MCP, research, web, schedules,
@@ -532,6 +536,16 @@ git root commit): clones share it, but only for byte-identical files, and when t
 another checkout the popup shows "trusted at <path>". Trusted dots still run clamped, with only the
 capabilities you granted. `project_dots_enabled = false` in `config.toml` turns project dots off
 (a malformed `config.toml` does too).
+
+**Upgrading from 0.8:** 0.9.0 refuses some backend args in every dot, your own local dots
+included, because they could redirect a dot's prompt or widen what it may do. A local dot that uses
+one now stops loading: `herdr-dots dots list` shows it with "backend args … are not allowed".
+Remove the arg from `backend.args` in the dot's file to load it again. Newly refused:
+
+- claude: `--system-prompt-file` (put the text in `purpose` instead).
+- codex: `-c`/`--config` keys other than `model`, `model_reasoning_effort`,
+  `model_reasoning_summary` and `hide_agent_reasoning`; `--search`; `-p`/`--profile`;
+  `-o`/`--output-last-message`; `--oss`; `--local-provider`; `--enable`/`--disable`.
 
 The live check of the manage popup (profile, import, trust) was **not run on this machine**; it is
 a user gate (see `docs/superpowers/notes/2026-10-08-phase-9-verification.md`).

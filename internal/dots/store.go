@@ -37,9 +37,16 @@ func (e LoadError) Error() string {
 func path(dir, slug string) string { return filepath.Join(dir, slug+".toml") }
 
 func decode(file string) (Dot, error) {
-	d := New("")
-	if _, err := toml.DecodeFile(file, &d); err != nil {
+	data, err := os.ReadFile(file)
+	if err != nil {
 		return Dot{}, err
+	}
+	if err := PreScanTOML(data); err != nil {
+		return Dot{}, err
+	}
+	d := New("")
+	if _, err := toml.Decode(string(data), &d); err != nil {
+		return Dot{}, cleanDecodeErr(err)
 	}
 	d.Slug = strings.TrimSuffix(filepath.Base(file), ".toml")
 	if d.Origin == "" || d.Origin == OriginProject {
