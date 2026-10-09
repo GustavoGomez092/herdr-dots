@@ -51,6 +51,7 @@ type CouncilArgs struct {
 	PaneID   string   `json:"pane_id"`
 	Question string   `json:"question,omitempty"`
 	Slugs    []string `json:"slugs,omitempty"`
+	Request  string   `json:"request,omitempty"` // council_preflight: the popup's id, echoed in Preflight.Request
 }
 
 type AttachArgs struct {

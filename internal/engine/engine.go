@@ -89,10 +89,11 @@ type Engine struct {
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
 	// Council state (council.go), guarded by mu; maps are created lazily.
-	councils    map[string]*councilRun       // by pane: the council in progress
-	preflights  map[string]council.Preflight // by pane: the last preflight, for snapshots
-	councilSeq  int
-	councilWait time.Duration // tests only: deadline for all member runs; 0 = run timeout × rounds
+	councils     map[string]*councilRun       // by pane: the council in progress
+	preflights   map[string]council.Preflight // by pane: the last preflight, for snapshots
+	councilSeq   int
+	preflightSeq uint64        // stamps every preflight (council.Preflight.Seq)
+	councilWait  time.Duration // tests only: deadline for all member runs; 0 = run timeout × rounds
 
 	// Memory state, guarded by mu. Memory I/O never happens under mu.
 	learning map[key]bool            // a memory pass is running

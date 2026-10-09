@@ -107,6 +107,11 @@ type Preflight struct {
 	EstimatedCalls int               `json:"estimated_calls"`
 	Allowed        bool              `json:"allowed"`
 	Refusal        string            `json:"refusal,omitempty"`
+	// Seq grows with every preflight the engine computes (0: not stamped);
+	// Request echoes the asking popup's id. A popup shows only its own
+	// preflight or a newer one, never one an earlier popup left behind.
+	Seq     uint64 `json:"seq,omitempty"`
+	Request string `json:"request,omitempty"`
 }
 
 // EstimateCalls is the worst-case cost of a council: every member in every

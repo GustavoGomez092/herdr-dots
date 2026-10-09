@@ -105,7 +105,7 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 		if err := decode(raw, &a); err != nil {
 			return err
 		}
-		_, err := e.CouncilPreflight(a.PaneID, a.Slugs)
+		_, err := e.councilPreflight(a.PaneID, a.Request, a.Slugs)
 		return err
 	}
 	return fmt.Errorf("unknown command %q", cmd)

@@ -459,6 +459,26 @@ func TestCouncilPreflightRefusesWhenThePaneBudgetIsShort(t *testing.T) {
 	}
 }
 
+// Final review item 6: every preflight carries a growing sequence number and
+// the popup's request id, so a reopened popup can tell its own (or a newer)
+// preflight from an old one.
+func TestCouncilPreflightIsStampedWithSeqAndRequest(t *testing.T) {
+	r, _ := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	first, _ := r.e.CouncilPreflight(pane, nil)
+	raw, _ := json.Marshal(ipc.CouncilArgs{PaneID: pane, Request: "popup-2"})
+	if err := r.e.Handle(context.Background(), ipc.CmdCouncilPreflight, raw); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := r.e.Snapshot().Pane(pane)
+	if first.Seq == 0 || p.CouncilPreflight == nil || p.CouncilPreflight.Seq <= first.Seq || p.CouncilPreflight.Request != "popup-2" {
+		t.Fatalf("first %+v, published %+v", first, p.CouncilPreflight)
+	}
+	if b, _ := json.Marshal(council.Preflight{}); strings.Contains(string(b), "seq") || strings.Contains(string(b), "request") {
+		t.Fatalf("unstamped preflights keep the old JSON: %s", b)
+	}
+}
+
 func TestPreflightSkipsPausedAndOverBudgetMembers(t *testing.T) {
 	fe := member("Frontend", dots.ModeQueue)
 	fe.Budget.MaxCallsPerSession = 1

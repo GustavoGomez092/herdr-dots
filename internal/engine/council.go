@@ -64,15 +64,25 @@ type memberResult struct {
 // (view.Pane.CouncilPreflight). nil slugs means every attached dot;
 // an explicitly empty selection leaves no members and is refused.
 func (e *Engine) CouncilPreflight(paneID string, slugs []string) (council.Preflight, error) {
+	return e.councilPreflight(paneID, "", slugs)
+}
+
+// councilPreflight is CouncilPreflight for a popup's request: the published
+// preflight is stamped with the next sequence number and the request id, so
+// the popup ignores a preflight an earlier popup left in the snapshot.
+func (e *Engine) councilPreflight(paneID, request string, slugs []string) (council.Preflight, error) {
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
 		return council.Preflight{}, fmt.Errorf("%w: %s", state.ErrNoAttachment, paneID)
 	}
 	pf, _, _ := e.councilPlan(att, slugs)
+	pf.Request = request
 	e.mu.Lock()
 	if e.preflights == nil {
 		e.preflights = map[string]council.Preflight{}
 	}
+	e.preflightSeq++
+	pf.Seq = e.preflightSeq
 	e.preflights[paneID] = pf
 	e.mu.Unlock()
 	e.broadcast()
