@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,12 @@ func (fakeAPI) Kind() string                                 { return "fake-api"
 func (fakeAPI) Check(context.Context) error                  { return nil }
 func (fakeAPI) Run(context.Context, Request) (Result, error) { return Result{}, nil }
 
+// registerFake registers the fake kind once per test binary: the registry is
+// global, so a second Register (go test -count=2) would panic.
+var registerFake = sync.OnceFunc(func() {
+	Register("fake-api", func(o Options) (Backend, error) { return fakeAPI{o: o}, nil })
+})
+
 func TestRegistryKeepsV1ConstructorAndAddsKinds(t *testing.T) {
 	b, err := New("claude-cli", &fakeRunner{})
 	if err != nil || b.Kind() != KindClaudeCLI {
@@ -29,7 +36,7 @@ func TestRegistryKeepsV1ConstructorAndAddsKinds(t *testing.T) {
 	if _, err := NewWith("nope", Options{}); err == nil || !strings.Contains(err.Error(), `unknown backend "nope"`) {
 		t.Fatalf("unknown kind: %v", err)
 	}
-	Register("fake-api", func(o Options) (Backend, error) { return fakeAPI{o: o}, nil })
+	registerFake()
 	got, err := NewWith("fake-api", Options{Deny: []string{"x"}})
 	if err != nil || got.(fakeAPI).o.Deny[0] != "x" {
 		t.Fatalf("NewWith passes options: %+v %v", got, err)
