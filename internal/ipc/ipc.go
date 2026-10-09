@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"herdr-dots/internal/view"
@@ -97,10 +98,11 @@ type Request struct {
 }
 
 type Response struct {
-	ID       int            `json:"id"`
-	OK       bool           `json:"ok"`
-	Error    string         `json:"error,omitempty"`
-	Snapshot *view.Snapshot `json:"snapshot,omitempty"`
+	ID       int             `json:"id"`
+	OK       bool            `json:"ok"`
+	Error    string          `json:"error,omitempty"`
+	Snapshot *view.Snapshot  `json:"snapshot,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"` // query commands only (query.go)
 }
 
 type Handler interface {
@@ -109,8 +111,27 @@ type Handler interface {
 	Watch() (<-chan view.Snapshot, func())
 }
 
+// Serve accepts connections until ctx ends or the listener fails. On the way
+// out it closes every open connection and waits for all connection goroutines
+// (so no handler or query is still running when Serve returns).
 func Serve(ctx context.Context, ln net.Listener, h Handler) error {
-	go func() { <-ctx.Done(); ln.Close() }()
+	var (
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		conns  = map[net.Conn]struct{}{}
+		closed bool
+	)
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+		mu.Lock()
+		closed = true
+		for c := range conns {
+			c.Close()
+		}
+		mu.Unlock()
+	}()
+	defer wg.Wait()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -119,21 +140,59 @@ func Serve(ctx context.Context, ln net.Listener, h Handler) error {
 			}
 			return err
 		}
-		go serveConn(ctx, conn, h)
+		mu.Lock()
+		if closed {
+			mu.Unlock()
+			conn.Close()
+			continue
+		}
+		conns[conn] = struct{}{}
+		wg.Add(1)
+		mu.Unlock()
+		go func() {
+			defer wg.Done()
+			defer func() { mu.Lock(); delete(conns, conn); mu.Unlock() }()
+			serveConn(ctx, conn, h)
+		}()
 	}
+}
+
+// limitedReader allows at most n more bytes until reset; past that it reports
+// EOF, which drops the connection.
+type limitedReader struct {
+	r io.Reader
+	n int
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if l.n <= 0 {
+		return 0, io.EOF
+	}
+	if len(p) > l.n {
+		p = p[:l.n]
+	}
+	n, err := l.r.Read(p)
+	l.n -= n
+	return n, err
 }
 
 func serveConn(ctx context.Context, conn net.Conn, h Handler) {
 	defer conn.Close()
-	dec := json.NewDecoder(conn)
+	lr := &limitedReader{r: conn}
+	dec := json.NewDecoder(lr)
 	enc := json.NewEncoder(conn)
 	for {
+		lr.n = maxRequestBytes
 		var req Request
 		if err := dec.Decode(&req); err != nil {
 			return
 		}
 		if req.Cmd == CmdWatch {
 			stream(ctx, conn, enc, req.ID, h)
+			return
+		}
+		if isQuery(req.Cmd) {
+			serveQuery(ctx, conn, dec, enc, req, h) // one query per connection
 			return
 		}
 		resp := Response{ID: req.ID, OK: true}
@@ -169,6 +228,13 @@ func stream(ctx context.Context, conn net.Conn, enc *json.Encoder, id int, h Han
 	}
 }
 
+// callTimeout is Call's deadline when its context has none. Query has no
+// default: a dot run can take longer (Phase 5).
+var callTimeout = 30 * time.Second
+
+// maxRequestBytes bounds one request line read by the server.
+const maxRequestBytes = 1 << 20
+
 type Client struct{ Path string }
 
 func (c Client) dial(ctx context.Context) (net.Conn, error) {
@@ -182,7 +248,7 @@ func (c Client) Call(ctx context.Context, cmd string, args any) error {
 		return err
 	}
 	defer conn.Close()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(callTimeout)
 	if d, ok := ctx.Deadline(); ok {
 		deadline = d
 	}
