@@ -203,7 +203,7 @@ func TestSendCardsCannotDeliverACardBeingApplied(t *testing.T) {
 				sendErr = r.e.SendCards([]string{c.ID})
 			}
 		}
-		if err := r.e.ApplyPatch(c.ID); err != nil {
+		if err := r.applyReviewed(c.ID); err != nil {
 			t.Fatal(err)
 		}
 		if sendErr == nil {
@@ -222,7 +222,7 @@ func TestSendCardsCannotDeliverACardBeingApplied(t *testing.T) {
 			t.Fatal(err)
 		}
 		eventually(t, "sent", func() bool { got, _ := r.q.Get(c.ID); return got.Status == queue.StatusSent })
-		if err := r.e.ApplyPatch(c.ID); err == nil {
+		if err := r.applyReviewed(c.ID); err == nil {
 			t.Fatal("applied a card that was sent")
 		}
 		if got, _ := os.ReadFile(r.repo + "/auth.js"); strings.Contains(string(got), "setCookie") {

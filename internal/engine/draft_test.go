@@ -379,7 +379,7 @@ func TestApplyPatchWaitsForAnIdleAgentAndTouchesOnlyTheWorkingTree(t *testing.T)
 	}
 	c := r.patchCard(t)
 	r.srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusWorking, Cwd: r.repo, AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}})
-	if err := r.e.ApplyPatch(c.ID); !errors.Is(err, ErrAgentBusy) {
+	if err := r.applyReviewed(c.ID); !errors.Is(err, ErrAgentBusy) {
 		t.Fatalf("apply while working: %v", err)
 	}
 	if got, _ := r.q.Get(c.ID); got.Status != queue.StatusPending {
@@ -388,7 +388,7 @@ func TestApplyPatchWaitsForAnIdleAgentAndTouchesOnlyTheWorkingTree(t *testing.T)
 	r.srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusIdle, Cwd: r.repo, AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}})
 	index, _ := os.ReadFile(filepath.Join(r.repo, ".git", "index"))
 	head := gitT(t, r.repo, "rev-parse", "HEAD")
-	if err := r.e.ApplyPatch(c.ID); err != nil {
+	if err := r.applyReviewed(c.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(r.repo, "auth.js")); !strings.Contains(string(got), "setCookie") {
@@ -413,7 +413,7 @@ func TestApplyPatchWaitsForAnIdleAgentAndTouchesOnlyTheWorkingTree(t *testing.T)
 		es, _ := r.mem.List(testProject, memory.Filter{Scope: memory.ScopeDot, Dot: "security"})
 		return len(es) == 1 && es[0].Text == "Applied patch: Moved the JWT to an httpOnly cookie." && es[0].Source == memory.SourceOutcome
 	})
-	if err := r.e.ApplyPatch(c.ID); err == nil {
+	if err := r.applyReviewed(c.ID); err == nil {
 		t.Fatal("a patch applies once")
 	}
 }
@@ -428,12 +428,12 @@ func TestApplyPatchReportsConflictsAndRefusesAnotherRepository(t *testing.T) {
 	c := r.patchCard(t)
 	other := draftRepo(t)
 	r.srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusIdle, Cwd: other, AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}})
-	if err := r.e.ApplyPatch(c.ID); err == nil || !strings.Contains(err.Error(), "the patch is for") {
+	if err := r.applyReviewed(c.ID); err == nil || !strings.Contains(err.Error(), "the patch is for") {
 		t.Fatalf("another repository: %v", err)
 	}
 	r.srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusIdle, Cwd: r.repo, AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}})
 	writeT(t, filepath.Join(r.repo, "auth.js"), "const a = 1\nsessionStorage.setItem('jwt', token)\nconst c = 3\n") // the agent moved on
-	if err := r.e.ApplyPatch(c.ID); err != nil {
+	if err := r.applyReviewed(c.ID); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := r.q.Get(c.ID)

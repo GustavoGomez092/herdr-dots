@@ -464,16 +464,19 @@ func (e *Engine) patchCard(id string) (queue.Card, error) {
 	return c, nil
 }
 
+// ErrUnreviewed refuses an apply that does not name the patch it reviewed.
+var ErrUnreviewed = errors.New("open the patch to review it before applying")
+
 // ApplyPatch applies a patch card to the working tree (gate 2, confirmed in
 // the diff viewer): only while the agent is idle, only into the repository
 // the patch was drafted for, never into the index, never as a commit.
 // Conflicts leave markers in the files and are reported, not an error.
-func (e *Engine) ApplyPatch(cardID string) error { return e.ApplyPatchChecked(cardID, "") }
-
-// ApplyPatchChecked is ApplyPatch for a caller that shows the patch first
-// (the diff viewer): a non-empty wantSHA256 must equal the stored patch's
-// hash, or nothing is applied (the patch changed since it was reviewed).
-func (e *Engine) ApplyPatchChecked(cardID, wantSHA256 string) error {
+// wantSHA256 is the hash of the patch the viewer showed (P7-R7): it is
+// required, and must equal the stored patch's hash, or nothing is applied.
+func (e *Engine) ApplyPatch(cardID, wantSHA256 string) error {
+	if strings.TrimSpace(wantSHA256) == "" {
+		return ErrUnreviewed
+	}
 	if _, err := e.patchCard(cardID); err != nil {
 		return err
 	}
@@ -508,7 +511,7 @@ func (e *Engine) ApplyPatchChecked(cardID, wantSHA256 string) error {
 	if m.Status != patchstore.StatusReady {
 		return fmt.Errorf("patch %s is %s", c.PatchID, m.Status)
 	}
-	if wantSHA256 != "" && !strings.EqualFold(wantSHA256, m.SHA256) {
+	if !strings.EqualFold(wantSHA256, m.SHA256) {
 		return errors.New("the patch changed since you reviewed it; open it again")
 	}
 	p, err := e.d.Herdr.PaneGet(e.ctx, c.PaneID)

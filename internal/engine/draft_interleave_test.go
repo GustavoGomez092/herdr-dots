@@ -27,7 +27,7 @@ func TestApplyAndDiscardCannotInterleave(t *testing.T) {
 		var applyErr error
 		r.e.testHook = func(point string) {
 			if point == "discard-reserved" {
-				applyErr = r.e.ApplyPatch(c.ID)
+				applyErr = r.applyReviewed(c.ID)
 			}
 		}
 		if err := r.e.DiscardPatch(c.ID); err != nil {
@@ -50,7 +50,7 @@ func TestApplyAndDiscardCannotInterleave(t *testing.T) {
 				}
 			}
 		}
-		err := r.e.ApplyPatch(c.ID)
+		err := r.applyReviewed(c.ID)
 		if err == nil || !strings.Contains(err.Error(), "dismissed") {
 			t.Fatalf("apply after discard: %v", err)
 		}
