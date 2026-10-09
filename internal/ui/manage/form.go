@@ -40,19 +40,20 @@ type field struct {
 // Form edits every setting of one dot. orig keeps fields the form doesn't
 // show (backend args), so saving never drops them.
 type Form struct {
-	orig     dots.Dot
-	isNew    bool
-	fields   []field
-	focus    int
-	err      string
-	estimate func(dots.Dot) string // editor cost line; nil = none
-	models   []string              // ctrl+space choices for the current kind
-	modelsOf string                // kind the choices belong to
-	modelIdx int
-	now      func() time.Time  // the cron preview's clock; nil = time.Now
-	height   int               // screen height for scrolling (SetHeight); 0 = unknown
-	problems map[string]string // field label -> validation message, set by View
-	unseen   bool              // the focused field's line was not drawn by the last View
+	orig      dots.Dot
+	isNew     bool
+	fields    []field
+	focus     int
+	err       string
+	estimate  func(dots.Dot) string // editor cost line; nil = none
+	models    []string              // ctrl+space choices for the current kind
+	modelsOf  string                // kind the choices belong to
+	modelIdx  int
+	now       func() time.Time  // the cron preview's clock; nil = time.Now
+	height    int               // screen height for scrolling (SetHeight); 0 = unknown
+	problems  map[string]string // field label -> validation message, set by View
+	unseen    bool              // the focused field's line was not drawn by the last View
+	lastWidth int               // the last real width View rendered at (0 = none yet)
 }
 
 func textField(label, v string) field {
@@ -227,7 +228,10 @@ func (f *Form) Update(k tea.KeyMsg) tea.Cmd {
 		// Never act on an unseen selection: lay the form out as it will be
 		// drawn, and ignore edit keys while the focused line is off screen.
 		if f.height > 0 {
-			f.View(0)
+			if f.lastWidth <= 0 {
+				return nil // never rendered at a real width: the line may be off screen
+			}
+			f.View(f.lastWidth)
 		}
 		if f.unseen {
 			return nil
@@ -405,6 +409,9 @@ func (f *Form) View(width int) string {
 		title = "NEW DOT"
 	}
 	b.WriteString(style.Title.Render(title) + "\n\n")
+	if width > 0 {
+		f.lastWidth = width
+	}
 	f.refreshProblems()
 	fieldsStart, focusStart, focusEnd := strings.Count(b.String(), "\n"), -1, -1
 	for i, fl := range f.fields {

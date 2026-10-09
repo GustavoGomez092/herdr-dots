@@ -112,3 +112,48 @@ func TestLookupsTolerateAMissingField(t *testing.T) {
 	_ = f.proactiveNote(lCron)
 	_ = f.proactiveNote(lWeb)
 }
+
+// Update must lay out at the width View really renders at: wrapped help and
+// error lines take rows that an unclipped layout doesn't count. At width 30
+// with a long error, for every height and every toggle, space changes the
+// toggle exactly when its line is on the real screen.
+func TestUnseenCheckUsesTheRealWidth(t *testing.T) {
+	long := strings.Repeat("a long error that wraps ", 6)
+	diverged := 0
+	for h := 3; h <= 45; h++ {
+		for _, label := range []string{lResearch, lWeb, lOnCommit, "Review every turn", "Read repo (read-only)"} {
+			f := NewForm(dots.New("x"), true)
+			f.SetError(long)
+			f.SetHeight(h)
+			focusOn(f, label)
+			shown := false
+			for _, l := range strings.Split(f.View(30), "\n") {
+				if strings.Contains(l, label) {
+					shown = true
+				}
+			}
+			real := f.unseen
+			f.View(0)
+			if real != f.unseen {
+				diverged++
+			}
+			f.View(30)
+			before := f.byLabel(label).on
+			f.Update(k("space"))
+			if changed := f.byLabel(label).on != before; changed != shown {
+				t.Fatalf("height %d, %q: drawn=%v but changed=%v", h, label, shown, changed)
+			}
+		}
+	}
+	t.Logf("%d cases where the unwrapped layout disagrees with the real one", diverged)
+}
+
+func TestNoWidthSeenYetIsUnseen(t *testing.T) {
+	f := NewForm(dots.New("x"), true)
+	f.SetHeight(10)
+	focusOn(f, lResearch)
+	f.Update(k("space"))
+	if f.byLabel(lResearch).on {
+		t.Fatal("without a rendered width the field is unseen; edits are ignored")
+	}
+}
