@@ -2,6 +2,7 @@
 package view
 
 import (
+	"herdr-dots/internal/council"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 )
@@ -45,6 +46,25 @@ type Pane struct {
 	ProjectName     string `json:"project_name,omitempty"`
 	MemoryEntries   int    `json:"memory_entries"`   // project + dot entries for this project
 	MemoryProposals int    `json:"memory_proposals"` // project entries awaiting approval
+
+	Council          *CouncilState      `json:"council,omitempty"`           // a council in progress
+	CouncilPreflight *council.Preflight `json:"council_preflight,omitempty"` // the last preflight, for the popup
+}
+
+// Council phases (CouncilState.Phase).
+const (
+	CouncilMembers = "members" // round 1 runs
+	CouncilRound2  = "round2"  // dot-to-dot cross-review runs
+	CouncilMerging = "merging" // the chair (or the plain merge) builds the digest
+)
+
+// CouncilState is a council in progress on a pane.
+type CouncilState struct {
+	ID    string `json:"id"`
+	Phase string `json:"phase"`
+	Done  int    `json:"done"`  // members finished in this round
+	Total int    `json:"total"` // members running in this round
+	Round int    `json:"round"`
 }
 
 type LibraryDot struct {
