@@ -122,6 +122,41 @@ func TestModelNeverRewritesDeveloperWording(t *testing.T) {
 	}
 }
 
+// Follow-up to final review item 1: a sent card that merges into a dot's own
+// model-written finding makes it an outcome finding (with the card's
+// evidence), so it suppresses repeats. A user entry is never demoted and a
+// model add never promotes anything.
+func TestOutcomeMergePromotesModelFinding(t *testing.T) {
+	const jwt = "JWT stored in localStorage is readable by any XSS payload; move it to an httpOnly cookie."
+	modelEv := Evidence{Session: "s1", Pane: "w1:p1", Turn: 1}
+	sentEv := Evidence{Session: "s1", Pane: "w1:p1", Turn: 1, Card: "7"}
+	finding := func(src Source, ev Evidence) Entry {
+		return Entry{Scope: ScopeDot, Dot: "security", Kind: KindFinding, Text: jwt, Source: src, Evidence: ev}
+	}
+
+	s := testStore(t)
+	mustAdd(t, s, pid, finding(SourceModel, modelEv))
+	mustAdd(t, s, pid, finding(SourceOutcome, sentEv))
+	if es := list(t, s, pid, Filter{Scope: ScopeDot, Dot: "security"}); len(es) != 1 || es[0].Source != SourceOutcome || es[0].Evidence != sentEv {
+		t.Fatalf("an outcome merge must promote model→outcome with the card's evidence: %+v", es)
+	}
+
+	s = testStore(t)
+	userEv := Evidence{Pane: "w1:p1", Turn: 1, Card: "3"}
+	mustAdd(t, s, pid, finding(SourceUser, userEv))
+	mustAdd(t, s, pid, finding(SourceOutcome, sentEv))
+	if es := list(t, s, pid, Filter{Scope: ScopeDot, Dot: "security"}); len(es) != 1 || es[0].Source != SourceUser || es[0].Evidence != userEv {
+		t.Fatalf("a user entry stays the developer's: %+v", es)
+	}
+
+	s = testStore(t)
+	mustAdd(t, s, pid, finding(SourceOutcome, sentEv))
+	mustAdd(t, s, pid, finding(SourceModel, Evidence{Session: "s1", Turn: 9}))
+	if es := list(t, s, pid, Filter{Scope: ScopeDot, Dot: "security"}); len(es) != 1 || es[0].Source != SourceOutcome || es[0].Evidence != sentEv {
+		t.Fatalf("a model add must not change an outcome entry: %+v", es)
+	}
+}
+
 func TestCapArchivesLowestValueButNeverPinnedOrUser(t *testing.T) {
 	s := testStore(t)
 	s.Limits.MaxDot = 4

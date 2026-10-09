@@ -876,6 +876,30 @@ func TestSentFindingSuppressesRepeat(t *testing.T) {
 	}
 }
 
+// Follow-up: a dot that writes a matching finding op in the same reply can't
+// stop its sent card from suppressing repeats.
+func TestSentCardSuppressesEvenAfterSameTextFindingOp(t *testing.T) {
+	r := newMemRig(t, memOpts{}, dot("Security", dots.ModeQueue))
+	r.be.set(backend.Result{Verdict: jwtFirst, Remember: []backend.MemoryOp{
+		{Op: "add", Scope: "dot", Kind: "finding", Text: jwtFirst.Message}}},
+		backend.Result{Verdict: jwtAgain})
+	r.reader("s1").add(transcript.Turn{User: "add login"})
+	r.attach(t, "security")
+	eventually(t, "first card", func() bool { return len(r.q.Pending(pane)) == 1 })
+	if err := r.e.SendCards([]string{r.q.Pending(pane)[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the finding became the sent card's", func() bool {
+		es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "security", Kinds: []memory.Kind{memory.KindFinding}})
+		return len(es) == 1 && es[0].Source == memory.SourceOutcome && es[0].Evidence.Card != ""
+	})
+	r.turnEnds("s1", transcript.Turn{User: "refactor auth"})
+	eventually(t, "suppressed by the sent finding", func() bool { return r.hasFeed(state.OutcomeSuppressed, "similar to d:m1") })
+	if n := len(r.q.Pending(pane)); n != 0 {
+		t.Fatalf("pending %d, want 0", n)
+	}
+}
+
 func TestSuppressedByIgnoresModelAndImportFindings(t *testing.T) {
 	ev := memory.Evidence{Session: "s1", Turn: 1}
 	for _, src := range []memory.Source{memory.SourceModel, memory.SourceImport} {
