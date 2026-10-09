@@ -565,3 +565,29 @@ func TestProjectsSurfacesLockAndCorruptMetaErrors(t *testing.T) {
 		t.Fatalf("%+v %v", ps, err)
 	}
 }
+
+// Fix round 2: one project's damaged meta.json must not block lookups of
+// another, nor of the damaged project itself (so it can still be purged).
+func TestFindProjectIgnoresOtherProjectsCorruptMeta(t *testing.T) {
+	s := testStore(t)
+	a, b := pid, "p-00000000000000ff"
+	root := t.TempDir()
+	for _, pr := range []Project{{ID: a, Name: "a", Root: realPath(root)}, {ID: b, Name: "b", Root: "/b"}} {
+		if err := s.SeeProject(pr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(s.Dir, b, "meta.json"), []byte("{oops"), 0o600)
+	if m, ok, err := s.FindProject(a); !ok || err != nil || m.Name != "a" {
+		t.Fatalf("by id: %+v %v %v", m, ok, err)
+	}
+	if m, ok, err := s.FindProject(root); !ok || err != nil || m.ID != a {
+		t.Fatalf("by path: %+v %v %v", m, ok, err)
+	}
+	if m, ok, err := s.FindProject(b); !ok || err != nil || m.ID != b {
+		t.Fatalf("damaged project by id: %+v %v %v", m, ok, err)
+	}
+	if _, ok, err := s.FindProject(t.TempDir()); ok || !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("no match should explain the damage: %v %v", ok, err)
+	}
+}

@@ -851,15 +851,26 @@ func (s *Store) SeeProject(pr Project) error {
 
 // Projects lists every project with memory, by name.
 func (s *Store) Projects() ([]ProjectMeta, error) {
+	out, perrs, err := s.projects()
+	errs := []error{err}
+	for _, e := range perrs {
+		errs = append(errs, e)
+	}
+	return out, errors.Join(errs...)
+}
+
+// projects lists every project directory with its meta and the error, if any,
+// from reading that project's meta (keyed by project id).
+func (s *Store) projects() ([]ProjectMeta, map[string]error, error) {
 	ents, err := os.ReadDir(s.Dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []ProjectMeta
-	var errs []error
+	perrs := map[string]error{}
 	for _, e := range ents {
 		if !e.IsDir() || !ValidProjectID(e.Name()) {
 			continue
@@ -880,7 +891,7 @@ func (s *Store) Projects() ([]ProjectMeta, error) {
 			return nil
 		})
 		if lerr != nil {
-			errs = append(errs, lerr)
+			perrs[e.Name()] = lerr
 		}
 		m.ID = e.Name()
 		out = append(out, m)
@@ -891,33 +902,47 @@ func (s *Store) Projects() ([]ProjectMeta, error) {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out, errors.Join(errs...)
+	return out, perrs, nil
 }
 
 // FindProject looks a project up by id, or by a path at or under one of its
 // recorded roots. ok is false when nothing matches.
 func (s *Store) FindProject(arg string) (ProjectMeta, bool, error) {
-	ps, err := s.Projects()
+	ps, perrs, err := s.projects()
 	if err != nil {
 		return ProjectMeta{}, false, err
 	}
+	// A match wins over other projects' damaged metas, so one bad project
+	// never blocks looking up (or purging) another, or the bad one by id.
+	// Only a lock timeout on the matched project itself is an error.
 	if ValidProjectID(arg) {
 		for _, p := range ps {
 			if p.ID == arg {
+				if lerr := perrs[p.ID]; errors.Is(lerr, ErrLocked) {
+					return ProjectMeta{}, false, lerr
+				}
 				return p, true, nil
 			}
 		}
-		return ProjectMeta{ID: arg}, false, nil
-	}
-	real := realPath(arg)
-	for _, p := range ps {
-		for _, r := range p.Roots {
-			if real == r || strings.HasPrefix(real, r+string(filepath.Separator)) {
-				return p, true, nil
+	} else {
+		real := realPath(arg)
+		for _, p := range ps {
+			for _, r := range p.Roots {
+				if real == r || strings.HasPrefix(real, r+string(filepath.Separator)) {
+					return p, true, nil
+				}
 			}
 		}
 	}
-	return ProjectMeta{}, false, nil
+	// Nothing matched: say why instead of claiming there is no memory.
+	var errs []error
+	for _, e := range perrs {
+		errs = append(errs, e)
+	}
+	if ValidProjectID(arg) {
+		return ProjectMeta{ID: arg}, false, errors.Join(errs...)
+	}
+	return ProjectMeta{}, false, errors.Join(errs...)
 }
 
 // Purge deletes a project's whole memory directory.
