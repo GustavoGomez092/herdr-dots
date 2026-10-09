@@ -6,6 +6,8 @@
 #   3. otherwise it fails with the reason, leaving nothing half-installed.
 # HERDR_PLUGIN_BUILD_OFFLINE=1 skips the download.
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell's progress bar slows Invoke-WebRequest badly.
+$ProgressPreference = 'SilentlyContinue'
 Set-Location -LiteralPath (Join-Path $PSScriptRoot '..')
 $Name = 'herdr-dots'
 $Version = (Get-Content -Raw -LiteralPath 'internal/version/VERSION').Trim()
@@ -13,7 +15,11 @@ $Version = (Get-Content -Raw -LiteralPath 'internal/version/VERSION').Trim()
 function Say([string]$Message) { [Console]::Error.WriteLine("${Name}: $Message") }
 
 function Get-Platform {
-    if ($env:HERDR_DOTS_PLATFORM) { return $env:HERDR_DOTS_PLATFORM }
+    if ($env:HERDR_DOTS_PLATFORM) {
+        if ($env:HERDR_DOTS_PLATFORM -cmatch '^(darwin|linux|windows)_(amd64|arm64)$') { return $env:HERDR_DOTS_PLATFORM }
+        Say "ignoring HERDR_DOTS_PLATFORM=$($env:HERDR_DOTS_PLATFORM): not <darwin|linux|windows>_<amd64|arm64>"
+        return $null
+    }
     switch ($env:PROCESSOR_ARCHITECTURE) {
         'AMD64' { return 'windows_amd64' }
         'ARM64' { return 'windows_arm64' }
@@ -23,7 +29,8 @@ function Get-Platform {
 
 function Get-Repo {
     $r = ''
-    if (Test-Path -LiteralPath 'release/REPO') { $r = (Get-Content -Raw -LiteralPath 'release/REPO').Trim() }
+    # An empty file reads as $null; the string wrap makes it "".
+    if (Test-Path -LiteralPath 'release/REPO') { $r = "$(Get-Content -Raw -LiteralPath 'release/REPO')".Trim() }
     if (-not $r -and (Get-Command git -ErrorAction SilentlyContinue)) {
         $url = (& git config --get remote.origin.url 2>$null)
         if ($url -match '^(?:https://github\.com/|git@github\.com:)(.+?)(?:\.git)?$') { $r = $Matches[1] }
@@ -64,18 +71,41 @@ function Install-Release([string]$Tmp) {
     }
     $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLower()
     if ($got -ne $want) { Say "checksum mismatch for $asset (got $got, want $want): not installing it"; return $false }
-    $x = Join-Path $Tmp 'x'
-    Expand-Archive -LiteralPath $zip -DestinationPath $x
-    $exe = Join-Path $x "$Name.exe"
-    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { Say "$asset has no $Name.exe"; return $false }
-    New-Item -ItemType Directory -Force -Path 'bin/release' | Out-Null
-    $bundle = "bin/release/$asset.sigstore.json"
-    Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $bundle
-    try { Invoke-WebRequest -UseBasicParsing -Uri "$url.sigstore.json" -OutFile (Join-Path $Tmp 'bundle') -TimeoutSec 60; Move-Item -Force -LiteralPath (Join-Path $Tmp 'bundle') -Destination $bundle } catch { }
-    Move-Item -Force -LiteralPath $zip -Destination "bin/release/$asset"
-    Move-Item -Force -LiteralPath $exe -Destination "bin/$Name.exe"
-    Set-Content -NoNewline -LiteralPath 'bin/INSTALL_SOURCE' -Value "source=release`nversion=$Version`nrepo=$repo`nasset=$asset`nsha256=$got`n"
+    $bundle = $null
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$url.sigstore.json" -OutFile (Join-Path $Tmp 'bundle') -TimeoutSec 60
+        $bundle = Join-Path $Tmp 'bundle'
+    } catch { }
+    # Stage everything in $Tmp, then install the binary first, the archive
+    # (and bundle) verify-release reads next, and the record last, so a
+    # failure part way never leaves a record that vouches for this binary.
+    # Any failure here returns $false, so the caller falls back to a source build.
+    try {
+        $x = Join-Path $Tmp 'x'
+        Expand-Archive -LiteralPath $zip -DestinationPath $x
+        $exe = Join-Path $x "$Name.exe"
+        if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { Say "$asset has no $Name.exe"; return $false }
+        $record = Join-Path $Tmp 'INSTALL_SOURCE'
+        Set-Content -NoNewline -LiteralPath $record -Value "source=release`nversion=$Version`nrepo=$repo`nasset=$asset`nsha256=$got`n"
+        Install-Binary $exe
+        New-Item -ItemType Directory -Force -Path 'bin/release' | Out-Null
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath "bin/release/$asset.sigstore.json"
+        Move-Item -Force -LiteralPath $zip -Destination "bin/release/$asset"
+        if ($bundle) { Move-Item -Force -LiteralPath $bundle -Destination "bin/release/$asset.sigstore.json" }
+        Move-Item -Force -LiteralPath $record -Destination 'bin/INSTALL_SOURCE'
+    } catch {
+        Say "could not install the verified ${asset}: $($_.Exception.Message)"
+        return $false
+    }
     return $true
+}
+
+# Install-Binary moves the new exe to bin\. Once the old binary is gone its
+# INSTALL_SOURCE no longer describes bin\, so the record is removed until the
+# caller writes the new one.
+function Install-Binary([string]$Exe) {
+    Move-Item -Force -LiteralPath $Exe -Destination "bin/$Name.exe"
+    if (Test-Path -LiteralPath 'bin/INSTALL_SOURCE') { Remove-Item -Force -LiteralPath 'bin/INSTALL_SOURCE' }
 }
 
 function Build-Source([string]$Tmp) {
@@ -83,8 +113,15 @@ function Build-Source([string]$Tmp) {
     $out = Join-Path $Tmp "$Name.exe"
     & go build -trimpath -ldflags '-X herdr-dots/internal/version.Source=source' -o $out '.\cmd\herdr-dots'
     if ($LASTEXITCODE -ne 0) { return $false }
-    Move-Item -Force -LiteralPath $out -Destination "bin/$Name.exe"
-    Set-Content -NoNewline -LiteralPath 'bin/INSTALL_SOURCE' -Value "source=source`nversion=$Version`n"
+    try {
+        $record = Join-Path $Tmp 'INSTALL_SOURCE'
+        Set-Content -NoNewline -LiteralPath $record -Value "source=source`nversion=$Version`n"
+        Install-Binary $out
+        Move-Item -Force -LiteralPath $record -Destination 'bin/INSTALL_SOURCE'
+    } catch {
+        Say "could not install the source build: $($_.Exception.Message)"
+        return $false
+    }
     return $true
 }
 
@@ -98,7 +135,7 @@ try {
         $code = 0
     } elseif (Get-Command go -ErrorAction SilentlyContinue) {
         if (Build-Source $tmp) { Say "built $Version from source"; $code = 0 }
-        else { Say 'the source build failed (see above); bin/ is unchanged' }
+        else { Say 'the source build or its install failed (see above)' }
     } else {
         Say 'could not install: no verified prebuilt binary (see above) and no Go toolchain.'
         Say 'Install Go 1.25 or newer (https://go.dev/dl/) and reinstall the plugin, or download'

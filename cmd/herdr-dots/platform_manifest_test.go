@@ -118,6 +118,13 @@ func TestWindowsBuildScriptBuildsTheExe(t *testing.T) {
 		`'.\cmd\herdr-dots'`, // the source-build fallback
 		"Install Go 1.25 or newer",
 		"exit $code",
+		"bin/$Name.exe", // the installed binary
+		// pwsh is not on every dev machine, so pin the fixes the PS tests
+		// exercise where it is: an empty REPO is "" (not $null.Trim()), no
+		// progress bar, a validated platform override.
+		`"$(Get-Content -Raw -LiteralPath 'release/REPO')".Trim()`,
+		"$ProgressPreference = 'SilentlyContinue'",
+		"'^(darwin|linux|windows)_(amd64|arm64)$'",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("build.ps1 lacks %q", want)

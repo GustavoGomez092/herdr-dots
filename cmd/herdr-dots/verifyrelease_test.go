@@ -158,3 +158,72 @@ func TestVerifyReleaseOnASourceBuild(t *testing.T) {
 		t.Fatalf("no record: %v", err)
 	}
 }
+
+func TestVerifyReleaseRejectsLeftoverArgs(t *testing.T) {
+	err := runVerifyRelease([]string{"--dir", t.TempDir(), "extra"})
+	if err == nil || !strings.Contains(err.Error(), "unexpected argument") {
+		t.Fatalf("leftover args: %v", err)
+	}
+}
+
+// vrRewriteArchive replaces the kept archive (and its SHA256SUMS line) with
+// one made of the given members, in order.
+func vrRewriteArchive(t *testing.T, root string, members ...*tar.Header) {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, h := range members {
+		body := h.Linkname
+		if h.Typeflag == tar.TypeReg {
+			h.Size = int64(len(body))
+			h.Linkname = ""
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte(body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := sha256.Sum256(buf.Bytes())
+	if err := os.WriteFile(filepath.Join(root, "bin", "release", vrAsset), buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "release", "SHA256SUMS"), []byte(hex.EncodeToString(s[:])+"  "+vrAsset+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tar -x keeps the last of two same-named members, so verify-release must
+// compare against that one. (Test-only convention: a regular member's body is
+// passed in Linkname.)
+func TestVerifyReleaseHashesTheLastMemberLikeTar(t *testing.T) {
+	reg := func(body string) *tar.Header {
+		return &tar.Header{Name: "herdr-dots", Mode: 0o755, Typeflag: tar.TypeReg, Linkname: body}
+	}
+	root, _ := vrRoot(t, "second", false)
+	vrRewriteArchive(t, root, reg("first"), reg("second"))
+	var out bytes.Buffer
+	if err := verifyRelease((&vrRun{}).io(root, &out, false)); err != nil {
+		t.Fatalf("the binary tar extracts (the last member) must verify: %v", err)
+	}
+	root, _ = vrRoot(t, "first", false)
+	vrRewriteArchive(t, root, reg("first"), reg("second"))
+	if err := verifyRelease((&vrRun{}).io(root, &out, false)); err == nil || !strings.Contains(err.Error(), "replaced after the install") {
+		t.Fatalf("the first of two members is not what tar installs: %v", err)
+	}
+	root, _ = vrRoot(t, "first", false)
+	vrRewriteArchive(t, root, reg("first"), &tar.Header{Name: "herdr-dots", Typeflag: tar.TypeSymlink, Linkname: "/bin/sh"})
+	if err := verifyRelease((&vrRun{}).io(root, &out, false)); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("a last member that is a symlink: %v", err)
+	}
+}

@@ -50,6 +50,9 @@ func runVerifyRelease(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("verify-release: unexpected argument %q (usage: herdr-dots verify-release [--dir <plugin root>])", fs.Arg(0))
+	}
 	root := *dir
 	if root == "" {
 		exe, err := os.Executable()
@@ -131,7 +134,7 @@ func verifyRelease(v verifyIO) error {
 	cosign, err := v.lookPath("cosign")
 	switch {
 	case err != nil:
-		fmt.Fprintln(v.out, "signature: not checked (install cosign to check it): cosign not installed; checksums only")
+		fmt.Fprintln(v.out, "signature: not checked (install cosign): cosign not installed; checksums only")
 	case !vrExists(bundle):
 		fmt.Fprintln(v.out, "signature: not checked (the release had no .sigstore.json bundle)")
 	default:
@@ -197,8 +200,17 @@ func vrFileSHA256(path string) (string, error) {
 }
 
 // vrMemberSHA256 hashes the file called name at the top of a .tar.gz or .zip.
+// When the name appears more than once it hashes the LAST one, which is what
+// extraction leaves on disk, and that last member must be a regular file.
 func vrMemberSHA256(archive, name string) (string, error) {
-	h := sha256.New()
+	sum, found, regular := "", false, false
+	hashOf := func(r io.Reader) (string, error) {
+		h := sha256.New()
+		if _, err := io.Copy(h, r); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(h.Sum(nil)), nil
+	}
 	if strings.HasSuffix(archive, ".zip") {
 		zr, err := zip.OpenReader(archive)
 		if err != nil {
@@ -206,43 +218,58 @@ func vrMemberSHA256(archive, name string) (string, error) {
 		}
 		defer zr.Close()
 		for _, f := range zr.File {
-			if f.Name == name {
-				rc, err := f.Open()
-				if err != nil {
-					return "", err
-				}
-				defer rc.Close()
-				if _, err := io.Copy(h, rc); err != nil {
-					return "", err
-				}
-				return hex.EncodeToString(h.Sum(nil)), nil
+			if f.Name != name {
+				continue
+			}
+			found, regular, sum = true, f.Mode().IsRegular(), ""
+			if !regular {
+				continue
+			}
+			rc, err := f.Open()
+			if err != nil {
+				return "", err
+			}
+			sum, err = hashOf(rc)
+			rc.Close()
+			if err != nil {
+				return "", err
 			}
 		}
-		return "", fmt.Errorf("%s has no %s", filepath.Base(archive), name)
-	}
-	f, err := os.Open(archive)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return "", err
-	}
-	tr := tar.NewReader(gz)
-	for {
-		hd, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			return "", fmt.Errorf("%s has no %s", filepath.Base(archive), name)
-		}
+	} else {
+		f, err := os.Open(archive)
 		if err != nil {
 			return "", err
 		}
-		if hd.Name == name && hd.Typeflag == tar.TypeReg {
-			if _, err := io.Copy(h, tr); err != nil {
+		defer f.Close()
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return "", err
+		}
+		tr := tar.NewReader(gz)
+		for {
+			hd, err := tr.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
 				return "", err
 			}
-			return hex.EncodeToString(h.Sum(nil)), nil
+			if hd.Name != name {
+				continue
+			}
+			found, regular, sum = true, hd.Typeflag == tar.TypeReg, ""
+			if regular {
+				if sum, err = hashOf(tr); err != nil {
+					return "", err
+				}
+			}
 		}
 	}
+	switch {
+	case !found:
+		return "", fmt.Errorf("%s has no %s", filepath.Base(archive), name)
+	case !regular:
+		return "", fmt.Errorf("%s: %s is not a regular file", filepath.Base(archive), name)
+	}
+	return sum, nil
 }

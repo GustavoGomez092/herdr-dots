@@ -328,3 +328,191 @@ func TestScriptsPassShellcheck(t *testing.T) {
 		t.Fatalf("shellcheck: %v\n%s", err, out)
 	}
 }
+
+type tarEntry struct {
+	name string
+	typ  byte
+	body string
+	link string
+}
+
+// tarEntries builds a .tar.gz from raw headers (a body only for regular files).
+func tarEntries(t *testing.T, entries ...tarEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, e := range entries {
+		h := &tar.Header{Name: e.name, Mode: 0o755, Typeflag: e.typ, Linkname: e.link}
+		if e.typ == tar.TypeReg {
+			h.Size = int64(len(e.body))
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if e.typ == tar.TypeReg {
+			if _, err := tw.Write([]byte(e.body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// readOnlyDir makes root/rel a directory nothing can be moved into.
+func readOnlyDir(t *testing.T, root, rel string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	p := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o755) })
+}
+
+const staleRecord = "source=source\nversion=0.9.0\n"
+
+func writeStaleRecord(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "INSTALL_SOURCE"), []byte(staleRecord), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failed install step must fail the install: a non-zero exit, no success
+// message and the old INSTALL_SOURCE left as it was.
+func TestFailedSourceInstallStepFailsTheScript(t *testing.T) {
+	skipOnWindows(t)
+	root := pluginRoot(t, "")
+	writeStaleRecord(t, root)
+	readOnlyDir(t, root, "bin/herdr-dots")
+	stderr, err := runBuild(t, root, "http://127.0.0.1:1", true)
+	if err == nil || strings.Contains(stderr, "built "+testVersion+" from source") {
+		t.Fatalf("a failed move must fail the script: %v\n%s", err, stderr)
+	}
+	if got := readInstallSource(t, root); got != staleRecord {
+		t.Fatalf("INSTALL_SOURCE was rewritten after a failed install:\n%s", got)
+	}
+}
+
+func TestFailedReleaseInstallStepFailsTheScript(t *testing.T) {
+	skipOnWindows(t)
+	// bin/herdr-dots read-only: nothing moves, the old record stays.
+	// bin/release read-only: the binary moved, so the old record (which
+	// described the old binary) is gone and no new one claims success.
+	for target, wantRecord := range map[string]string{"bin/herdr-dots": staleRecord, "bin/release": ""} {
+		t.Run(target, func(t *testing.T) {
+			asset := tarGz(t, "herdr-dots", fakeBinary)
+			srv, _ := release(t, asset)
+			root := pluginRoot(t, fmt.Sprintf("%s  %s\n", sum(asset), testAsset))
+			writeStaleRecord(t, root)
+			readOnlyDir(t, root, target)
+			stderr, err := runBuild(t, root, srv.URL, false)
+			if err == nil || strings.Contains(stderr, "installed the verified") {
+				t.Fatalf("a failed move must fail the script: %v\n%s", err, stderr)
+			}
+			if !strings.Contains(stderr, "Install Go 1.25 or newer") {
+				t.Errorf("stderr lacks the instructions:\n%s", stderr)
+			}
+			got, _ := os.ReadFile(filepath.Join(root, "bin", "INSTALL_SOURCE"))
+			if string(got) != wantRecord {
+				t.Fatalf("INSTALL_SOURCE after a failed install = %q, want %q", got, wantRecord)
+			}
+		})
+	}
+}
+
+func TestUnsafeArchiveMembersFallBackToSource(t *testing.T) {
+	skipOnWindows(t)
+	cases := map[string][]byte{
+		"symlink": tarEntries(t, tarEntry{name: "herdr-dots", typ: tar.TypeSymlink, link: "/bin/sh"}),
+		"dotdot":  tarEntries(t, tarEntry{name: "../herdr-dots", typ: tar.TypeReg, body: fakeBinary}),
+	}
+	for name, asset := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, hits := release(t, asset)
+			root := pluginRoot(t, fmt.Sprintf("%s  %s\n", sum(asset), testAsset))
+			stderr, err := runBuild(t, root, srv.URL, true)
+			if err != nil || !strings.Contains(stderr, "has no herdr-dots binary") {
+				t.Fatalf("build.sh: %v\n%s", err, stderr)
+			}
+			if hits.Load() < 1 {
+				t.Fatal("no download happened")
+			}
+			if got := runInstalled(t, root); got != "built-from-source" {
+				t.Fatalf("installed binary says %q", got)
+			}
+			if _, err := os.Lstat(filepath.Join(root, "bin", "release", testAsset)); !os.IsNotExist(err) {
+				t.Fatal("a rejected archive must not be kept")
+			}
+		})
+	}
+}
+
+func TestUppercaseChecksumIsAccepted(t *testing.T) {
+	skipOnWindows(t)
+	asset := tarGz(t, "herdr-dots", fakeBinary)
+	srv, _ := release(t, asset)
+	root := pluginRoot(t, fmt.Sprintf("%s  %s\n", strings.ToUpper(sum(asset)), testAsset))
+	stderr, err := runBuild(t, root, srv.URL, false)
+	if err != nil {
+		t.Fatalf("build.sh: %v\n%s", err, stderr)
+	}
+	if got := runInstalled(t, root); got != "fake-release-binary" {
+		t.Fatalf("installed binary says %q", got)
+	}
+	if !strings.Contains(readInstallSource(t, root), "sha256="+sum(asset)+"\n") {
+		t.Fatal("INSTALL_SOURCE must record the lowercase checksum")
+	}
+}
+
+func TestInvalidPlatformOverrideIsRefused(t *testing.T) {
+	skipOnWindows(t)
+	asset := tarGz(t, "herdr-dots", fakeBinary)
+	srv, hits := release(t, asset)
+	root := pluginRoot(t, fmt.Sprintf("%s  %s\n", sum(asset), testAsset))
+	stderr, err := runBuild(t, root, srv.URL, true, "HERDR_DOTS_PLATFORM=../../evil")
+	if err != nil || !strings.Contains(stderr, "HERDR_DOTS_PLATFORM") {
+		t.Fatalf("build.sh: %v\n%s", err, stderr)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("%d requests with an invalid platform", hits.Load())
+	}
+	if got := runInstalled(t, root); got != "built-from-source" {
+		t.Fatalf("installed binary says %q", got)
+	}
+}
+
+func TestEmptyRepoWithoutGitFallsBack(t *testing.T) {
+	skipOnWindows(t)
+	asset := tarGz(t, "herdr-dots", fakeBinary)
+	srv, hits := release(t, asset)
+	root := pluginRoot(t, fmt.Sprintf("%s  %s\n", sum(asset), testAsset))
+	if err := os.WriteFile(filepath.Join(root, "release", "REPO"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := runBuild(t, root, srv.URL, true)
+	if err != nil || !strings.Contains(stderr, "unknown GitHub repository") {
+		t.Fatalf("build.sh: %v\n%s", err, stderr)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("downloaded without a repository")
+	}
+	if got := runInstalled(t, root); got != "built-from-source" {
+		t.Fatalf("installed binary says %q", got)
+	}
+}

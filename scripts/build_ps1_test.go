@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -111,5 +112,42 @@ func TestPowerShellRefusesAMismatchAndFailsWithoutGo(t *testing.T) {
 	}
 	if extra := binLeftovers(t, root); len(extra) != 0 {
 		t.Fatalf("bin/ must stay empty: %v", extra)
+	}
+}
+
+// An empty release/REPO (the state until the user fills it in) must fall
+// back cleanly, not crash on a $null .Trim().
+func TestPowerShellEmptyRepoFallsBack(t *testing.T) {
+	ps := powershell(t)
+	asset := zipBytes(t, "herdr-dots.exe", "fake windows binary")
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); _, _ = w.Write(asset) }))
+	t.Cleanup(srv.Close)
+	root := psRoot(t, fmt.Sprintf("%s  %s\n", sum(asset), winAsset))
+	if err := os.WriteFile(filepath.Join(root, "release", "REPO"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stderr, _ := runPS(t, ps, root, srv.URL)
+	if !strings.Contains(stderr, "unknown GitHub repository") || strings.Contains(stderr, "null-valued") {
+		t.Fatalf("empty REPO:\n%s", stderr)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("downloaded without a repository")
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "bin", "herdr-dots.exe")); err == nil && string(b) == "fake windows binary" {
+		t.Fatal("installed a release without a repository")
+	}
+}
+
+// A bad HERDR_DOTS_PLATFORM never becomes part of a download URL.
+func TestPowerShellRefusesAnInvalidPlatform(t *testing.T) {
+	ps := powershell(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); http.NotFound(w, r) }))
+	t.Cleanup(srv.Close)
+	root := psRoot(t, fmt.Sprintf("%s  %s\n", strings.Repeat("ab", 32), winAsset))
+	stderr, _ := runPS(t, ps, root, srv.URL, "HERDR_DOTS_PLATFORM=../../evil")
+	if !strings.Contains(stderr, "HERDR_DOTS_PLATFORM") || hits.Load() != 0 {
+		t.Fatalf("invalid platform (%d requests):\n%s", hits.Load(), stderr)
 	}
 }
