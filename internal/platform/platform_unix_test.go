@@ -16,6 +16,18 @@ func TestUnixConstants(t *testing.T) {
 	}
 }
 
+// On Unix a child's environment is exactly what the caller built: no shell
+// searches the current directory for a program name.
+func TestChildEnvIsTheIdentityOnUnix(t *testing.T) {
+	in := []string{"PATH=/bin", "A=b"}
+	if got := ChildEnv(in); len(got) != 2 || got[0] != in[0] || got[1] != in[1] {
+		t.Fatalf("ChildEnv = %q", got)
+	}
+	if got := ChildEnv(nil); got != nil {
+		t.Fatalf("ChildEnv(nil) = %q, want nil (inherit)", got)
+	}
+}
+
 func TestTreeKillEndsTheWholeProcessGroup(t *testing.T) {
 	cmd := exec.Command("sh", "-c", "sleep 30 & sleep 30")
 	var out bytes.Buffer

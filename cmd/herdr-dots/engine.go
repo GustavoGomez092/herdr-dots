@@ -63,7 +63,7 @@ func ensureEngine(p paths.Paths) error {
 	}
 	defer logf.Close()
 	cmd := exec.Command(exe, "engine")
-	cmd.Env = engineEnv(os.Environ(), p)
+	cmd.Env = platform.ChildEnv(engineEnv(os.Environ(), p))
 	// Don't inherit the spawner's cwd: dots with an empty attachment cwd would read it.
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		cmd.Dir = home

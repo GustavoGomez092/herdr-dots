@@ -82,6 +82,20 @@ func CommandContext(ctx context.Context, name string, args []string) (*exec.Cmd,
 	return cmd, nil
 }
 
+// ChildEnv is the environment to give a child process built from env (nil
+// means this process's environment): env with NoDefaultCurrentDirectoryInExePath=1,
+// replacing any existing spelling. cmd.exe searches the current directory
+// before PATH, and a child starts in the pane's project directory, so an npm
+// shim's bare "node" would otherwise run a repo-local node.exe/.cmd/.bat.
+// Every product-code child gets its environment through ChildEnv (the
+// portability test enforces it).
+func ChildEnv(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	return noCwdExeSearchEnv(env)
+}
+
 // HideWindow keeps a console child of the (windowless) engine from opening a
 // console window.
 func HideWindow(cmd *exec.Cmd) {
@@ -100,6 +114,7 @@ const detachFlags = windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW
 // in; a job that forbids breakaway makes CreateProcess fail with access
 // denied, and the start is retried inside the job.
 func StartDetached(cmd *exec.Cmd) (*os.Process, error) {
+	cmd.Env = ChildEnv(cmd.Env)
 	again := exec.Command(cmd.Path, cmd.Args[1:]...)
 	again.Dir, again.Env = cmd.Dir, cmd.Env
 	again.Stdin, again.Stdout, again.Stderr = cmd.Stdin, cmd.Stdout, cmd.Stderr

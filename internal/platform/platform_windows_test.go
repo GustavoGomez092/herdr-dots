@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +22,34 @@ import (
 func TestWindowsConstants(t *testing.T) {
 	if DevNull != "NUL" || EnvKey("Herdr_Pane_Id") != "HERDR_PANE_ID" || HomeEnv != "USERPROFILE" {
 		t.Fatalf("DevNull %q; EnvKey must fold case on Windows", DevNull)
+	}
+}
+
+// ChildEnv starts from the process environment when given none and always
+// stops cmd.exe searching the current directory.
+func TestChildEnvTurnsOffTheCurrentDirectorySearch(t *testing.T) {
+	t.Setenv("DOTS_CHILDENV_PROBE", "kept")
+	got := ChildEnv(nil)
+	if !slices.Contains(got, "DOTS_CHILDENV_PROBE=kept") || !slices.Contains(got, NoCwdExeSearch+"=1") {
+		t.Fatalf("ChildEnv(nil) = %q", got)
+	}
+	got = ChildEnv([]string{"A=b", "NODEFAULTCURRENTDIRECTORYINEXEPATH=0"})
+	if !slices.Equal(got, []string{"A=b", NoCwdExeSearch + "=1"}) {
+		t.Fatalf("ChildEnv = %q", got)
+	}
+}
+
+// EditorCommand's environment goes through ChildEnv too.
+func TestEditorCommandEnvHasNoCwdExeSearch(t *testing.T) {
+	cmd := EditorCommand("notepad", filepath.Join(t.TempDir(), "m.toml"))
+	n := 0
+	for _, kv := range cmd.Env {
+		if name, _, _ := strings.Cut(kv, "="); strings.EqualFold(name, NoCwdExeSearch) {
+			n++
+		}
+	}
+	if n != 1 || !slices.Contains(cmd.Env, NoCwdExeSearch+"=1") {
+		t.Fatalf("editor env holds %d copies: %q", n, cmd.Env)
 	}
 }
 

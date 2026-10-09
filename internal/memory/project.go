@@ -37,7 +37,7 @@ func ExecGit(ctx context.Context, dir string, args ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmd.Env = gitEnv(os.Environ())
+	cmd.Env = platform.ChildEnv(gitEnv(os.Environ()))
 	cmd.WaitDelay = 500 * time.Millisecond
 	platform.HideWindow(cmd)
 	out, err := cmd.Output()

@@ -507,7 +507,7 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 		return nil, err
 	}
 	cmd.Dir = root
-	cmd.Env = gitEnv(os.Environ())
+	cmd.Env = platform.ChildEnv(gitEnv(os.Environ()))
 	cmd.WaitDelay = 500 * time.Millisecond
 	platform.HideWindow(cmd)
 	var out bytes.Buffer
