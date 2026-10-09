@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/memory"
@@ -100,6 +101,7 @@ type Model struct {
 	height    int
 	mem       *memui.Model // open memory browser (scrMemory)
 	prov      *providers
+	fetching  bool // a ctrl+space model fetch is in flight
 }
 
 func New(target string, d Deps) Model {
@@ -202,9 +204,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case providersMsg, keyStoredMsg, keyTestedMsg, refreshedMsg:
 		return m.providersUpdate(msg)
 	case modelsMsg:
-		if m.form != nil {
+		m.fetching = false
+		if m.form != nil && msg.kind == m.form.Kind() {
 			if msg.err != nil {
-				m.form.SetError(msg.err.Error())
+				m.form.SetError(credentials.Redact(msg.err.Error()))
 			} else {
 				m.form.SetModels(msg.kind, msg.ids)
 			}
@@ -396,7 +399,8 @@ func (m Model) fetchModels(kind string) tea.Cmd {
 func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "ctrl+@", "ctrl+ ":
-		if m.form.OnModel() && !m.saving && !m.form.NextModel() && m.d.Models != nil {
+		if m.form.OnModel() && !m.saving && !m.fetching && !m.form.NextModel() && m.d.Models != nil {
+			m.fetching = true
 			return m, m.fetchModels(m.form.Kind())
 		}
 		return m, nil
@@ -434,7 +438,7 @@ func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
 		defer cancel()
 		if checkDot != nil {
 			if err := checkDot(ctx, d); err != nil {
-				return formErrMsg{err}
+				return formErrMsg{errors.New(credentials.Redact(err.Error()))}
 			}
 		} else if err := check(ctx, d.Backend.Kind); err != nil {
 			return formErrMsg{err}

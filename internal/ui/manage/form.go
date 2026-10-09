@@ -231,6 +231,11 @@ func (f *Form) Update(k tea.KeyMsg) tea.Cmd {
 			cur.idx = (cur.idx - 1 + len(cur.choices)) % len(cur.choices)
 		}
 		if f.focus == iBackend && f.Kind() != prevKind {
+			// A base URL belongs to one kind: never carry it to another host
+			// (an OpenRouter key must not be sent to an Ollama address).
+			if len(f.fields[iBaseURL].kinds) > 0 && slices.Contains(f.fields[iBaseURL].kinds, prevKind) {
+				f.fields[iBaseURL].input.SetValue("")
+			}
 			// Swap the model only if it was the old kind's default.
 			if m := &f.fields[iModel].input; strings.TrimSpace(m.Value()) == dots.DefaultModelFor(prevKind) {
 				m.SetValue(dots.DefaultModelFor(f.Kind()))

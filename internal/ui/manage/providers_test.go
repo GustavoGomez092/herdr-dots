@@ -13,10 +13,16 @@ import (
 )
 
 type fakeKeys struct {
-	keys map[string]string
+	keys    map[string]string
+	listErr error
+	setErr  func(key string) error // may echo the key
+	rmErr   error
 }
 
 func (f *fakeKeys) List() ([]credentials.Status, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	var out []credentials.Status
 	for _, p := range credentials.Providers {
 		s := credentials.Status{Provider: p, From: "missing"}
@@ -27,8 +33,20 @@ func (f *fakeKeys) List() ([]credentials.Status, error) {
 	}
 	return out, nil
 }
-func (f *fakeKeys) Set(p, k string) error { f.keys[p] = k; return nil }
-func (f *fakeKeys) Remove(p string) error { delete(f.keys, p); return nil }
+func (f *fakeKeys) Set(p, k string) error {
+	if f.setErr != nil {
+		return f.setErr(k)
+	}
+	f.keys[p] = k
+	return nil
+}
+func (f *fakeKeys) Remove(p string) error {
+	if f.rmErr != nil {
+		return f.rmErr
+	}
+	delete(f.keys, p)
+	return nil
+}
 
 const secret = "sk-ant-api03-SUPERSECRETVALUE9876"
 

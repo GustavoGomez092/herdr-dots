@@ -2,6 +2,7 @@ package manage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -91,6 +92,13 @@ func (m Model) providersUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	p := m.prov
 	switch msg := msg.(type) {
 	case providersMsg:
+		if msg.err != nil {
+			// A failed listing keeps what is on screen (and the cursor).
+			p.status = credentials.Redact(msg.err.Error())
+			if len(p.rows) > 0 {
+				return m, nil
+			}
+		}
 		// Keep the cursor on the same provider across reloads.
 		cur := ""
 		if p.cursor >= 0 && p.cursor < len(p.rows) {
@@ -102,9 +110,6 @@ func (m Model) providersUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cur != "" && r.Provider == cur {
 				p.cursor = i
 			}
-		}
-		if msg.err != nil {
-			p.status = credentials.Redact(msg.err.Error())
 		}
 		return m, nil
 	case keyStoredMsg:
@@ -152,7 +157,16 @@ func (m Model) providersKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if key == "" || store == nil || provider == "" {
 				return m, nil
 			}
-			return m, func() tea.Msg { return keyStoredMsg{provider: provider, err: store.Set(provider, key)} }
+			delete(p.tested, provider) // the old result described the old key
+			return m, func() tea.Msg {
+				err := store.Set(provider, key)
+				if err != nil {
+					// Scrub with the typed key itself: an echo needn't look like a key.
+					err = errors.New(credentials.Redact(err.Error(), key))
+				}
+				key = "" // drop the captured key
+				return keyStoredMsg{provider: provider, err: err}
+			}
 		}
 		var cmd tea.Cmd
 		p.input, cmd = p.input.Update(k)
@@ -185,6 +199,7 @@ func (m Model) providersKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cur == "" || cur == "ollama" || m.d.Keys == nil {
 			return m, nil
 		}
+		delete(p.tested, cur)
 		store, load := m.d.Keys, m.loadProviders()
 		return m, func() tea.Msg {
 			if err := store.Remove(cur); err != nil {
