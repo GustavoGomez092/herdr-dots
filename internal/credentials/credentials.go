@@ -182,7 +182,7 @@ func CheckKey(key string) error {
 // Set stores provider's key in credentials.toml (atomic, 0600).
 func (f File) Set(provider, key string) error {
 	if !knownProvider(provider) {
-		return fmt.Errorf("unknown provider %q (want one of %v)", provider, Providers)
+		return fmt.Errorf("unknown provider (want one of %v)", Providers)
 	}
 	key = strings.TrimSpace(key)
 	if err := CheckKey(key); err != nil {

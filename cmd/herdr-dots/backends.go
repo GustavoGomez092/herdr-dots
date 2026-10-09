@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -48,9 +49,23 @@ func newBackendSet(p paths.Paths, cfg func() config.Config, logf func(string, ..
 
 // configLoader re-reads config.toml; a broken file yields defaults (the
 // engine logs the error).
-func configLoader(path string) func() config.Config {
+func configLoader(path string) func() config.Config { return configLoaderLogged(path, nil) }
+
+// configLoaderLogged also logs one line (never the file's content) when
+// config.toml is malformed and defaults are used.
+func configLoaderLogged(path string, logf func(string, ...any)) func() config.Config {
+	var mu sync.Mutex
+	logged := false // one line per bad stretch, not one per run
 	return func() config.Config {
-		c, _ := config.Load(path)
+		c, err := config.Load(path)
+		mu.Lock()
+		defer mu.Unlock()
+		if err == nil {
+			logged = false
+		} else if !logged && logf != nil {
+			logged = true
+			logf("config.toml is malformed: provider settings fell back to defaults")
+		}
 		return c
 	}
 }
@@ -144,7 +159,7 @@ var kindForProvider = map[string]string{
 func (s *backendSet) TestProvider(ctx context.Context, provider string) error {
 	kind, ok := kindForProvider[provider]
 	if !ok {
-		return fmt.Errorf("unknown provider %q", provider)
+		return errors.New("unknown provider")
 	}
 	c := s.cfg()
 	be, err := backend.NewWith(kind, backend.Options{Creds: s.creds(c), Provider: c.Provider(provider), Logf: s.logf})

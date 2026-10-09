@@ -9,8 +9,47 @@ import (
 	"strings"
 	"testing"
 
+	"herdr-dots/internal/config"
 	"herdr-dots/internal/credentials"
+	"herdr-dots/internal/paths"
 )
+
+func TestKeysNeverEchoAnUnrecognisedProviderArgument(t *testing.T) {
+	const leak = "sk-proj-REALKEY0123456789abcd"
+	for _, args := range [][]string{{"set", leak}, {"test", leak}, {"remove", leak}} {
+		k, out, _ := keysRig(t, leak+"\n", nil)
+		k.verify = (&backendSet{p: paths.New(t.TempDir(), t.TempDir(), "/tmp/h.sock"), cfg: func() config.Config { return config.Default() }, cache: map[string]cachedBackend{}}).TestProvider
+		err := keysCmd(args, k)
+		text := out.String()
+		if err != nil {
+			text += err.Error()
+		}
+		if strings.Contains(text, "REALKEY") {
+			t.Errorf("%v echoed the argument: %q", args, text)
+		}
+		if err == nil {
+			t.Errorf("%v: expected an error", args)
+		}
+	}
+}
+
+func TestKeysTestExitsNonZeroWhenAnyProviderFails(t *testing.T) {
+	k, out, _ := keysRig(t, "", nil)
+	n := 0
+	k.verify = func(context.Context, string) error {
+		n++
+		if n == 2 {
+			return errors.New("boom")
+		}
+		return nil
+	}
+	if err := keysCmd([]string{"test"}, k); err == nil {
+		t.Fatalf("one failure among all providers must fail the command: %q", out)
+	}
+	if !strings.Contains(keysUsage, "exit") {
+		t.Fatal("usage must document the exit code")
+	}
+}
 
 func keysRig(t *testing.T, stdin string, verifyErr error) (keysIO, *bytes.Buffer, *[]string) {
 	t.Helper()

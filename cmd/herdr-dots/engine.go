@@ -124,7 +124,7 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
 		return nil, err
 	}
 	home, _ := os.UserHomeDir()
-	backends := newBackendSet(p, configLoader(p.ConfigFile()), logf)
+	backends := newBackendSet(p, configLoaderLogged(p.ConfigFile(), logf), logf)
 	return engine.New(engine.Deps{
 		Herdr:   hc,
 		Backend: backends.Get,

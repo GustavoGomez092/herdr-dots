@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
 	"time"
@@ -27,7 +28,7 @@ type keysIO struct {
 	verify   func(ctx context.Context, provider string) error
 }
 
-const keysUsage = "usage: herdr-dots keys set <provider> | remove <provider> | list | test [<provider>]  (providers: anthropic, openai, openrouter; test also takes ollama)"
+const keysUsage = "usage: herdr-dots keys set <provider> | remove <provider> | list | test [<provider>]  (providers: anthropic, openai, openrouter; test also takes ollama; test exits non-zero if any provider fails)"
 
 // runKeys manages API keys in CONFIG_DIR/credentials.toml. Keys are read from
 // stdin only (no echo on a terminal), never from arguments.
@@ -51,10 +52,16 @@ func runKeys(args []string) error {
 	})
 }
 
+// errUnknownProvider never carries the argument: a key typed where the
+// provider belongs must not reach the terminal's scrollback.
+var errUnknownProvider = fmt.Errorf("unknown provider (want one of: %s)", strings.Join(credentials.Providers, ", "))
+
 func keysCmd(args []string, k keysIO) error {
 	if len(args) == 0 {
 		return errors.New(keysUsage)
 	}
+	root, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	switch args[0] {
 	case "set":
 		if len(args) != 2 {
@@ -65,7 +72,7 @@ func keysCmd(args []string, k keysIO) error {
 		}
 		provider := args[1]
 		if !slices.Contains(credentials.Providers, provider) {
-			return fmt.Errorf("unknown provider %q (want one of %v)", provider, credentials.Providers)
+			return errUnknownProvider
 		}
 		key, err := readKey(k, provider)
 		if err != nil {
@@ -74,7 +81,7 @@ func keysCmd(args []string, k keysIO) error {
 		if err := k.store.Set(provider, key); err != nil {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(root, 20*time.Second)
 		defer cancel()
 		if err := k.verify(ctx, provider); err != nil {
 			fmt.Fprintf(k.out, "stored · not verified: %s\n", credentials.Redact(err.Error(), key))
@@ -85,6 +92,9 @@ func keysCmd(args []string, k keysIO) error {
 	case "remove":
 		if len(args) != 2 {
 			return errors.New(keysUsage)
+		}
+		if !slices.Contains(credentials.Providers, args[1]) {
+			return errUnknownProvider
 		}
 		if err := k.store.Remove(args[1]); err != nil {
 			return err
@@ -107,7 +117,12 @@ func keysCmd(args []string, k keysIO) error {
 		}
 		failed := 0
 		for _, prov := range targets {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			if prov != "ollama" && !slices.Contains(credentials.Providers, prov) {
+				failed++
+				fmt.Fprintf(k.out, "%-11s ✗ %s\n", "(unknown)", errUnknownProvider)
+				continue
+			}
+			ctx, cancel := context.WithTimeout(root, 20*time.Second)
 			err := k.verify(ctx, prov)
 			cancel()
 			if err != nil {
@@ -117,7 +132,7 @@ func keysCmd(args []string, k keysIO) error {
 			}
 			fmt.Fprintf(k.out, "%-11s ✓\n", prov)
 		}
-		if failed == len(targets) && len(args) > 1 {
+		if failed > 0 {
 			return errors.New("test failed")
 		}
 		return nil

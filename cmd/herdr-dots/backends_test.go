@@ -1,6 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -31,6 +35,21 @@ func TestBackendSetCachesPerKindAndRebuildsOnProviderChange(t *testing.T) {
 		if b, err := set.Get(k); err != nil || b.Kind() != k {
 			t.Errorf("Get(%s) = %v %v", k, b, err)
 		}
+	}
+}
+
+func TestConfigLoaderLogsMalformedConfigWithoutContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("secret = \"sk-proj-INFILE0123456789\"\n[[[bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs []string
+	c := configLoaderLogged(path, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })()
+	if !reflect.DeepEqual(c.Providers, config.Default().Providers) {
+		t.Fatal("malformed config: default provider settings")
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "defaults") || strings.Contains(logs[0], "INFILE") {
+		t.Fatalf("logs %q", logs)
 	}
 }
 
