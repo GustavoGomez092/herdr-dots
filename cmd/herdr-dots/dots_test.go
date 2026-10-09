@@ -398,3 +398,50 @@ func TestProfileShowsStatsMemoryHintsAndHistory(t *testing.T) {
 		t.Fatal("unknown dot")
 	}
 }
+
+// A project dot is someone else's file: its errors reach the terminal with
+// no bidi or C1 control characters in them.
+func TestTrustErrorsCarryNoRawControlCharacters(t *testing.T) {
+	r := newDotsCLI(t)
+	file := projectDotFile(t, r)
+	for name, body := range map[string]string{
+		"validate": "name = \"Helper\"\npurpose = \"p\"\n[backend]\nkind = \"claude\"\nargs = [\"--system-prompt-file\", \"\u202eevil\u009b[2J\"]\n",
+		"decode":   "name = \"Helper\"\npurpose = \"p\"\n\"\u202ex\u009b\" = 1\n\"\u202ex\u009b\" = 2\n",
+	} {
+		if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := r.c.run([]string{"trust", file, "--yes"})
+		if err == nil {
+			t.Fatalf("%s: trusted", name)
+		}
+		if strings.ContainsAny(err.Error(), "\u202e\u009b") {
+			t.Errorf("%s: raw control characters in %q", name, err)
+		}
+	}
+	// A file whose name no project dot may have: the load error names it.
+	bad := filepath.Join(filepath.Dir(file), "\u202eevil\u009b.toml")
+	if err := os.WriteFile(bad, []byte("name = \"Evil\"\npurpose = \"p\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := r.c.run([]string{"trust", bad, "--yes"})
+	if err == nil || strings.ContainsAny(err.Error(), "\u202e\u009b") {
+		t.Errorf("file name: raw control characters in %q", err)
+	}
+}
+
+// The trust preview shows every byte being trusted: a hidden character is
+// escaped, not dropped, as in the popup.
+func TestTrustPreviewEscapesHiddenCharacters(t *testing.T) {
+	r := newDotsCLI(t)
+	file := projectDotFile(t, r)
+	body := "name = \"Helper\"\n# hidden\u200bnote \u202e here\npurpose = \"Be helpful.\"\n"
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.run(t, "trust", file, "--yes")
+	o := r.out.String()
+	if !strings.Contains(o, "hidden<U+200B>note <U+202E> here") || strings.ContainsAny(o, "\u200b\u202e") {
+		t.Fatalf("preview:\n%q", o)
+	}
+}

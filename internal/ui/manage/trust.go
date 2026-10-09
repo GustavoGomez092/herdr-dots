@@ -25,7 +25,7 @@ import (
 type trustState struct {
 	lib  view.LibraryDot
 	dot  dots.Dot
-	raw  []string // the file's bytes as visible lines (visibleText), shown in full
+	raw  []string // the file's bytes as visible lines (dots.VisibleLines), shown in full
 	sum  string
 	rel  string
 	keep map[string]bool // per requested capability; all off at first
@@ -91,7 +91,7 @@ func (m Model) openTrust(d view.LibraryDot) tea.Cmd {
 		if err != nil {
 			return trustOpenMsg{err: fmt.Errorf("%s: %s", rel, cleanErr(err, d.Path, rel))}
 		}
-		return trustOpenMsg{st: &trustState{lib: d, dot: parsed, raw: visibleText(data),
+		return trustOpenMsg{st: &trustState{lib: d, dot: parsed, raw: dots.VisibleLines(data),
 			sum: projectdots.Hex(projectdots.Sum(data)), rel: rel, keep: map[string]bool{}}}
 	}
 }
@@ -208,7 +208,7 @@ func (m Model) trustLines() []string {
 	lines = append(lines, capabilityLines(dots.Requested(d), clamps, t.keep)...)
 	// Every byte is trusted, so every byte is shown: research topics, a
 	// schedule task and its projects, backend args, and keys a later field
-	// adds. Hidden characters show as escapes (visibleText).
+	// adds. Hidden characters show as escapes (dots.VisibleLines).
 	lines = append(lines, "", "THE FILE AS WRITTEN (every byte you trust):")
 	for _, l := range t.raw {
 		lines = append(lines, "  "+l)
