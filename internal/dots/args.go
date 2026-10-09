@@ -24,6 +24,7 @@ var deniedArgs = map[string][]argRule{
 		{flag: "--disallowed-tools", takes: true, variadic: true},
 		{flag: "--settings", takes: true, variadic: true},
 		{flag: "--mcp-config", takes: true, variadic: true},
+		{flag: "--append-system-prompt-file", takes: true, variadic: true},
 		{flag: "--add-dir", takes: true, variadic: true},
 	},
 	"codex-cli": {

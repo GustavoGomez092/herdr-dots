@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
+	"unicode/utf8"
 
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/platform"
 )
 
 type ClaudeCLI struct {
@@ -34,21 +35,47 @@ func (c ClaudeCLI) environ() []string {
 }
 
 func (c ClaudeCLI) Check(context.Context) error {
-	if _, err := exec.LookPath(c.bin()); err != nil {
+	if _, err := platform.LookPath(c.bin()); err != nil {
 		return fmt.Errorf("claude CLI not found on PATH: install Claude Code (https://claude.com/claude-code)")
 	}
 	return nil
 }
 
+// hooklessSettings disables every hook for a dot run.
+const hooklessSettings = `{"disableAllHooks":true}`
+
 // BuildCmd: print mode, JSON output, no saved session, no MCP servers, hooks
 // disabled (so Herdr's integration hooks never fire for a dot), read-only tools.
+//
+// The system prompt rides in argv up to platform.MaxInlinePrompt characters.
+// A longer one, or any prompt when claude resolves to a .cmd/.bat shim
+// (cmd.exe can't carry its quotes, % signs and newlines), goes in a private
+// temp file passed with --append-system-prompt-file; for a shim the settings
+// JSON goes in a file too. Cmd.Cleanup deletes the files: call Cmd.Close
+// after the run. If the files can't be written, the v1 argv is used.
 func (c ClaudeCLI) BuildCmd(r Request) Cmd {
+	sys := SystemPrompt(r)
+	settingsArg, promptFlag, promptArg := hooklessSettings, "--append-system-prompt", sys
+	shim := false
+	if p, err := resolveBin(c.bin()); err == nil {
+		shim = platform.IsBatchFile(p)
+	}
+	var cleanup func()
+	if shim || utf8.RuneCountInString(sys) > platform.MaxInlinePrompt {
+		if files, done, err := writeRunFiles(map[string]string{"system.txt": sys, "settings.json": hooklessSettings}); err == nil {
+			cleanup = done
+			promptFlag, promptArg = "--append-system-prompt-file", files["system.txt"]
+			if shim {
+				settingsArg = files["settings.json"]
+			}
+		}
+	}
 	args := []string{
 		"-p", "--output-format", "json",
 		"--no-session-persistence",
 		"--strict-mcp-config",
-		"--settings", `{"disableAllHooks":true}`,
-		"--append-system-prompt", SystemPrompt(r),
+		"--settings", settingsArg,
+		promptFlag, promptArg,
 	}
 	if r.Model != "" {
 		args = append(args, "--model", r.Model)
@@ -61,14 +88,19 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	// Denied args (dots.Validate rejects them too) are dropped so they can never
 	// override the flags above.
 	args = append(args, dots.SafeArgs(c.Kind(), r.Args)...)
-	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: CleanEnv(c.environ()), Stdin: UserPrompt(r)}
+	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: CleanEnv(c.environ()), Stdin: UserPrompt(r), Cleanup: cleanup}
 }
 
 func (c ClaudeCLI) Run(ctx context.Context, r Request) (Result, error) {
 	if err := checkArgs(c.Kind(), r.Args); err != nil {
 		return Result{}, err
 	}
-	out, stderr, err := c.Runner.Run(ctx, c.BuildCmd(r))
+	cmd := c.BuildCmd(r)
+	defer cmd.Close()
+	out, stderr, err := c.Runner.Run(ctx, cmd)
+	if Preflight(err) {
+		return Result{}, fmt.Errorf("claude: %w", err)
+	}
 	if ctx.Err() != nil {
 		return Result{}, fmt.Errorf("claude timed out: %w", ctx.Err())
 	}
