@@ -36,7 +36,7 @@ func TestMemoryRestoreCannotBypassThePendingImportLimit(t *testing.T) {
 	if !strings.Contains(errOut.String(), "skipped (pack shared)") || !strings.Contains(errOut.String(), "waiting for the developer") {
 		t.Fatalf("out %q err %q", out, errOut)
 	}
-	if strings.Contains(errOut.String(), "Crafted entry") {
+	if strings.Contains(errOut.String(), "Crafted ") {
 		t.Fatal("a skip must not quote the entry text")
 	}
 }

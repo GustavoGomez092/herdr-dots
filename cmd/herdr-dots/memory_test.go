@@ -221,7 +221,7 @@ func TestMemoryImportSecretWarnsAndNeedsConfirmation(t *testing.T) {
 		t.Fatalf("nothing may be stored: %+v", es)
 	}
 	mustRun(t, c, "import", f, "--yes")
-	if !strings.Contains(errOut.String(), "warning") || !strings.Contains(out.String(), "imported 1 entries") {
+	if !strings.Contains(errOut.String(), "warning") || !strings.Contains(out.String(), "added or merged 1 entries") {
 		t.Fatalf("out %q err %q", out, errOut)
 	}
 }
@@ -271,7 +271,7 @@ func TestMemoryImportSkipNamesTheEntryNotItsText(t *testing.T) {
 	if !strings.Contains(errOut.String(), "entry 2") || !strings.Contains(errOut.String(), "too long") {
 		t.Fatalf("the skip message must name entry 2 and the error: %q", errOut)
 	}
-	if !strings.Contains(out.String(), "imported 1 entries") {
+	if !strings.Contains(out.String(), "added or merged 1 entries") {
 		t.Fatalf("%s", out)
 	}
 }

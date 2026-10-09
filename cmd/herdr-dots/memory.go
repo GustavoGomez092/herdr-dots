@@ -73,7 +73,12 @@ func runMemory(args []string) error {
 	return c.run(args)
 }
 
-func (c *memCLI) run(args []string) error {
+func (c *memCLI) run(args []string) (err error) {
+	defer func() {
+		if errors.Is(err, flag.ErrHelp) { // -h: the flag set printed its usage
+			err = nil
+		}
+	}()
 	if len(args) == 0 {
 		return errors.New(memUsage)
 	}
@@ -612,6 +617,9 @@ func (c *memCLI) importFile(args []string) error {
 		}
 		e.ID, e.Source = "", memory.SourceImport
 		if e.From != "" && e.Status == memory.StatusProposed {
+			// ImportPack attributes a dot-scope entry to the dot it is stored
+			// under, so a restore of a dot-scope entry keeps From = that
+			// dot, not a different original pack name (documented limit).
 			key := e.From
 			if e.Scope == memory.ScopeDot {
 				key = e.Dot
@@ -643,7 +651,7 @@ func (c *memCLI) importFile(args []string) error {
 			fmt.Fprintf(c.errOut, "skipped pack %s: %v\n", textutil.SanitizeModelText(key), err)
 		}
 	}
-	fmt.Fprintf(c.out, "imported %d entries\n", n)
+	fmt.Fprintf(c.out, "added or merged %d entries\n", n)
 	return nil
 }
 
@@ -722,14 +730,24 @@ func (c *memCLI) edit(args []string) error {
 	}
 	for _, e := range updates {
 		_, err := c.store.Update(pidOf(e.Scope), e.Ref(), func(x *memory.Entry) error {
-			waitingImport := x.Source == memory.SourceImport && x.Status == memory.StatusProposed
+			imported := x.Source == memory.SourceImport
+			textChanged := strings.TrimSpace(e.Text) != strings.TrimSpace(x.Text)
+			// An import is someone else's conclusion and never suppresses
+			// repeats (P9-R8). Flipping its status in the editor must not
+			// relabel it as the developer's words: approving is a separate,
+			// reviewed step.
+			if imported && !textChanged && x.Status == memory.StatusProposed && e.Status != memory.StatusProposed {
+				return fmt.Errorf("%s is an imported proposal: approve it with herdr-dots memory approve", x.Ref())
+			}
 			x.Text, x.Kind, x.Paths, x.Pinned, x.Status = e.Text, e.Kind, e.Paths, e.Pinned, e.Status
-			// User edits become the developer's, except an import still
-			// waiting for review: it stays labelled imported until the
-			// developer approves it (a dot's scope only holds proposals
-			// that are imports).
-			if !(waitingImport && x.Status == memory.StatusProposed) {
+			// Only an actual rewrite makes it the developer's (as in the
+			// memory screen, where saving one approves it too: a dot's scope
+			// holds only proposals that are imports).
+			if !imported || textChanged {
 				x.Source = memory.SourceUser
+				if x.Status == memory.StatusProposed && x.Scope != memory.ScopeProject {
+					x.Status = memory.StatusActive
+				}
 			}
 			return nil
 		})

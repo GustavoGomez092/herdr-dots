@@ -386,7 +386,7 @@ func TestProfileShowsStatsMemoryHintsAndHistory(t *testing.T) {
 	}
 	r.run(t, "profile", "security", "--rows", "3")
 	o := r.out.String()
-	for _, want := range []string{"Security (security)", "LAST 7 DAYS", "LAST 30 DAYS", "runs 12", "accepted 0%", "MEMORY", "2 entries", "1 waiting for approval (1 imported)", "HINTS", "Mostly dismissed", "CSRF on /admin 0", "dismissed"} {
+	for _, want := range []string{"Security (security)", "LAST 7 DAYS", "LAST 30 DAYS", "runs 12", "accepted 0%", "MEMORY", "2 entries", "1 proposal waiting for approval in repo", "HINTS", "Mostly dismissed", "CSRF on /admin 0", "dismissed"} {
 		if !strings.Contains(o, want) {
 			t.Errorf("profile missing %q:\n%s", want, o)
 		}

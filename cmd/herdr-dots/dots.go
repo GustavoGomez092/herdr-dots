@@ -89,7 +89,12 @@ func runDots(args []string) error {
 	return c.run(args)
 }
 
-func (c *dotsCLI) run(args []string) error {
+func (c *dotsCLI) run(args []string) (err error) {
+	defer func() {
+		if errors.Is(err, flag.ErrHelp) { // -h: the flag set printed its usage
+			err = nil
+		}
+	}()
 	if len(args) == 0 {
 		return errors.New(dotsUsage)
 	}
@@ -281,7 +286,7 @@ func (c *dotsCLI) profile(args []string) error {
 	if len(pos) != 1 {
 		return errors.New("usage: herdr-dots dots profile SLUG [--rows N]")
 	}
-	d, err := dots.Load(c.dotsDir, pos[0])
+	d, err := c.loadDot(pos[0])
 	if err != nil {
 		return fmt.Errorf("dot %s: %w", one(pos[0]), err)
 	}
@@ -365,8 +370,7 @@ func statsLines(st history.Stats) string {
 }
 
 // memoryLines prints the dot's memory summary across projects, and how many
-// entries wait for approval (imports included). memory.Stats.Proposals counts
-// project scope only, so the dot-scope proposals are counted here.
+// proposals (imports included) wait in the current project.
 func (c *dotsCLI) memoryLines(slug string) {
 	fmt.Fprintln(c.out, "MEMORY")
 	if c.mem == nil {
@@ -383,19 +387,11 @@ func (c *dotsCLI) memoryLines(slug string) {
 		fmt.Fprint(c.out, " (partial: some memory files could not be read)")
 	}
 	fmt.Fprintln(c.out)
-	waiting, imported := 0, 0
-	ps, _ := c.mem.Projects()
-	for _, p := range ps {
-		es, _ := c.mem.List(p.ID, memory.Filter{Scope: memory.ScopeDot, Dot: slug, Statuses: []memory.Status{memory.StatusProposed}})
-		for _, e := range es {
-			waiting++
-			if e.Source == memory.SourceImport {
-				imported++
-			}
+	if pr, err := c.projectID(""); err == nil {
+		if st, _ := c.mem.Stats(pr.ID); st.Proposals > 0 {
+			fmt.Fprintf(c.out, "  %d %s waiting for approval in %s (every dot, imports included); see herdr-dots memory approve\n",
+				st.Proposals, plural(st.Proposals, "proposal", "proposals"), one(pr.Name))
 		}
-	}
-	if waiting > 0 {
-		fmt.Fprintf(c.out, "  %d waiting for approval (%d imported); see herdr-dots memory approve\n", waiting, imported)
 	}
 }
 
@@ -416,7 +412,7 @@ func (c *dotsCLI) export(args []string) error {
 	if len(pos) != 1 {
 		return errors.New("usage: herdr-dots dots export SLUG [flags]")
 	}
-	d, err := dots.Load(c.dotsDir, pos[0])
+	d, err := c.loadDot(pos[0])
 	if err != nil {
 		return fmt.Errorf("dot %s: %w", one(pos[0]), err)
 	}
@@ -435,13 +431,15 @@ func (c *dotsCLI) export(args []string) error {
 	if err != nil {
 		return exportRefusal(err, *force)
 	}
+	dropped := 0
 	if *force {
 		// Force drops what looks like a secret. Ask once more without it
 		// for the names (never the values) of what was dropped.
 		_, werr := dotpack.Export(d, mem, opts)
 		var se *dotpack.SecretError
 		if errors.As(werr, &se) {
-			fmt.Fprintf(c.errOut, "--force left out %d memory %s (%s); they looked like secrets\n", len(se.Where), plural(len(se.Where), "entry", "entries"), strings.Join(se.Where, ", "))
+			dropped = len(se.Where)
+			fmt.Fprintf(c.errOut, "--force left out %d memory %s (%s); they looked like secrets\n", dropped, plural(dropped, "entry", "entries"), strings.Join(se.Where, ", "))
 		}
 	}
 	if *outFile == "" {
@@ -463,7 +461,7 @@ func (c *dotsCLI) export(args []string) error {
 		os.Remove(*outFile)
 		return fmt.Errorf("can't write %s: %w", c.show(*outFile), werr)
 	}
-	fmt.Fprintf(c.errOut, "exported %s with %d memory %s to %s\n", one(d.Name), len(mem), plural(len(mem), "entry", "entries"), c.show(*outFile))
+	fmt.Fprintf(c.errOut, "exported %s with %d memory %s to %s\n", one(d.Name), len(mem)-dropped, plural(len(mem)-dropped, "entry", "entries"), c.show(*outFile))
 	return nil
 }
 
@@ -524,16 +522,41 @@ func (c *dotsCLI) readPack(src string) ([]byte, string, error) {
 		}
 		return data, c.shownSource(final), err
 	}
+	abs, _ := filepath.Abs(src)
+	notRegular := fmt.Errorf("%s is not a regular file", c.show(abs))
+	// Stat before opening: opening a FIFO would block.
 	st, err := os.Stat(src)
 	if err != nil {
 		return nil, "", fmt.Errorf("%s: %w", c.show(src), errors.Unwrap(err))
 	}
-	if st.Size() > dotpack.MaxBytes {
+	if !st.Mode().IsRegular() {
+		return nil, "", notRegular
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s: %w", c.show(src), errors.Unwrap(err))
+	}
+	defer f.Close()
+	if st, err = f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return nil, "", notRegular
+	}
+	data, err := io.ReadAll(io.LimitReader(f, dotpack.MaxBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("%s: %w", c.show(src), err)
+	}
+	if len(data) > dotpack.MaxBytes {
 		return nil, "", dotpack.ErrTooLarge
 	}
-	data, err := os.ReadFile(src)
-	abs, _ := filepath.Abs(src)
-	return data, c.show(abs), err
+	return data, c.show(abs), nil
+}
+
+// loadDot loads one of your dots by slug. The slug names a file, so
+// anything that isn't a plain slug is refused before any path is built.
+func (c *dotsCLI) loadDot(slug string) (dots.Dot, error) {
+	if !memory.ValidSlug(slug) {
+		return dots.Dot{}, fmt.Errorf("dot %q is not a valid dot name (lowercase letters, digits and dashes)", one(slug))
+	}
+	return dots.Load(c.dotsDir, slug)
 }
 
 func (c *dotsCLI) importPack(args []string) error {
@@ -633,6 +656,12 @@ func (c *dotsCLI) preview(p dotpack.Pack, d dots.Dot, from string, clamps []dots
 	}
 	fmt.Fprintf(w, "saves as: %s (%s)\nbackend:  %s, model %s\nbudget:   %s\nmode:     %s\npurpose (becomes this dot's system prompt):\n%s\n",
 		one(d.Name), d.Slug, d.Backend.Kind, one(model), budget, d.Delivery.Mode, indentBlock(d.Purpose))
+	if len(d.Backend.Args) > 0 {
+		fmt.Fprintf(w, "args:     %s\n", one(strings.Join(d.Backend.Args, " ")))
+	}
+	if d.Backend.Effort != "" {
+		fmt.Fprintf(w, "effort:   %s\n", one(d.Backend.Effort))
+	}
 	// Phase 8 text that reaches a prompt once research or a schedule is kept.
 	if len(d.Research.Topics) > 0 {
 		fmt.Fprintf(w, "research topics:\n%s\n", indentBlock(strings.Join(d.Research.Topics, "\n")))

@@ -945,7 +945,8 @@ func (s *Store) Candidates(p, dot string, readProject bool) ([]Entry, error) {
 }
 
 // Stats counts live entries: Entries[""] is project scope, Entries[slug] a
-// dot's scope. Proposals counts project entries awaiting approval.
+// dot's scope. Proposals counts what awaits approval: project proposals and
+// the dot packs' imports pending in dot scope.
 type Stats struct {
 	Entries   map[string]int
 	Proposals int
@@ -971,6 +972,9 @@ func (s *Store) Stats(p string) (Stats, error) {
 	ds, derr := s.List(p, Filter{Scope: ScopeDot})
 	for _, e := range ds {
 		st.Entries[e.Dot]++
+		if pendingPack(e) {
+			st.Proposals++
+		}
 	}
 	return st, errors.Join(err, derr)
 }

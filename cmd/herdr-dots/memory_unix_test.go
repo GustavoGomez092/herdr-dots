@@ -39,8 +39,8 @@ func TestMemoryEditAppliesExactlyOneUpdate(t *testing.T) {
 	}
 }
 
-// A dot pack's proposal can be edited from the CLI like any other entry. It
-// stays labelled imported (and proposed) until the developer approves it.
+// A dot pack's proposal can be edited from the CLI like any other entry:
+// rewriting it makes it the developer's own words, and approves it.
 func TestMemoryEditOfAnImportedDotProposal(t *testing.T) {
 	c, out, _ := newMemCLI(t)
 	if _, err := c.store.ImportPack(testPID, "shared", []memory.Entry{{Scope: memory.ScopeDot, Kind: memory.KindNote, Text: "Use zod for validation"}}); err != nil {
@@ -56,7 +56,7 @@ func TestMemoryEditOfAnImportedDotProposal(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 	es, _ := c.store.List(testPID, memory.Filter{Scope: memory.ScopeDot, Dot: "shared"})
-	if len(es) != 1 || es[0].Text != "Use valibot for validation" || es[0].Source != memory.SourceImport || es[0].Status != memory.StatusProposed {
+	if len(es) != 1 || es[0].Text != "Use valibot for validation" || es[0].Source != memory.SourceUser || es[0].Status != memory.StatusActive {
 		t.Fatalf("%+v", es)
 	}
 }
