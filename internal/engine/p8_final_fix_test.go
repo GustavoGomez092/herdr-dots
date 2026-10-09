@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -288,6 +289,41 @@ func TestDailyAddIsRetriedBeforeBlocking(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("want one toast for the unrecorded run, got %v", r.toasts())
+	}
+}
+
+// Loop guard for commits: an inject-mode commit review of a commit made
+// while the pane's last turn was started by a dot is queued, never injected
+// (inject → commit → review → inject would loop); otherwise it injects.
+func TestInjectCommitReviewAfterADotTurnIsQueued(t *testing.T) {
+	for _, fromDot := range []bool{true, false} {
+		t.Run(fmt.Sprintf("fromDot=%v", fromDot), func(t *testing.T) {
+			d := commitDot("Tests")
+			d.Delivery.Mode = dots.ModeInject
+			r, repo := commitRig(t, d)
+			tr := transcript.Turn{User: "fix the CSRF check", Assistant: "done"}
+			if fromDot {
+				tr.FromDots = []string{"Tests"}
+			}
+			r.reader().add(tr)
+			r.be.set(proResult("warn", "CheckCSRF has no test."))
+			proCommit(t, repo, "auth.go", "package auth\n\nfunc CheckCSRF() bool { return true }\n", "add CSRF check")
+			r.checkHeads(t)
+			var card queue.Card
+			eventually(t, "the commit card", func() bool {
+				for _, c := range r.q.All() {
+					if c.Origin == state.RunCommit {
+						card = c
+						return true
+					}
+				}
+				return false
+			})
+			want := map[bool]string{true: string(dots.ModeQueue), false: string(dots.ModeInject)}[fromDot]
+			if card.Mode != want {
+				t.Fatalf("card mode %q, want %q: %+v", card.Mode, want, card)
+			}
+		})
 	}
 }
 

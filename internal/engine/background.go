@@ -91,6 +91,7 @@ type bgJob struct {
 	paused      bool      // the dot is paused on paneID
 	gen         uint64    // paneID's attachment generation (e.gens) when the job was built
 	turn        int       // the pane's last turn index, for memory evidence (0 without a pane)
+	fromDot     bool      // commit: the pane's last turn was started by a dot (loop guard: never inject)
 	period      int       // research: the pane's idle period when the run was reserved
 	since       time.Time // research: when that idle period began
 	deliver     func(j bgJob, v backend.Verdict)
