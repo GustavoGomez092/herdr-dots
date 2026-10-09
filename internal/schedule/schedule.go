@@ -17,7 +17,6 @@ package schedule
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -109,9 +108,9 @@ func parseField(text string, f field) (uint64, error) {
 		rng, stepText, hasStep := strings.Cut(part, "/")
 		step := 1
 		if hasStep {
-			n, err := strconv.Atoi(stepText)
-			if err != nil || n < 1 {
-				return 0, fmt.Errorf("%w: %s step %q must be a whole number >= 1", ErrInvalid, f.name, stepText)
+			n, ok := digits(stepText)
+			if !ok || n < 1 || n > maxStep {
+				return 0, fmt.Errorf("%w: %s step %q must be a whole number from 1 to %d", ErrInvalid, f.name, stepText, maxStep)
 			}
 			step = n
 		}
@@ -147,12 +146,31 @@ func parseField(text string, f field) (uint64, error) {
 	return bits, nil
 }
 
+// maxStep bounds a /step so the expansion loop can never overflow. Steps
+// larger than a field's range are valid and keep only the field's start.
+const maxStep = 1000
+
+// digits parses a non-empty run of ASCII digits (no sign, spaces or prefix).
+func digits(text string) (int, bool) {
+	if text == "" || len(text) > 9 {
+		return 0, false
+	}
+	n := 0
+	for _, c := range text {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, true
+}
+
 func value(text string, f field) (int, error) {
 	if v, ok := f.names[strings.ToLower(text)]; ok {
 		return v, nil
 	}
-	v, err := strconv.Atoi(text)
-	if err != nil || v < f.min || v > f.max {
+	v, ok := digits(text)
+	if !ok || v < f.min || v > f.max {
 		return 0, fmt.Errorf("%w: %s %q must be %d-%d", ErrInvalid, f.name, text, f.min, f.max)
 	}
 	return v, nil

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 	_ "time/tzdata" // the DST tests need America/New_York on every OS
@@ -353,6 +354,44 @@ func TestPrevOfNextRoundTripsEverywhere(t *testing.T) {
 				}
 				x = n.Add(time.Duration(i%5) * 37 * time.Minute)
 			}
+		}
+	}
+}
+
+func TestHugeStepIsRejectedNotOverflowed(t *testing.T) {
+	for _, expr := range []string{
+		"5/9223372036854775807 * * * *", "*/9223372036854775807 * * * *",
+		"0 0/9223372036854775807 * * *", "0 0 1/9223372036854775800 * *", "0 0 * * 0-6/99999999999",
+	} {
+		if _, err := Parse(expr); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Parse(%q) = %v, want ErrInvalid", expr, err)
+		}
+	}
+	_, err := Parse("5/9223372036854775807 * * * *")
+	if err == nil || !strings.Contains(err.Error(), "minute") {
+		t.Errorf("error %v should name the minute field", err)
+	}
+}
+
+func TestStepLargerThanTheFieldKeepsOnlyTheMinimum(t *testing.T) {
+	for _, expr := range []string{"*/60 * * * *", "*/100 * * * *"} {
+		if s := mustParse(t, expr); s.minute != 1 {
+			t.Errorf("%q minute bits = %b, want only minute 0", expr, s.minute)
+		}
+	}
+}
+
+func TestNumbersAreDigitsOnly(t *testing.T) {
+	for _, expr := range []string{
+		"+5 * * * *", "-5 * * * *", "*/+5 * * * *", "+1-5 * * * *", "1-+5 * * * *", "0 0 0x5 * *", "1_0 * * * *",
+	} {
+		if _, err := Parse(expr); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Parse(%q) = %v, want ErrInvalid", expr, err)
+		}
+	}
+	for _, text := range []string{" 5", "5 ", "1 0", "*/ 5", "*/5 "} {
+		if _, err := parseField(text, minuteF); !errors.Is(err, ErrInvalid) {
+			t.Errorf("parseField(%q) = %v, want ErrInvalid", text, err)
 		}
 	}
 }
