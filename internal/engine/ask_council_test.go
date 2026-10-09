@@ -15,6 +15,7 @@ import (
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
+	"herdr-dots/internal/view"
 )
 
 func askCouncilNow(t *testing.T, r *rig, q string) (ipc.CouncilResult, error) {
@@ -103,6 +104,9 @@ func TestAskCouncilIsAbandonedWhenTheAgentGivesUp(t *testing.T) {
 	}
 	councilDone(t, r)
 	eventually(t, "member runs cancelled", func() bool { return cb.running() == 0 })
+	eventually(t, "no member left thinking", func() bool {
+		return mcpDotStatus(r, "security") != view.StatusThinking && mcpDotStatus(r, "frontend") != view.StatusThinking
+	})
 	for _, c := range r.q.Pending(pane) {
 		if c.Kind == queue.KindCouncil {
 			t.Fatalf("an abandoned council makes no card: %+v", c)
@@ -219,5 +223,33 @@ func TestSecondCouncilOnABusyPaneIsRefused(t *testing.T) {
 		t.Fatalf("MCP council: %v", err)
 	}
 	r.srv.RemovePane(pane)
-	<-errc
+	select {
+	case <-errc:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first ask_council did not end with the pane")
+	}
+}
+
+// RULING P5-R3: a refused ask_council uses no ask slot.
+func TestRefusedAskCouncilUsesNoSlot(t *testing.T) {
+	r, cb := councilRig(t, func(c *config.Config) { c.SessionBudgetCalls = 2 }, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	if _, err := askCouncilNow(t, r, "q"); err == nil {
+		t.Fatal("2 members + chair > 2 calls: the preflight must refuse")
+	}
+	l := r.e.limiter()
+	l.mu.Lock()
+	turn, minute := l.turn[pane], len(l.recent[pane])
+	l.mu.Unlock()
+	if turn != 0 || minute != 0 || cb.total() != 0 {
+		t.Fatalf("refused council used turn=%d minute=%d calls=%d", turn, minute, cb.total())
+	}
+}
+
+func TestAskCouncilQuestionIsSanitizedBeforeTheEmptyCheck(t *testing.T) {
+	r, _ := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	if _, err := askCouncilNow(t, r, "\x00\x07\x1b"); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("got %v", err)
+	}
 }

@@ -153,7 +153,7 @@ func callsLeft(budget, used int) int {
 // question in parallel and turns their answers into one council card. It
 // returns the council id at once; the council runs in the background.
 func (e *Engine) Council(ctx context.Context, paneID, question string, slugs []string) (string, error) {
-	run, err := e.startCouncil(ctx, paneID, question, slugs, nil)
+	run, err := e.startCouncil(ctx, paneID, question, slugs, nil, nil)
 	if err != nil {
 		return "", err
 	}
@@ -164,8 +164,10 @@ func (e *Engine) Council(ctx context.Context, paneID, question string, slugs []s
 // Phase 5) the merged digest goes to result instead of a queue card; either
 // way run.finished closes when the council ends. nil slugs means every
 // eligible attached dot (ask_council always passes nil: it never relies on an
-// empty list, which CouncilArgs drops on the wire).
-func (e *Engine) startCouncil(ctx context.Context, paneID, question string, slugs []string, result func(parts []council.Part, body, note string)) (*councilRun, error) {
+// empty list, which CouncilArgs drops on the wire). admit, when set, runs
+// under e.mu once the council is certain to start (ask_council takes its ask
+// slot there, so a refused council uses none); it must only take leaf locks.
+func (e *Engine) startCouncil(ctx context.Context, paneID, question string, slugs []string, result func(parts []council.Part, body, note string), admit func() error) (*councilRun, error) {
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", state.ErrNoAttachment, paneID)
@@ -196,6 +198,13 @@ func (e *Engine) startCouncil(ctx context.Context, paneID, question string, slug
 		e.mu.Unlock()
 		run.cancel()
 		return nil, ErrCouncilRunning
+	}
+	if admit != nil {
+		if err := admit(); err != nil {
+			e.mu.Unlock()
+			run.cancel()
+			return nil, err
+		}
 	}
 	if e.councils == nil {
 		e.councils = map[string]*councilRun{}
@@ -242,8 +251,10 @@ func (e *Engine) runCouncil(run *councilRun) {
 	if council.Answered(parts) == 0 {
 		const msg = "council failed: no member answered"
 		e.feed(run.paneID, councilSlug, run.turn, state.OutcomeError, msg)
-		if err := e.d.Herdr.Notify(e.ctx, transcript.CouncilGlyph+" "+transcript.CouncilName+" dot", msg); err != nil {
-			e.d.Logf("notify: %v", err)
+		if run.result == nil { // ask_council: the agent started it and gets the error
+			if err := e.d.Herdr.Notify(e.ctx, transcript.CouncilGlyph+" "+transcript.CouncilName+" dot", msg); err != nil {
+				e.d.Logf("notify: %v", err)
+			}
 		}
 		return
 	}
@@ -574,13 +585,21 @@ func (e *Engine) abandonCouncil(paneID string) {
 	e.mu.Lock()
 	run := e.councils[paneID]
 	if run != nil {
-		run.abandoned = true
-		delete(e.councils, paneID)
+		e.abandonRunLocked(run)
 	}
 	delete(e.preflights, paneID)
 	e.mu.Unlock()
 	if run != nil {
 		run.cancel()
+	}
+}
+
+// abandonRunLocked marks the council abandoned and forgets it. Caller holds
+// e.mu and cancels run afterwards.
+func (e *Engine) abandonRunLocked(run *councilRun) {
+	run.abandoned = true
+	if e.councils[run.paneID] == run {
+		delete(e.councils, run.paneID)
 	}
 }
 

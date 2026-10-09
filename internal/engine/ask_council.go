@@ -9,6 +9,7 @@ import (
 	"herdr-dots/internal/council"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/state"
+	"herdr-dots/internal/textutil"
 )
 
 // AskCouncil convenes every eligible attached dot for the MCP server's
@@ -18,16 +19,14 @@ import (
 // always passes nil slugs (every eligible dot) and never relies on telling an
 // empty list from an absent one.
 func (e *Engine) AskCouncil(ctx context.Context, paneID, question string) (ipc.CouncilResult, error) {
-	q := strings.TrimSpace(question)
+	q := strings.TrimSpace(textutil.SanitizeModelText(question))
 	if q == "" {
 		return ipc.CouncilResult{}, errors.New("the question is empty")
 	}
 	if _, ok := e.d.Attachments.Get(paneID); !ok {
 		return ipc.CouncilResult{}, errors.New("no dots are attached to this pane (the developer attaches them with prefix+d)")
 	}
-	if err := e.limiter().take(paneID, e.config().MCP.Normalized()); err != nil {
-		return ipc.CouncilResult{}, err
-	}
+	lim, mcp := e.limiter(), e.config().MCP.Normalized()
 	before := e.d.Usage.PaneCost(paneID)
 	type outcome struct {
 		parts      []council.Part
@@ -36,7 +35,7 @@ func (e *Engine) AskCouncil(ctx context.Context, paneID, question string) (ipc.C
 	got := make(chan outcome, 1)
 	run, err := e.startCouncil(ctx, paneID, q, nil, func(parts []council.Part, body, note string) {
 		got <- outcome{parts, body, note}
-	})
+	}, func() error { return lim.take(paneID, mcp) }) // the slot is used only once the council starts
 	if err != nil {
 		return ipc.CouncilResult{}, err
 	}
@@ -74,7 +73,9 @@ func (e *Engine) AskCouncil(ctx context.Context, paneID, question string) (ipc.C
 			heard = append(heard, p.Slug)
 		}
 	}
-	e.markConsulted(paneID, heard...)
+	if !e.markConsulted(paneID, heard...) {
+		return ipc.CouncilResult{}, fmt.Errorf("council ended without an answer: %w", ErrPaneClosed)
+	}
 	e.feed(paneID, councilSlug, run.turn, state.OutcomeAsked,
 		fmt.Sprintf("%s · %d of %d members answered", council.MaxSeverity(o.parts), council.Answered(o.parts), len(o.parts)))
 	return res, nil
@@ -84,10 +85,7 @@ func (e *Engine) AskCouncil(ctx context.Context, paneID, question string) (ipc.C
 // are cancelled and no result or card is produced.
 func (e *Engine) stopCouncil(run *councilRun) {
 	e.mu.Lock()
-	run.abandoned = true
-	if e.councils[run.paneID] == run {
-		delete(e.councils, run.paneID)
-	}
+	e.abandonRunLocked(run)
 	e.mu.Unlock()
 	run.cancel()
 }
