@@ -94,3 +94,33 @@ Note: the redacted fixture leaves `thinking.signature` blobs (harmless).
 - The first `agent start` in a new directory stops at the Claude folder-trust prompt (`agent_not_ready`).
 - Status events also fire on metadata-only changes (same status, extra `display_agent`); harmless.
 - V2 evidence is thin (2 turns). Re-check the debounce during Task 22.
+
+## End-to-end smoke test (Task 22b)
+
+Automated replacement for the human checklist, run against herdr 0.8.2 in the isolated `--session dots-test` (headless server started with all `CLAUDE*` env unset), scratch repo `/tmp/dots-test-repo`, Claude panes on haiku, Security dot with `model = "haiku"`. Driven with `herdr --session dots-test ...` plus a throwaway Go client (ipc attach/send/set_mode/detach/watch; deleted afterwards, not committed).
+
+**Plugin approach: manual engine, NOT `plugin link`.** Herdr plugins are global to the user: `herdr --session dots-test plugin list` shows the same user-level plugin registry (`cloudmanic.herdr-plus`, stored in `~/.config/herdr/plugins.json`) as the real session. Linking would have run the startup hook and added actions in the user's real sessions, so nothing was linked. Instead the binary was run with `HERDR_SOCKET_PATH=<dots-test socket>`, `HERDR_PLUGIN_ID=herdr-dots`, `HERDR_PLUGIN_CONFIG_DIR`/`HERDR_PLUGIN_STATE_DIR` under `/tmp/dots-e2e` (`herdr-dots engine --ensure`). Dot TOML = `security.toml` with model haiku, written to `<config>/dots/`.
+
+| # | Item | Result |
+|---|---|---|
+| 1 | Engine starts, `engine.log` says "engine started" | PASS: `engine started: session dir /tmp/dots-e2e/state/865d905ee558, socket .../dots.sock` |
+| 2 | Attach works, snapshot shows the dot | PASS: snapshot pane `w4:p1`, dot `security` `◆ Security` mode `queue`, library lists it with model haiku |
+| 3 | Turn "store the login token in localStorage in auth.ts" -> Security card, `display_agent` "claude ◆N" | PASS: card severity `warn` ("any XSS ... can read localStorage ..."), `pane.get` -> `"display_agent":"claude ◆2"` |
+| 4a | Send card -> `[◆ Security dot] ...` arrives in Claude and Claude responds | PASS: pane read shows `❯ [◆ Security dot] Before committing: ...`; transcript user record starts with the prefix; Claude edited auth.ts |
+| 4b | Security dot does not review its own dot-started turn | PASS with transcript source (calls stayed 4 for 35 s after a delivered card and the dot-started turn finished). FAIL when attached before the first prompt: see bug 1 (calls rose 2 -> 3, new card created 9 s after the dot turn ended) |
+| 5 | `set_mode inject`; focused pane holds, unfocused delivers | PASS: with `herdr workspace focus w4` the new finding was card status `auto` (held, no `[◆` user record); after `workspace focus w1` the next poll delivered it (`[◆ Security dot] The token-logging line ...` user record at 03:05:03Z) |
+| 6 | Close the Claude pane -> cards orphaned | FAIL: 60+ s after `pane close`, engine still lists pane `w4:p1`, cards stay `pending`. See bug 2 |
+| 7 | Dots pane via `plugin action invoke herdr-dots.toggle-pane` | NOT-AUTOMATABLE without linking (global). `HERDR_PANE_ID=w4:p1 herdr-dots action toggle-pane` fails `herdr plugin_not_found: plugin not found` as expected for an unregistered plugin; ensureEngine and the action path up to the pane open were exercised. Toggle UI left for the human run |
+| 8 | V7: no phantom agent during dot runs | PASS: `agent list` polled every 2 s for 4 min across 3 dot runs: always exactly the 3 main panes, never an extra pane/agent (engine runs setsid-detached) |
+| 9 | V2: debounce | PASS: 3 multi-tool turns (Read/Write/Edit/Bash, 5-13 s) each produced exactly one dot call; observed `working` -> `done` with no intermediate flaps at 2 s polling. Still only a 2 s-granularity check; the earlier event-level V2 data (0 ms gaps) stands |
+
+### Bugs found
+
+1. **Attach on a fresh Claude session locks the pane to the scrollback reader (breaks the loop guard and causes a spurious review).** Claude creates its `.jsonl` lazily at the first prompt. If the dot is attached before that, `transcript.Select` (`internal/transcript/select.go:17-21`) cannot resolve the path and returns the scrollback reader; `Attach` persists `Source: scrollback` (`internal/engine/engine.go:~186-188`) and the reader is cached forever in `e.readers` (`engine.go:247-256`), never upgraded once the file exists. Consequences observed: (a) attach alone triggered a dot call on an empty conversation (card for turn 1, created before any prompt was sent); (b) the delivered `[◆ Security dot]` turn was reviewed by Security (scrollback turns carry no user prefix; `attachments.json` showed `"source":"scrollback"`, `last_seen_turn":3` with only 2 real turns, and card turn labels were off by one). Detach + re-attach after the transcript existed gave `"source":"claude"` and the guard worked. Suggested fix: re-resolve the reader when the source is scrollback and the session transcript now exists (e.g. in `checkSession`/`onIdle`), and do not run on attach when there are no turns.
+2. **Closed panes are never detected, so cards are never orphaned.** Herdr returns error code `pane_not_found` (`{"error":{"code":"pane_not_found","message":"pane w4:p1 not found"}}`), but `herdr.IsNotFound` (`internal/herdr/types.go:74-77`) only matches `"not_found"`. `poll()` (`internal/engine/deliver.go:122-130`) therefore treats it as a transient error and `continue`s forever. Same check in `Start` (`engine.go:~160`). Suggested fix: match `pane_not_found` (and probably any `*_not_found`).
+
+### Side effects and cleanup
+- Sending `/model haiku` into the pane made Claude write `"model": "haiku"` into the user's `~/.claude/settings.json`; it was restored to the previous `"opus"` (from `settings.json.bak` / prior notes) at the end. Future runs should pass `--model` via agent args instead of using `/model`.
+- Engine killed, test server stopped (`herdr --session dots-test server stop`), no plugin linked or unlinked, user config.toml untouched, `e2e-scratch/` deleted.
+- Setup note: `env -i` for the server breaks Claude auth ("Not logged in"); unset only the `CLAUDE*` variables.
+- Server restore note: a restarted `dots-test` server restores earlier workspaces (w1-w3) from `session.json`.
