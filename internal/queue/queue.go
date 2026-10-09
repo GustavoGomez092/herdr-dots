@@ -310,6 +310,40 @@ func (s *Store) Edit(id, body string) error {
 	})
 }
 
+// AppendPart adds parts to a pending, unapproved digest card (KindDigest)
+// with its rebuilt body and label, in one write under the store lock; the
+// card's severity becomes the highest of its own and the new parts'. Any
+// other card, or a digest being sent, sent, dismissed or orphaned, is left
+// as it is (ErrTransition): later research then makes a new card. Input is
+// sanitized like Add's, and a failed write changes nothing.
+func (s *Store) AppendPart(id, body, label string, parts ...CardPart) (Card, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.find(id)
+	if i < 0 {
+		return Card{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	c := s.cards[i]
+	if c.Kind != KindDigest || c.Status != StatusPending || c.Approved {
+		return Card{}, fmt.Errorf("%w: card %s can't take more parts", ErrTransition, id)
+	}
+	c.Parts = append(slices.Clone(c.Parts), parts...)
+	c.Body, c.Label = body, label
+	for _, p := range parts {
+		if rank(p.Severity) > rank(c.Severity) {
+			c.Severity = p.Severity
+		}
+	}
+	c = sanitizeCard(c)
+	prev := slices.Clone(s.cards) // save() reorders s.cards; keep it to roll back
+	s.cards[i] = c
+	if err := s.save(); err != nil {
+		s.cards = prev
+		return Card{}, err
+	}
+	return c, nil
+}
+
 // SetStatusNote moves a card to st like SetStatus and, in the same write,
 // sets its note and adds flags (for a patch card applied with conflicts).
 func (s *Store) SetStatusNote(id string, st Status, note string, flags ...string) error {

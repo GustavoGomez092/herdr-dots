@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -9,12 +10,14 @@ import (
 	"time"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/config"
 	"herdr-dots/internal/council"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
+	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/transcript"
 	"herdr-dots/internal/view"
 )
@@ -95,12 +98,24 @@ type idleState struct {
 	inflight    int            // research runs reserved or running for this pane
 	away        []awayPart     // relevant results not yet carded
 	awaySince   time.Time      // the oldest collected part's idle period start
+	awayPeriod  int            // the oldest collected part's idle period
 	flushWanted bool           // the developer came back while research ran
+	card        *awayCard      // the latest digest card made on this pane (P8-R11)
 }
 
 type awayPart struct {
 	slug, name, glyph string
 	v                 backend.Verdict
+}
+
+// awayCard is a digest card already made for an idle period: later parts of
+// the same period join it while it is still pending and unsent (ruling
+// P8-R11: one digest card per pane per idle period, critical included).
+type awayCard struct {
+	id     string
+	period int
+	since  time.Time
+	parts  []awayPart
 }
 
 // observePane updates a pane's idle period from a fresh PaneInfo, flushes
@@ -123,7 +138,9 @@ func (e *Engine) observePane(a state.Attachment, p herdr.PaneInfo) {
 		st = &idleState{activeAt: now, period: 1, turns: seen, session: a.SessionValue, focused: p.Focused, ran: map[string]int{}}
 		e.idle[a.PaneID] = st
 	}
-	active := !agentIdle || (p.Focused && !st.focused) || seen != st.turns || a.SessionValue != st.session
+	// Activity (spec §6.1.5): the agent working, a new turn, a new session or
+	// focus gained. A blocked, unknown or empty status is not activity.
+	active := p.AgentStatus == herdr.StatusWorking || (p.Focused && !st.focused) || seen != st.turns || a.SessionValue != st.session
 	st.focused, st.turns, st.session, st.agentIdle = p.Focused, seen, a.SessionValue, agentIdle
 	flush := false
 	if active {
@@ -159,11 +176,9 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 		e.mu.Unlock()
 		return
 	}
-	day := e.todayLocked(now)
 	// Asks, drafts and background runs in flight count as calls already made
 	// (ruling P8-R8, the shared inFlightLocked).
 	paneCalls := e.d.Usage.PaneCalls(a.PaneID) + e.inFlightLocked(a.PaneID, key{})
-	paneCost := e.d.Usage.PaneCost(a.PaneID)
 	gen := e.gens[a.PaneID] // the attachment these runs are for
 	for _, da := range a.Dots {
 		d, ok := e.dots[da.Slug]
@@ -171,13 +186,7 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 			continue
 		}
 		k := key{a.PaneID, da.Slug}
-		in := ResearchInput{Dot: d, Att: da, AgentIdle: st.agentIdle, IdleFor: now.Sub(st.activeAt),
-			RanThisPeriod: st.ran[da.Slug] == st.period, Busy: e.bgQueued[k] > 0,
-			DotCalls: e.d.Usage.Calls(a.PaneID, da.Slug), PaneCalls: paneCalls, PaneBudget: cfg.SessionBudgetCalls,
-			DotCostUSD: e.d.Usage.Cost(a.PaneID, da.Slug), PaneCostUSD: paneCost,
-			DotBudgetUSD: d.Budget.MaxUSDPerSession, PaneBudgetUSD: cfg.SessionBudgetUSD,
-			Background: BackgroundInput{Proactive: true, PausedAll: e.pausedAll, DailyCount: day.Count(da.Slug, state.RunResearch),
-				CostToday: day.CostUSD, DailyBudget: cfg.DailyBudgetUSD}}
+		in := e.researchInputLocked(a.PaneID, da, d, st, now, cfg, paneCalls)
 		if !DecideResearch(in) || e.dailyClosedLocked(now) {
 			continue
 		}
@@ -196,6 +205,19 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 	for _, j := range jobs {
 		e.spawn(func() { e.runResearch(j) })
 	}
+}
+
+// researchInputLocked is DecideResearch's input for one dot on one pane, with
+// paneCalls counting the calls in flight. Caller holds e.mu.
+func (e *Engine) researchInputLocked(paneID string, da state.DotAttachment, d dots.Dot, st *idleState, now time.Time, cfg config.Config, paneCalls int) ResearchInput {
+	day := e.todayLocked(now)
+	return ResearchInput{Dot: d, Att: da, AgentIdle: st.agentIdle, IdleFor: now.Sub(st.activeAt),
+		RanThisPeriod: st.ran[da.Slug] == st.period, Busy: e.bgQueued[key{paneID, da.Slug}] > 0,
+		DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls, PaneBudget: cfg.SessionBudgetCalls,
+		DotCostUSD: e.d.Usage.Cost(paneID, da.Slug), PaneCostUSD: e.d.Usage.PaneCost(paneID),
+		DotBudgetUSD: d.Budget.MaxUSDPerSession, PaneBudgetUSD: cfg.SessionBudgetUSD,
+		Background: BackgroundInput{Proactive: true, PausedAll: e.pausedAll, DailyCount: day.Count(da.Slug, state.RunResearch),
+			CostToday: day.CostUSD, DailyBudget: cfg.DailyBudgetUSD}}
 }
 
 // runResearch reads the turns and open questions (outside every lock) and
@@ -279,6 +301,12 @@ func (e *Engine) openQuestions(project string, d dots.Dot) []memory.Entry {
 // generation are re-checked under e.mu, so a closed or reused pane never gets
 // the part. Observe dots learn silently: their results stay in memory and
 // never make a card.
+//
+// One digest card per pane per idle period (ruling P8-R11). While the
+// developer is away, a critical part makes the period's card at once, and
+// later parts of that period join it. Once the developer is back, every part,
+// critical included, waits for the runs still in flight, so a return
+// mid-research yields exactly one card.
 func (e *Engine) addAway(j bgJob, v backend.Verdict) {
 	if j.dot.Delivery.Mode == dots.ModeObserve {
 		return
@@ -292,14 +320,20 @@ func (e *Engine) addAway(j bgJob, v backend.Verdict) {
 	if len(st.away) == 0 || j.since.Before(st.awaySince) {
 		st.awaySince = j.since
 	}
+	if len(st.away) == 0 || j.period < st.awayPeriod {
+		st.awayPeriod = j.period
+	}
 	st.away = append(st.away, awayPart{slug: j.dot.Slug, name: j.dot.Name, glyph: j.dot.Glyph, v: v})
-	flush := v.Severity == "critical"
-	if st.period != j.period || st.flushWanted { // the developer is back
+	flush := false
+	switch {
+	case st.period != j.period || st.flushWanted: // the developer is back
 		if st.inflight > 1 {
 			st.flushWanted = true // more results are coming: one digest
 		} else {
 			flush = true
 		}
+	case v.Severity == "critical", st.card != nil && st.card.period == j.period:
+		flush = true // still away: the period's card now, or join the one made
 	}
 	e.mu.Unlock()
 	if flush {
@@ -335,60 +369,116 @@ func (e *Engine) researchDone(j bgJob) {
 	}
 }
 
-// flushAway turns the collected research into one digest card (Phase 3's
-// plain merge, no chair call). It is a queue card: never auto-delivered. The
-// card is added with the pane check in the same e.mu section (e.mu ->
-// stores), as deliverScheduled does, so a pane closed or reused meanwhile
-// never gets it.
+// flushAway turns the collected research into the period's digest card
+// (Phase 3's plain merge, no chair call), or adds it to the card already made
+// for that period while that card is pending and unsent. It is a queue card:
+// never auto-delivered. It holds e.dmu (like Send, Edit and Dismiss) and then
+// e.mu for the whole check-and-write, so a card being sent or edited never
+// grows, two flushes never make two cards, and a pane closed or reused (its
+// idle state deleted with the generation bump) never gets one.
 func (e *Engine) flushAway(paneID string) {
+	e.hook("away-before-lock")
+	e.dmu.Lock()
 	e.mu.Lock()
+	added, err := e.flushAwayLocked(paneID)
+	e.mu.Unlock()
+	e.dmu.Unlock()
+	if err != nil {
+		e.d.Logf("pane %s: away digest: %v (the results wait for the next return)", paneID, err)
+	}
+	if added {
+		e.reportPending(paneID)
+		e.broadcast()
+	}
+}
+
+// flushAwayLocked is flushAway's body. A failed queue write puts the parts
+// back. Caller holds e.dmu and e.mu (e.dmu -> e.mu -> stores).
+func (e *Engine) flushAwayLocked(paneID string) (bool, error) {
 	st := e.idle[paneID]
 	if st == nil || len(st.away) == 0 {
-		e.mu.Unlock()
-		return
+		return false, nil
 	}
-	parts, since, gen := st.away, st.awaySince, e.gens[paneID]
+	att, ok := e.d.Attachments.Get(paneID)
+	if !ok {
+		return false, nil
+	}
+	parts, since, period, wanted := st.away, st.awaySince, st.awayPeriod, st.flushWanted
 	st.away, st.flushWanted = nil, false
-	e.mu.Unlock()
+	restore := func() {
+		st.away = append(parts, st.away...)
+		st.awaySince, st.awayPeriod, st.flushWanted = since, period, wanted
+	}
 	now := e.now()
+	if cd := st.card; cd != nil && cd.period == period {
+		if _, edited := e.origBody[cd.id]; !edited { // an edited card keeps the developer's text
+			all := append(slices.Clone(cd.parts), parts...)
+			from := cd.since
+			if since.Before(from) {
+				from = since
+			}
+			_, qparts := digestParts(parts)
+			body, label, _ := digestText(all, from, now)
+			_, err := e.d.Queue.AppendPart(cd.id, body, label, qparts...)
+			switch {
+			case err == nil:
+				cd.parts, cd.since = all, from
+				e.digestFeedLocked(paneID, label)
+				return true, nil
+			case !errors.Is(err, queue.ErrTransition) && !errors.Is(err, queue.ErrNotFound):
+				restore()
+				return false, err
+			}
+		}
+		st.card = nil // sent, dismissed, edited or gone: later parts form a new card
+	}
+	_, qparts := digestParts(parts)
+	body, label, sev := digestText(parts, since, now)
+	c, err := e.d.Queue.Add(queue.Card{Kind: queue.KindDigest, Dot: digestSlug, DotName: digestName, Glyph: digestGlyph,
+		PaneID: paneID, Severity: sev, Body: body, Mode: string(dots.ModeQueue), Project: att.ProjectID, Parts: qparts,
+		Note: "researched while you were away", Origin: state.RunResearch, Label: label})
+	if err != nil {
+		restore()
+		return false, err
+	}
+	st.card = &awayCard{id: c.ID, period: period, since: since, parts: parts}
+	e.digestFeedLocked(paneID, label)
+	return true, nil
+}
+
+// digestParts are the parts as council parts (for the merge) and card parts,
+// with model text sanitized again before it is stored, as council.go does.
+func digestParts(parts []awayPart) ([]council.Part, []queue.CardPart) {
 	cparts := make([]council.Part, 0, len(parts))
 	qparts := make([]queue.CardPart, 0, len(parts))
 	for _, p := range parts {
-		cparts = append(cparts, council.Part{Slug: p.slug, Name: p.name, Glyph: p.glyph, Verdict: p.v})
-		qparts = append(qparts, queue.CardPart{Dot: p.slug, DotName: p.name, Glyph: p.glyph, Severity: p.v.Severity, Body: p.v.Message})
+		name := textutil.SanitizeModelText(p.name)
+		v := p.v
+		v.Message = strings.TrimSpace(textutil.SanitizeModelText(v.Message))
+		cparts = append(cparts, council.Part{Slug: p.slug, Name: name, Glyph: p.glyph, Verdict: v})
+		qparts = append(qparts, queue.CardPart{Dot: p.slug, DotName: name, Glyph: p.glyph, Severity: v.Severity, Body: v.Message})
 	}
+	return cparts, qparts
+}
+
+// digestText is a digest's body, header label ("2 dots · 42 min") and
+// severity for parts collected since an idle period began.
+func digestText(parts []awayPart, since, now time.Time) (body, label, severity string) {
+	cparts, _ := digestParts(parts)
 	noun := "dots"
 	if len(parts) == 1 {
 		noun = "dot"
 	}
-	label := fmt.Sprintf("%d %s · %d min", len(parts), noun, max(1, int(now.Sub(since).Round(time.Minute)/time.Minute)))
-	c := queue.Card{Kind: queue.KindDigest, Dot: digestSlug, DotName: digestName, Glyph: digestGlyph, PaneID: paneID,
-		Severity: council.MaxSeverity(cparts), Body: council.PlainMerge(cparts), Mode: string(dots.ModeQueue),
-		Parts: qparts, Note: "researched while you were away", Origin: state.RunResearch, Label: label}
-	e.hook("away-before-add")
-	e.mu.Lock()
-	att, ok := e.d.Attachments.Get(paneID)
-	if !ok || e.gens[paneID] != gen {
-		e.mu.Unlock()
-		e.d.Logf("pane %s closed before its away digest; dropped", paneID)
-		return
+	label = fmt.Sprintf("%d %s · %d min", len(parts), noun, max(1, int(now.Sub(since).Round(time.Minute)/time.Minute)))
+	return textutil.SanitizeModelText(council.PlainMerge(cparts)), label, council.MaxSeverity(cparts)
+}
+
+// digestFeedLocked notes a digest in the pane's feed. Caller holds e.mu
+// (e.mu -> stores, as bgFeed).
+func (e *Engine) digestFeedLocked(paneID, label string) {
+	if err := e.d.Feed.Append(state.FeedEntry{Time: time.Now(), PaneID: paneID, Dot: digestSlug, Outcome: state.OutcomeResearch, Detail: "digest: " + label}); err != nil {
+		e.d.Logf("feed: %v", err)
 	}
-	c.Project = att.ProjectID
-	_, err := e.d.Queue.Add(c)
-	var ferr error
-	if err == nil {
-		ferr = e.d.Feed.Append(state.FeedEntry{Time: time.Now(), PaneID: paneID, Dot: digestSlug, Outcome: state.OutcomeResearch, Detail: "digest: " + label})
-	}
-	e.mu.Unlock()
-	if err != nil {
-		e.d.Logf("queue add: %v", err)
-		return
-	}
-	if ferr != nil {
-		e.d.Logf("feed: %v", ferr)
-	}
-	e.reportPending(paneID)
-	e.broadcast()
 }
 
 // awayLocked is the snapshot's view of collected research. e.mu held.
@@ -400,7 +490,9 @@ func (e *Engine) awayLocked(paneID string) *view.AwayState {
 	return &view.AwayState{Since: st.awaySince, Pending: len(st.away)}
 }
 
-// researchNextLocked is the roster hint "research in 6m". e.mu held.
+// researchNextLocked is the roster hint "research in 6m": only for a pass
+// that could run once due (not for a paused dot, a dot at its daily cap, or
+// a pane or dot over its session budget). e.mu held: no I/O.
 func (e *Engine) researchNextLocked(d dots.Dot, paneID string, now time.Time) string {
 	st := e.idle[paneID]
 	if !d.Research.Enabled || st == nil || !st.agentIdle || st.ran[d.Slug] == st.period {
@@ -408,6 +500,19 @@ func (e *Engine) researchNextLocked(d dots.Dot, paneID string, now time.Time) st
 	}
 	left := time.Duration(d.Research.IdleMinutes)*time.Minute - now.Sub(st.activeAt)
 	if left <= 0 {
+		return ""
+	}
+	a, ok := e.d.Attachments.Get(paneID)
+	if !ok {
+		return ""
+	}
+	da := a.Find(d.Slug)
+	if da == nil {
+		return ""
+	}
+	in := e.researchInputLocked(paneID, *da, d, st, now, e.config(), e.d.Usage.PaneCalls(paneID)+e.inFlightLocked(paneID, key{}))
+	in.IdleFor, in.Busy = time.Duration(d.Research.IdleMinutes)*time.Minute, false // would it run once due?
+	if !DecideResearch(in) || e.dailyClosedLocked(now) {
 		return ""
 	}
 	return fmt.Sprintf("research in %dm", int(math.Ceil(left.Minutes())))

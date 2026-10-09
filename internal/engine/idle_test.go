@@ -77,6 +77,13 @@ func idleRig(t *testing.T, ds ...dots.Dot) *proRig {
 // idle period has started and a clock jump counts as idle time.
 func (r *proRig) idleNow(t *testing.T, slug string) {
 	t.Helper()
+	r.idlePeriod(t)
+	eventually(t, "the roster countdown", func() bool { return r.dotState(slug).Next == "research in 10m" })
+}
+
+// idlePeriod waits until poll has seen every turn and the idle agent.
+func (r *proRig) idlePeriod(t *testing.T) {
+	t.Helper()
 	rd := r.reader()
 	rd.mu.Lock()
 	want := len(rd.turns)
@@ -87,7 +94,6 @@ func (r *proRig) idleNow(t *testing.T, slug string) {
 		st := r.e.idle[pane]
 		return st != nil && st.turns == want && st.agentIdle
 	})
-	eventually(t, "the roster countdown", func() bool { return r.dotState(slug).Next == "research in 10m" })
 }
 
 func TestIdleResearchRunsOncePerIdlePeriod(t *testing.T) {
@@ -234,6 +240,11 @@ func TestResearchForAClosedPaneMakesNoDigest(t *testing.T) {
 	if n := r.usage.Calls(pane, "security"); n != 0 {
 		t.Fatalf("the new attachment was charged %d calls", n)
 	}
+	for _, f := range r.feed.Recent(pane, 50) {
+		if f.Outcome == state.OutcomeResearch || f.Dot == digestSlug {
+			t.Fatalf("a closed pane's research fed the new attachment: %+v", f)
+		}
+	}
 }
 
 // Research reads the dot's open questions from memory and may write
@@ -282,7 +293,7 @@ func TestResearchDailyCapAndWeb(t *testing.T) {
 		t.Fatal("web research on a claude-cli dot gets web tools")
 	}
 	r.turnEnds(transcript.Turn{User: "again"})
-	r.idleNow(t, "security")
+	r.idlePeriod(t) // no countdown: the dot is at its daily cap (fix round 1, item 4)
 	r.clock.Add(11 * time.Minute)
 	time.Sleep(150 * time.Millisecond)
 	if n := len(r.be.runs(backend.PassResearch)); n != 1 {
@@ -371,7 +382,7 @@ func TestPaneClosedDuringDigestFlushGetsNoCard(t *testing.T) {
 	var rp atomic.Pointer[proRig]
 	var once sync.Once
 	r := newProRig(t, proOpts{hook: func(point string) {
-		if point == "away-before-add" {
+		if point == "away-before-lock" {
 			once.Do(func() { rp.Load().e.dropPane(pane) })
 		}
 	}}, researchDot("Security"))
