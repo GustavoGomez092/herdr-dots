@@ -99,16 +99,18 @@ func (e *Engine) councilPlan(att state.Attachment, slugs []string) (council.Pref
 	e.mu.Lock()
 	pausedAll := e.pausedAll
 	known := map[string]dots.Dot{}
+	asked := map[string]bool{}
 	for _, da := range att.Dots {
 		if d, ok := e.dots[da.Slug]; ok {
 			known[da.Slug] = d
 		}
+		asked[da.Slug] = e.asking[key{att.PaneID, da.Slug}]
 	}
 	e.mu.Unlock()
 	cands := make([]council.Candidate, 0, len(att.Dots))
 	for _, da := range att.Dots {
 		d, ok := known[da.Slug]
-		c := council.Candidate{Slug: da.Slug, Paused: da.Paused || pausedAll, Unknown: !ok}
+		c := council.Candidate{Slug: da.Slug, Paused: da.Paused || pausedAll, Unknown: !ok, Asked: asked[da.Slug]}
 		if ok {
 			c.CallsLeft = callsLeft(d.Budget.MaxCallsPerSession, e.d.Usage.Calls(att.PaneID, da.Slug))
 			c.OverUSD = OverUSD(e.d.Usage.Cost(att.PaneID, da.Slug), d.Budget.MaxUSDPerSession)
@@ -199,6 +201,21 @@ func (e *Engine) startCouncil(ctx context.Context, paneID, question string, slug
 		run.cancel()
 		return nil, ErrCouncilRunning
 	}
+	// A member the main agent started asking since the plan sits out too.
+	kept := make([]dots.Dot, 0, len(run.members))
+	for _, m := range run.members {
+		if e.asking[key{paneID, m.Slug}] {
+			run.skipped = append(run.skipped, council.Part{Slug: m.Slug, Name: m.Name, Glyph: m.Glyph, Err: "skipped: " + council.ReasonAsked})
+			continue
+		}
+		kept = append(kept, m)
+	}
+	if len(kept) == 0 {
+		e.mu.Unlock()
+		run.cancel()
+		return nil, errors.New("no eligible dots (every member is being asked)")
+	}
+	run.members = kept
 	if admit != nil {
 		if err := admit(); err != nil {
 			e.mu.Unlock()
@@ -211,7 +228,7 @@ func (e *Engine) startCouncil(ctx context.Context, paneID, question string, slug
 	}
 	e.councilSeq++
 	run.id = fmt.Sprintf("council-%d", e.councilSeq)
-	run.phase, run.round, run.total = view.CouncilMembers, 1, len(members)
+	run.phase, run.round, run.total = view.CouncilMembers, 1, len(run.members)
 	e.councils[paneID] = run
 	delete(e.preflights, paneID)
 	e.mu.Unlock()
@@ -442,7 +459,7 @@ func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.Counc
 	ctx, cancel := context.WithTimeout(run.ctx, cfg.RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
-	_ = e.d.Usage.Add(run.paneID, councilSlug, deltaOf(res)) // the chair's dollars count against the pane
+	e.charge(run.paneID, councilSlug, deltaOf(res)) // the chair's dollars count against the pane
 	if err != nil {
 		return "", redactErr(err)
 	}

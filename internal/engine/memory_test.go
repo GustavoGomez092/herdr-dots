@@ -89,6 +89,7 @@ type memOpts struct {
 	configPath  string                                   // config.toml re-read every 10ms; "" = never
 	reader      func(state.Attachment) transcript.Reader // nil = r.readers by session
 	resolve     func(string) (memory.Project, error)     // nil = testProject
+	now         func() time.Time                         // the memory store's clock; nil = time.Now
 }
 
 type memRig struct {
@@ -119,6 +120,7 @@ func newMemRig(t *testing.T, o memOpts, ds ...dots.Dot) *memRig {
 		lim.LockTimeout = o.lockTimeout
 	}
 	mem := memory.Open(filepath.Join(dir, "memory"), lim)
+	mem.Now = o.now
 	r := &memRig{srv: srv, be: &memBackend{}, readers: map[string]*fakeReader{"s1": {}}, q: q, atts: atts, feed: feed, mem: mem}
 	cfg := config.Default()
 	cfg.TurnDebounceMs = 0

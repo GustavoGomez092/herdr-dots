@@ -514,8 +514,14 @@ func TestClosingThePaneCancelsInFlightAsks(t *testing.T) {
 		t.Fatal("Ask did not end when its pane closed")
 	}
 	open()
-	eventually(t, "the run is charged", func() bool { return r.usage.Calls(pane, "security") == 1 })
-	time.Sleep(50 * time.Millisecond)
+	eventually(t, "the run ends", func() bool {
+		r.e.mu.Lock()
+		defer r.e.mu.Unlock()
+		return len(r.e.asking) == 0
+	})
+	if n := r.usage.Calls(pane, "security"); n != 0 {
+		t.Fatalf("the closed pane was charged %d calls (a reused pane id would inherit them)", n)
+	}
 	r.e.markConsulted(pane, "security")
 	r.e.mu.Lock()
 	n := len(r.e.consulted)

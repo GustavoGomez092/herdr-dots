@@ -340,20 +340,7 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		return e, inserted, err
 	}
 	now := s.now()
-	norm := Normalize(e.Text)
-	best, bestScore := -1, 0.0
-	for i, x := range f.Entries {
-		if x.Status == StatusArchived || x.Kind != e.Kind {
-			continue
-		}
-		if Normalize(x.Text) == norm {
-			best, bestScore = i, 1
-			break
-		}
-		if sc := Similar(x.Text, e.Text); sc >= 0.8 && sc > bestScore {
-			best, bestScore = i, sc
-		}
-	}
+	best, bestScore := findMatch(f, e)
 	if best >= 0 {
 		x := &f.Entries[best]
 		x.Uses++
@@ -410,6 +397,25 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 	return e, inserted, nil
 }
 
+// findMatch is the live entry a prepared e dedupes into (same kind, same
+// normalized text or token-Jaccard >= 0.8) and its score, or -1.
+func findMatch(f *scopeFile, e Entry) (int, float64) {
+	norm := Normalize(e.Text)
+	best, bestScore := -1, 0.0
+	for i, x := range f.Entries {
+		if x.Status == StatusArchived || x.Kind != e.Kind {
+			continue
+		}
+		if Normalize(x.Text) == norm {
+			return i, 1
+		}
+		if sc := Similar(x.Text, e.Text); sc >= 0.8 && sc > bestScore {
+			best, bestScore = i, sc
+		}
+	}
+	return best, bestScore
+}
+
 func (s *Store) capFor(sc Scope) int {
 	switch sc {
 	case ScopeProject:
@@ -420,36 +426,62 @@ func (s *Store) capFor(sc Scope) int {
 	return s.Limits.MaxDot
 }
 
-// enforceCap archives the lowest-value live entries over limit. Pinned and
+// enforceCap archives live entries over limit. Proposals go first, oldest
+// first; active entries go (lowest value first) only while the active ones
+// alone are over the limit, and never to make room for a new proposal:
+// unapproved memory never pushes out approved memory. Pinned and
 // developer-written entries are never archived, nor is keep.
 func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) int {
 	if limit <= 0 {
 		return 0
 	}
-	live := 0
-	var cands []int
+	live, active, keepProposed := 0, 0, false
+	var proposed, cands []int
 	for i, e := range f.Entries {
 		if e.Status == StatusArchived {
 			continue
 		}
 		live++
-		if !e.Pinned && e.Source != SourceUser && e.ID != keep {
+		if e.Status == StatusActive {
+			active++
+		}
+		if e.ID == keep {
+			keepProposed = e.Status == StatusProposed
+			continue
+		}
+		if e.Pinned || e.Source == SourceUser {
+			continue
+		}
+		if e.Status == StatusProposed {
+			proposed = append(proposed, i)
+		} else {
 			cands = append(cands, i)
 		}
 	}
-	over := live - limit
-	if over <= 0 {
+	if live <= limit {
 		return 0
+	}
+	archive := func(i int) { f.Entries[i].Status, f.Entries[i].UpdatedAt = StatusArchived, now }
+	sort.SliceStable(proposed, func(a, b int) bool {
+		return f.Entries[proposed[a]].CreatedAt.Before(f.Entries[proposed[b]].CreatedAt)
+	})
+	n := 0
+	for _, i := range proposed {
+		if live-n <= limit {
+			break
+		}
+		archive(i)
+		n++
+	}
+	over := min(live-n, active) - limit
+	if keepProposed || over <= 0 {
+		return n
 	}
 	sort.SliceStable(cands, func(a, b int) bool {
 		return capScore(f.Entries[cands[a]], now) < capScore(f.Entries[cands[b]], now)
 	})
-	n := 0
-	for _, i := range cands {
-		if n == over {
-			break
-		}
-		f.Entries[i].Status, f.Entries[i].UpdatedAt = StatusArchived, now
+	for _, i := range cands[:min(over, len(cands))] {
+		archive(i)
 		n++
 	}
 	return n

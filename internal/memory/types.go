@@ -220,6 +220,8 @@ var (
 	ErrInvalid  = errors.New("invalid memory request")
 	ErrDenied   = errors.New("not allowed to change this memory entry")
 	ErrSecret   = errors.New("memory text looks like a secret")
+
+	ErrTooManyProposals = errors.New("approve or reject some first")
 )
 
 // Valid reports whether s is a known status.

@@ -168,8 +168,18 @@ func (e *Engine) dropPane(paneID string) {
 	} else if n > 0 {
 		e.d.Logf("pane %s closed: %d card(s) orphaned", paneID, n)
 	}
+	// Under e.mu (e.mu -> stores), as charge and restoreStatus check the
+	// attachment: a run ending now either lands before the reset or sees the
+	// pane gone, and a reused pane id inherits no spend or status.
+	e.mu.Lock()
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)
+	for k := range e.status {
+		if k.pane == paneID {
+			delete(e.status, k)
+		}
+	}
+	e.mu.Unlock()
 	// After the attachment is gone: in-flight MCP asks end with ErrPaneClosed
 	// and nothing can re-mark the dead pane.
 	e.cancelAsks(paneID)

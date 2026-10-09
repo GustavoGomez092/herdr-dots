@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"herdr-dots/internal/backend"
@@ -28,7 +29,7 @@ var (
 	ErrNotAttached = errors.New("no attached dot")
 	ErrPaused      = errors.New("paused")
 	ErrBudget      = errors.New("budget reached")
-	ErrPaneClosed  = errors.New("pane closed")
+	ErrPaneClosed  = ipc.ErrPaneClosed
 )
 
 const (
@@ -226,33 +227,99 @@ func (e *Engine) askable(paneID, slug string) (dots.Dot, error) {
 	}
 	e.mu.Lock()
 	d, known := e.dots[slug]
-	pausedAll := e.pausedAll
-	inCouncil := false
-	if run := e.councils[paneID]; run != nil {
-		for _, m := range run.members {
-			inCouncil = inCouncil || m.Slug == slug
-		}
+	var err error
+	if known {
+		err = e.askBlockedLocked(paneID, d, da.Paused)
 	}
 	e.mu.Unlock()
 	if !known {
 		return dots.Dot{}, fmt.Errorf("%w '%s': its dot file is missing or invalid", ErrNotAttached, slug)
 	}
+	return d, err
+}
+
+// askBlockedLocked is why the dot can't be asked now, or nil. A dot answers
+// one thing at a time (an ask, a turn review or a memory pass), and asks in
+// flight on the pane count as calls already made, so parallel asks can't
+// jointly overspend a call budget. A dollar cost is known only after a run,
+// so the dollar checks see spend so far; one ask per dot bounds the
+// overshoot as for turn reviews. Caller holds e.mu (e.mu -> stores).
+func (e *Engine) askBlockedLocked(paneID string, d dots.Dot, paused bool) error {
+	k := key{paneID, d.Slug}
+	inCouncil := false
+	if run := e.councils[paneID]; run != nil {
+		for _, m := range run.members {
+			inCouncil = inCouncil || m.Slug == d.Slug
+		}
+	}
 	switch {
 	case inCouncil:
-		return d, fmt.Errorf("%s is in a council right now; ask again when it ends", d.Name)
-	case pausedAll:
-		return d, fmt.Errorf("all dots are %w", ErrPaused)
-	case da.Paused:
-		return d, fmt.Errorf("%s is %w", d.Name, ErrPaused)
+		return fmt.Errorf("%s is in a council right now; ask again when it ends", d.Name)
+	case e.asking[k] || e.running[k]:
+		return fmt.Errorf("%s is already answering; ask again when it is done", d.Name)
+	case e.pausedAll:
+		return fmt.Errorf("all dots are %w", ErrPaused)
+	case paused:
+		return fmt.Errorf("%s is %w", d.Name, ErrPaused)
+	}
+	inFlight := 0 // asks of the pane's other dots (this one has none: refused above)
+	for x := range e.asking {
+		if x.pane == paneID {
+			inFlight++
+		}
 	}
 	cfg := e.config()
-	if e.d.Usage.Calls(paneID, slug) >= d.Budget.MaxCallsPerSession || OverUSD(e.d.Usage.Cost(paneID, slug), d.Budget.MaxUSDPerSession) {
-		return d, fmt.Errorf("%s: %w for this agent session", d.Name, ErrBudget)
+	if e.d.Usage.Calls(paneID, d.Slug) >= d.Budget.MaxCallsPerSession || OverUSD(e.d.Usage.Cost(paneID, d.Slug), d.Budget.MaxUSDPerSession) {
+		return fmt.Errorf("%s: %w for this agent session", d.Name, ErrBudget)
 	}
-	if e.d.Usage.PaneCalls(paneID) >= cfg.SessionBudgetCalls || OverUSD(e.d.Usage.PaneCost(paneID), cfg.SessionBudgetUSD) {
-		return d, fmt.Errorf("the pane's session %w", ErrBudget)
+	if e.d.Usage.PaneCalls(paneID)+inFlight >= cfg.SessionBudgetCalls || OverUSD(e.d.Usage.PaneCost(paneID), cfg.SessionBudgetUSD) {
+		return fmt.Errorf("the pane's session %w", ErrBudget)
 	}
-	return d, nil
+	return nil
+}
+
+// reserveAsk re-checks the dot under e.mu, then takes the ask slot and marks
+// the dot as being asked in the same critical section: of parallel asks only
+// one gets through, and a refused ask uses no slot. release unmarks the dot
+// and reviews a turn that ended meanwhile (processPaneLocked deferred it).
+func (e *Engine) reserveAsk(paneID string, d dots.Dot) (release func(), err error) {
+	k := key{paneID, d.Slug}
+	lim, mcp := e.limiter(), e.config().MCP.Normalized()
+	e.mu.Lock()
+	att, ok := e.d.Attachments.Get(paneID)
+	if !ok {
+		e.mu.Unlock()
+		return nil, ErrPaneClosed
+	}
+	paused := false
+	if da := att.Find(d.Slug); da != nil {
+		paused = da.Paused
+	}
+	if err := e.askBlockedLocked(paneID, d, paused); err != nil {
+		e.mu.Unlock()
+		return nil, err
+	}
+	if err := lim.take(paneID, mcp); err != nil { // a leaf lock
+		e.mu.Unlock()
+		return nil, err
+	}
+	if e.asking == nil {
+		e.asking = map[key]bool{}
+	}
+	e.asking[k] = true
+	e.mu.Unlock()
+	return func() {
+		e.mu.Lock()
+		delete(e.asking, k)
+		again := e.rerun[k] && !e.running[k]
+		if again {
+			delete(e.rerun, k)
+		}
+		e.mu.Unlock()
+		if again {
+			e.spawn(func() { e.processPaneIfIdle(paneID) })
+		}
+	}, nil
 }
 
 // Ask runs one dot on the pane now and returns its answer (ask_dot). It is
@@ -274,28 +341,45 @@ func (e *Engine) Ask(ctx context.Context, paneID, slug, question string, include
 	stop := context.AfterFunc(e.ctx, cancel) // an engine shutdown ends the ask
 	defer stop()
 	defer e.trackAsk(paneID, cancel)() // a closing pane ends it too
+	// A pane that closed before trackAsk could not cancel this ask: check
+	// again now that it can (and never read with an empty attachment).
+	att, ok := e.d.Attachments.Get(paneID)
+	if !ok {
+		return ipc.AskResult{}, ErrPaneClosed
+	}
 	var turns []transcript.Turn
 	if includeTurns {
-		att, _ := e.d.Attachments.Get(paneID)
 		ts, err := e.reader(att).Turns(runCtx)
 		if err != nil {
 			return ipc.AskResult{}, fmt.Errorf("read conversation: %w", err)
 		}
 		turns = tail(ts, d.Context.Turns)
 	}
-	// The slot is used only now: a refusal or a failed read costs none. Only
-	// the limits come from [mcp]; which tools exist is the mcp command's
-	// business, not the engine's.
-	if err := e.limiter().take(paneID, e.config().MCP.Normalized()); err != nil {
+	// The slot is used only now, together with the dot's reservation: a
+	// refusal or a failed read costs none. Only the limits come from [mcp];
+	// which tools exist is the mcp command's business, not the engine's.
+	release, err := e.reserveAsk(paneID, d)
+	if err != nil {
 		return ipc.AskResult{}, err
 	}
+	// The dot stays reserved until both the run has ended (an abandoned run
+	// still finishes in the background) and Ask has returned (after
+	// markConsulted, so a turn deferred meanwhile sees the consultation).
+	var left atomic.Int32
+	left.Store(2)
+	done := func() {
+		if left.Add(-1) == 0 {
+			release()
+		}
+	}
+	defer done()
 	type outcome struct {
 		res backend.Result
 		err error
 	}
 	got := make(chan outcome, 1)
 	o := runOpts{summon: true, ask: true, question: askQuestion(q), ctx: runCtx,
-		sink: func(res backend.Result, err error) { got <- outcome{res, err} }}
+		sink: func(res backend.Result, err error) { got <- outcome{res, err}; done() }}
 	e.spawn(func() { e.runDot(paneID, d, turns, o) })
 	var out outcome
 	select {
@@ -303,11 +387,13 @@ func (e *Engine) Ask(ctx context.Context, paneID, slug, question string, include
 	case <-runCtx.Done():
 		return ipc.AskResult{}, e.askEnded(paneID, d, runCtx)
 	}
-	if out.err != nil {
-		return ipc.AskResult{}, fmt.Errorf("%s failed: %s", d.Name, errText(errors.New(credentials.Redact(out.err.Error()))))
-	}
+	// Cancellation first: a run it made fail can win the select above, and
+	// that is the ask ending (pane closed, hangup), not the dot failing.
 	if runCtx.Err() != nil {
 		return ipc.AskResult{}, e.askEnded(paneID, d, runCtx)
+	}
+	if out.err != nil {
+		return ipc.AskResult{}, fmt.Errorf("%s failed: %s", d.Name, errText(errors.New(credentials.Redact(out.err.Error()))))
 	}
 	if !e.markConsulted(paneID, slug) {
 		return ipc.AskResult{}, ErrPaneClosed

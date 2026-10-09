@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -40,12 +41,15 @@ func serveMCP(ctx context.Context, args []string, getenv func(string) string, t 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("mcp: unexpected argument %q (it takes only --config-dir and --state-dir)", fs.Arg(0))
+	}
 	if !filepath.IsAbs(*configDir) || !filepath.IsAbs(*stateDir) {
 		return errors.New("mcp needs absolute --config-dir and --state-dir (herdr-dots setup-mcp writes them)")
 	}
 	pane, sock := herdrEnv(getenv("HERDR_PANE_ID")), herdrEnv(getenv("HERDR_SOCKET_PATH"))
 	p := paths.New(filepath.Clean(*configDir), filepath.Clean(*stateDir), sock)
-	logger, closeLog := mcpLogger(p)
+	logger, closeLog := mcpLogger(p, os.Stderr)
 	defer closeLog()
 	// The config is read once, here: an edit to config.toml needs a server
 	// restart (restart the agent) to change the tools offered.
@@ -98,19 +102,25 @@ func herdrEnv(v string) string {
 }
 
 // mcpLogger opens SessionDir/mcp.log (StateDir/mcp.log outside Herdr),
-// rotated like engine.log. Logging never fails the server.
-func mcpLogger(p paths.Paths) (*log.Logger, func()) {
+// rotated like engine.log. Logging never fails the server; a log that can't
+// be opened is said once on stderr (safe: only stdout is the protocol).
+func mcpLogger(p paths.Paths, stderr io.Writer) (*log.Logger, func()) {
 	dir := p.StateDir
 	if p.SocketPath != "" {
 		dir = p.SessionDir
 	}
+	path := filepath.Join(dir, "mcp.log")
 	discard := log.New(io.Discard, "", 0)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	fail := func(err error) (*log.Logger, func()) {
+		fmt.Fprintf(stderr, "herdr-dots mcp: can't open the log %s (%v); logging nothing\n", path, err)
 		return discard, func() {}
 	}
-	f, err := openEngineLog(filepath.Join(dir, "mcp.log"))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fail(err)
+	}
+	f, err := openEngineLog(path)
 	if err != nil {
-		return discard, func() {}
+		return fail(err)
 	}
 	return log.New(f, "herdr-dots mcp ", log.LstdFlags), func() { f.Close() }
 }
