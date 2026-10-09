@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -138,6 +139,83 @@ func TestOpenNoFollowRefusesSymlinksAndReservedNames(t *testing.T) {
 	}
 	if !ReservedPathName(".env::$DATA") || !ReservedPathName("src/NUL") || ReservedPathName("src/main.go") {
 		t.Fatal("ReservedPathName rules")
+	}
+}
+
+// junction makes link a directory junction to target (mklink /J needs no
+// privilege).
+func junction(t *testing.T, link, target string) {
+	t.Helper()
+	if out, err := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink /J: %v: %s", err, out)
+	}
+}
+
+// Review Focus (Important): a junction is a reparse point OpenNoFollow
+// refuses on the handle it opened, with no Lstat-to-open gap.
+func TestOpenNoFollowRefusesAJunction(t *testing.T) {
+	dir, outside := t.TempDir(), t.TempDir()
+	link := filepath.Join(dir, "ext")
+	junction(t, link, outside)
+	if f, err := OpenNoFollow(link); err == nil {
+		f.Close()
+		t.Fatal("junction opened")
+	} else if !errors.Is(err, ErrReparsePoint) {
+		t.Fatalf("err = %v, want ErrReparsePoint", err)
+	}
+	if _, err := OpenNoFollow(filepath.Join(dir, "missing.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing file: %v, want ErrNotExist", err)
+	}
+	if f, err := OpenNoFollow(dir); err != nil {
+		t.Fatalf("a plain directory: %v", err)
+	} else {
+		f.Close()
+	}
+}
+
+// The handle's final path shows a junction anywhere above the file.
+func TestVerifyOpenedPathCatchesAJunctionParent(t *testing.T) {
+	proj, outside := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(outside, "notes.txt"), []byte("outside"), 0o600)
+	os.WriteFile(filepath.Join(proj, "real.txt"), []byte("inside"), 0o600)
+	junction(t, filepath.Join(proj, "ext"), outside)
+	f, err := OpenNoFollow(filepath.Join(proj, "ext", "notes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := VerifyOpenedPath(f, proj, "ext/notes.txt"); err == nil {
+		t.Fatal("a file reached through a junction passed")
+	}
+	g, err := OpenNoFollow(filepath.Join(proj, "real.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	if err := VerifyOpenedPath(g, proj, "real.txt"); err != nil {
+		t.Fatalf("a plain file: %v", err)
+	}
+	// A root that is itself reached through a junction is fine.
+	alias := filepath.Join(t.TempDir(), "alias")
+	junction(t, alias, proj)
+	h, err := OpenNoFollow(filepath.Join(alias, "real.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if err := VerifyOpenedPath(h, alias, "real.txt"); err != nil {
+		t.Fatalf("root through a junction: %v", err)
+	}
+}
+
+func TestIsVolumeRoot(t *testing.T) {
+	for _, p := range []string{`C:\`, `C:`, `\\?\C:\`} {
+		if !IsVolumeRoot(p) {
+			t.Errorf("IsVolumeRoot(%q) = false", p)
+		}
+	}
+	if IsVolumeRoot(t.TempDir()) {
+		t.Error("a temp dir is not a volume root")
 	}
 }
 

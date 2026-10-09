@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"herdr-dots/internal/dots"
@@ -46,7 +47,13 @@ func (ExecRunner) Run(ctx context.Context, c Cmd) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	cmd.Dir = c.Dir
-	cmd.Env = c.Env
+	env := c.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	// Windows: the child starts in the project, and an npm shim's bare "node"
+	// must not find a repo-local node.exe/.cmd there (platform.ChildEnv).
+	cmd.Env = platform.ChildEnv(env)
 	cmd.Stdin = strings.NewReader(c.Stdin)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out

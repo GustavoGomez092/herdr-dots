@@ -1,6 +1,9 @@
 package platform
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	// ErrNotPrivate means a file or directory is usable by other users.
@@ -56,6 +59,15 @@ func allowedACESID(sid, me, owner string) bool {
 // only the current user may own it. Administrators is not accepted here even
 // for an elevated client (unlike files, see ownerAccepted).
 func pipeOwnerAccepted(owner, me string) bool { return owner != "" && owner == me }
+
+// pipeOwnerError is CheckPipeOwner's refusal; owner is the owner SID's
+// string form, "" when the pipe has none.
+func pipeOwnerError(owner string) error {
+	if owner == "" {
+		owner = "none"
+	}
+	return fmt.Errorf("%w: the pipe is owned by %s", ErrNotOwner, owner)
+}
 
 type aceKind int
 

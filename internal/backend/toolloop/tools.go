@@ -90,6 +90,11 @@ func Note(want bool, cwd string, tools bool) string {
 // would otherwise expose dotfiles and credentials the deny-list can't
 // enumerate.
 func Unavailable(root string) bool {
+	// Windows: a drive root in any spelling (C:\, C:, \\?\C:\), whether or
+	// not EvalSymlinks can read it.
+	if platform.IsVolumeRoot(root) {
+		return true
+	}
 	rr, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return false // a missing root yields tools that fail, never a panic
@@ -235,7 +240,7 @@ func (r repo) readFile(ctx context.Context, raw json.RawMessage) (string, error)
 	if err != nil {
 		return "", err
 	}
-	f, err := openVerified(abs)
+	f, err := openVerified(r.root, abs, rel)
 	if err != nil {
 		if err == ErrOutsideRoot {
 			return "", err
@@ -347,7 +352,7 @@ func (r repo) grep(ctx context.Context, raw json.RawMessage) (string, error) {
 
 // grepFile appends matches and reports whether the match cap was reached.
 func (r repo) grepFile(abs, rel string, re *regexp.Regexp, b *strings.Builder, matches *int) bool {
-	f, err := openVerified(abs)
+	f, err := openVerified(r.root, abs, rel)
 	if err != nil {
 		return false
 	}
@@ -507,7 +512,7 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 		return nil, err
 	}
 	cmd.Dir = root
-	cmd.Env = gitEnv(os.Environ())
+	cmd.Env = platform.ChildEnv(gitEnv(os.Environ()))
 	cmd.WaitDelay = 500 * time.Millisecond
 	platform.HideWindow(cmd)
 	var out bytes.Buffer

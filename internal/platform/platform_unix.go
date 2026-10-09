@@ -34,6 +34,11 @@ func CommandContext(ctx context.Context, name string, args []string) (*exec.Cmd,
 	return exec.CommandContext(ctx, name, args...), nil
 }
 
+// ChildEnv is the environment to give a child process built from env. Unix:
+// env unchanged (nil still means "inherit"); no shell here searches the
+// current directory for a program name.
+func ChildEnv(env []string) []string { return env }
+
 // HideWindow keeps a child from opening a console window. Unix: nothing to do.
 func HideWindow(*exec.Cmd) {}
 

@@ -66,8 +66,12 @@ func CheckPipeOwner(conn net.Conn) error {
 	if err != nil {
 		return err
 	}
-	if owner == nil || !pipeOwnerAccepted(owner.String(), me.String()) {
-		return fmt.Errorf("%w: the pipe is owned by %s", ErrNotOwner, owner.String())
+	var name string
+	if owner != nil {
+		name = owner.String()
+	}
+	if !pipeOwnerAccepted(name, me.String()) {
+		return pipeOwnerError(name)
 	}
 	return nil
 }

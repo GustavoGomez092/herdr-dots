@@ -49,6 +49,30 @@ func TestResolveCodexPath(t *testing.T) {
 	}
 }
 
+// CODEX_HOME set (for the engine, say) but the session written under the
+// default <home>/.codex/sessions: the default is searched next.
+func TestResolveCodexPathFallsBackToHomeWhenCodexHomeHasNoMatch(t *testing.T) {
+	home := t.TempDir()
+	codexHome := filepath.Join(t.TempDir(), "codex")
+	os.MkdirAll(filepath.Join(codexHome, "sessions"), 0o700)
+	t.Setenv("CODEX_HOME", codexHome)
+	dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "08")
+	os.MkdirAll(dir, 0o700)
+	f := filepath.Join(dir, "rollout-2026-10-08T10-00-00-c3.jsonl")
+	os.WriteFile(f, []byte("{}\n"), 0o600)
+	if p, err := ResolveCodexPath(home, "id", "c3"); err != nil || p != f {
+		t.Fatalf("no fallback to the default sessions dir: %q %v", p, err)
+	}
+	// A match under CODEX_HOME still wins.
+	own := filepath.Join(codexHome, "sessions", "2026", "10", "08")
+	os.MkdirAll(own, 0o700)
+	g := filepath.Join(own, "rollout-2026-10-08T10-00-00-c3.jsonl")
+	os.WriteFile(g, []byte("{}\n"), 0o600)
+	if p, err := ResolveCodexPath(home, "id", "c3"); err != nil || p != g {
+		t.Fatalf("CODEX_HOME match: %q %v", p, err)
+	}
+}
+
 func TestResolveCodexPathHonoursCodexHome(t *testing.T) {
 	home := t.TempDir()
 	codexHome := filepath.Join(t.TempDir(), "my codex")

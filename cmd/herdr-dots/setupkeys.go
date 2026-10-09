@@ -5,11 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"herdr-dots/internal/keys"
+	"herdr-dots/internal/platform"
 )
 
 func runSetupKeys(args []string) error {
@@ -57,10 +57,21 @@ func runSetupKeys(args []string) error {
 	if bin == "" {
 		bin = "herdr"
 	}
-	if out, err := exec.Command(bin, "server", "reload-config").CombinedOutput(); err != nil {
+	if out, err := reloadHerdrConfig(bin); err != nil {
 		fmt.Printf("Run `herdr server reload-config` yourself (%v: %s)\n", err, strings.TrimSpace(string(out)))
 	} else {
 		fmt.Println("Herdr config reloaded.")
 	}
 	return nil
+}
+
+// reloadHerdrConfig runs `<bin> server reload-config` with the child
+// environment every product child gets (platform.ChildEnv).
+func reloadHerdrConfig(bin string) ([]byte, error) {
+	cmd, err := platform.Command(bin, []string{"server", "reload-config"})
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = platform.ChildEnv(os.Environ())
+	return cmd.CombinedOutput()
 }

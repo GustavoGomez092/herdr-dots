@@ -30,6 +30,10 @@ func TryLock(path string) (*Lock, error) {
 	return &Lock{f: f}, nil
 }
 
+// Stat describes the locked file itself (through the open handle), so a
+// caller can check that its path still names that file (os.SameFile).
+func (l *Lock) Stat() (os.FileInfo, error) { return l.f.Stat() }
+
 func (l *Lock) Release() error {
 	_ = unlockFile(l.f)
 	return l.f.Close()

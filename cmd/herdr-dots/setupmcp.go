@@ -47,6 +47,7 @@ func runSetupMCP(args []string) error {
 			if err != nil {
 				return "", err
 			}
+			cmd.Env = platform.ChildEnv(os.Environ())
 			out, err := cmd.CombinedOutput()
 			return string(out), err
 		},

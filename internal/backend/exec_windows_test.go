@@ -42,6 +42,50 @@ func TestExecRunnerKillsTheJobOnTimeout(t *testing.T) {
 	}
 }
 
+// Review Focus (Critical): npm's claude.cmd/codex.cmd run "node" when no
+// node.exe sits beside the shim, and cmd.exe would look in the current
+// directory (the pane's project) before PATH. A node.cmd planted in the
+// project must never run; the real node on PATH must.
+func TestExecRunnerNeverRunsARepoLocalNodeThroughAShim(t *testing.T) {
+	for _, env := range []struct {
+		name string
+		env  func(bin string) []string
+	}{
+		{"explicit env", func(bin string) []string {
+			return []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+		}},
+		{"nil env", func(string) []string { return nil }},
+	} {
+		t.Run(env.name, func(t *testing.T) {
+			bin, repo := t.TempDir(), t.TempDir()
+			planted := filepath.Join(repo, "planted-ran.txt")
+			// The npm shim pattern: no node.exe beside it, so it runs "node".
+			if err := os.WriteFile(filepath.Join(bin, "fakenpmcli.cmd"),
+				[]byte("@echo off\r\nSET \"_prog=node\"\r\n\"%_prog%\" %*\r\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// The real node, on PATH.
+			if err := os.WriteFile(filepath.Join(bin, "node.cmd"), []byte("@echo off\r\necho real-node %*\r\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"node.cmd", "node.bat"} {
+				if err := os.WriteFile(filepath.Join(repo, name),
+					[]byte("@echo off\r\necho planted > \""+planted+"\"\r\necho planted-node\r\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			out, stderr, err := ExecRunner{}.Run(context.Background(), Cmd{Name: "fakenpmcli", Args: []string{"hi"}, Dir: repo, Env: env.env(bin)})
+			if _, serr := os.Stat(planted); serr == nil {
+				t.Fatalf("the repo-local node ran (out %q)", out)
+			}
+			if err != nil || !strings.Contains(string(out), "real-node hi") {
+				t.Fatalf("out %q stderr %q err %v", out, stderr, err)
+			}
+		})
+	}
+}
+
 func TestExecRunnerRefusesUnsafeShimArgsBeforeStarting(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "fakecli.cmd"), []byte("@echo off\r\necho ran\r\n"), 0o700)

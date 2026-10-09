@@ -128,12 +128,40 @@ func (s *Store) timeout() time.Duration {
 	return 2 * time.Second
 }
 
+// lockRetries bounds how often withLock takes the lock again after finding
+// that its lock file was unlinked (by Purge) while it waited.
+const lockRetries = 5
+
 // withLock runs fn holding dir/memory.lock, waiting at most the lock timeout
 // in total; then it returns ErrLocked.
+//
+// Purge unlinks the lock file while it holds the lock. A writer that was
+// waiting on that file then holds a lock on a file no path names, which no
+// one else would respect, so after taking the lock withLock checks that
+// dir/memory.lock still is the locked file (os.SameFile); if not, it lets go
+// and locks the current file (recreating dir: the write then starts a fresh
+// project that Purge leaves alone), at most lockRetries times.
 func (s *Store) withLock(dir string, fn func() error) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	return s.lockDir(dir, true, fn)
+}
+
+// withReadLock is withLock for reads. A read never creates anything: with no
+// lock file (a directory that doesn't exist yet, or one Purge is removing)
+// it reads without the lock. Files are replaced atomically, so it sees each
+// file whole, and there is nothing to read in a purged project.
+func (s *Store) withReadLock(dir string, fn func() error) error {
+	if _, err := os.Stat(filepath.Join(dir, "memory.lock")); errors.Is(err, fs.ErrNotExist) {
+		return fn()
+	}
+	return s.lockDir(dir, false, fn)
+}
+
+// lockDir is withLock's body; create says whether a missing directory or
+// lock file is made (writes) or means "read without the lock" (reads).
+func (s *Store) lockDir(dir string, create bool, fn func() error) error {
 	path := filepath.Join(dir, "memory.lock")
 	deadline := time.Now().Add(s.timeout())
 	timer := time.NewTimer(s.timeout())
@@ -145,25 +173,62 @@ func (s *Store) withLock(dir string, fn func() error) error {
 		return fmt.Errorf("%w: %s", ErrLocked, path)
 	}
 	defer func() { <-sem }()
-	l, err := lockfile.Acquire(path, max(0, time.Until(deadline)))
-	if errors.Is(err, lockfile.ErrLocked) {
-		return fmt.Errorf("%w: %s", ErrLocked, path)
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if !create {
+				if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+					return fn() // purged while we waited
+				}
+			} else if err := os.MkdirAll(dir, 0o700); err != nil {
+				return err
+			}
+		}
+		l, err := lockfile.Acquire(path, max(0, time.Until(deadline)))
+		if errors.Is(err, lockfile.ErrLocked) {
+			return fmt.Errorf("%w: %s", ErrLocked, path)
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			if !create {
+				return fn() // purged while we waited
+			}
+			if attempt < lockRetries {
+				continue // Purge removed dir between the MkdirAll and the open
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if lockAcquiredHook != nil {
+			lockAcquiredHook(path)
+		}
+		if lockIsCurrent(l, path) {
+			defer l.Release()
+			return fn()
+		}
+		_ = l.Release()
+		if attempt >= lockRetries {
+			return fmt.Errorf("%w: %s (the lock file keeps being removed)", ErrLocked, path)
+		}
 	}
-	if err != nil {
-		return err
-	}
-	defer l.Release()
-	return fn()
 }
 
-// withReadLock is withLock for reads; a directory that doesn't exist yet is
-// read without creating it.
-func (s *Store) withReadLock(dir string, fn func() error) error {
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
-		return fn()
+// lockIsCurrent reports whether path still names the file l locked.
+func lockIsCurrent(l *lockfile.Lock, path string) bool {
+	held, err := l.Stat()
+	if err != nil {
+		return false
 	}
-	return s.withLock(dir, fn)
+	now, err := os.Stat(path)
+	return err == nil && os.SameFile(held, now)
 }
+
+// Test hooks, nil in production: lockAcquiredHook runs in withLock right
+// after the file lock is taken; purgeGapHook runs in Purge after the locked
+// removal, before the project directory itself goes.
+var (
+	lockAcquiredHook func(lockPath string)
+	purgeGapHook     func()
+)
 
 // ---- scope files
 
@@ -988,10 +1053,13 @@ func (s *Store) FindProject(arg string) (ProjectMeta, bool, error) {
 	return ProjectMeta{}, false, errors.Join(errs...)
 }
 
-// Purge deletes a project's whole memory directory. Everything but the lock
-// file goes while the lock is held; the lock file and the directory go after
-// it is released, because Windows can't delete a file another handle (the
-// lock) has open.
+// Purge deletes a project's whole memory directory. Everything in it,
+// the lock file last, goes while the lock is held (lock files are opened
+// with FILE_SHARE_DELETE on Windows, so the held one can be unlinked). A
+// writer waiting on the old lock file notices it is gone (withLock) and
+// starts a fresh project instead of writing into one being deleted. After the
+// lock is released only an empty directory is removed: one a writer has
+// started again keeps its acknowledged write.
 func (s *Store) Purge(p string) error {
 	if !ValidProjectID(p) {
 		return fmt.Errorf("%w: project id %q", ErrInvalid, p)
@@ -1000,13 +1068,52 @@ func (s *Store) Purge(p string) error {
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%w: project %s has no memory", ErrNotFound, p)
 	}
-	if err := s.withLock(dir, func() error { return removeAllBut(dir, "memory.lock") }); err != nil {
+	lock := filepath.Join(dir, "memory.lock")
+	if err := s.withLock(dir, func() error {
+		if err := removeAllBut(dir, "memory.lock"); err != nil {
+			return err
+		}
+		if err := os.Remove(lock); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+	if purgeGapHook != nil {
+		purgeGapHook()
+	}
+	if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		ents, rerr := os.ReadDir(dir)
+		if rerr != nil || len(ents) == 0 {
+			return err
+		}
+		if len(ents) == 1 && ents[0].Name() == "memory.lock" {
+			removeBareLock(dir, lock) // a reader's lock file, nothing else
+		}
+		return nil // otherwise a writer started the project again: keep it
 	}
 	return nil
+}
+
+// removeBareLock removes dir when it holds only an idle lock file, which a
+// read racing Purge can leave behind. A held or replaced lock is left alone.
+func removeBareLock(dir, lock string) {
+	l, err := lockfile.TryLock(lock)
+	if err != nil {
+		return
+	}
+	ok := lockIsCurrent(l, lock)
+	if ents, err := os.ReadDir(dir); err != nil || len(ents) != 1 {
+		ok = false
+	}
+	if ok {
+		ok = os.Remove(lock) == nil // unlinked while held, as Purge does
+	}
+	_ = l.Release()
+	if ok {
+		_ = os.Remove(dir) // fails harmlessly if a writer got in first
+	}
 }
 
 // removeAllBut removes every entry of dir except keep.

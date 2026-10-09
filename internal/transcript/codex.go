@@ -94,13 +94,19 @@ func (r CodexReader) Turns(context.Context) ([]Turn, error) {
 	return ParseCodex(f)
 }
 
-// codexSessionsDir is $CODEX_HOME/sessions when CODEX_HOME is set (as Codex,
-// mcpinstall and the codex backend resolve it), else <home>/.codex/sessions.
-func codexSessionsDir(home string) string {
+// codexSessionsDirs are the directories to search for a session, in order:
+// $CODEX_HOME/sessions when CODEX_HOME is set (as Codex, mcpinstall and the
+// codex backend resolve it), then <home>/.codex/sessions. The default comes
+// second because this process's CODEX_HOME need not be the one the pane's
+// Codex ran with.
+func codexSessionsDirs(home string) []string {
+	def := platform.CodexSessionsDir(home)
 	if d := os.Getenv("CODEX_HOME"); d != "" {
-		return filepath.Join(d, "sessions")
+		if own := filepath.Join(d, "sessions"); own != def {
+			return []string{own, def}
+		}
 	}
-	return platform.CodexSessionsDir(home)
+	return []string{def}
 }
 
 func ResolveCodexPath(home, kind, value string) (string, error) {
@@ -114,11 +120,13 @@ func ResolveCodexPath(home, kind, value string) (string, error) {
 		if value == "" || strings.ContainsAny(value, `/\*?[]`) || strings.Contains(value, "..") {
 			return "", fmt.Errorf("invalid codex session id %q", value)
 		}
-		matches, _ := filepath.Glob(filepath.Join(codexSessionsDir(home), "*", "*", "*", "rollout-*-"+value+".jsonl"))
-		if len(matches) == 0 {
-			return "", fmt.Errorf("no transcript for codex session %s", value)
+		for _, dir := range codexSessionsDirs(home) {
+			matches, _ := filepath.Glob(filepath.Join(dir, "*", "*", "*", "rollout-*-"+value+".jsonl"))
+			if len(matches) > 0 {
+				return matches[len(matches)-1], nil
+			}
 		}
-		return matches[len(matches)-1], nil
+		return "", fmt.Errorf("no transcript for codex session %s", value)
 	}
 	return "", fmt.Errorf("unknown session kind %q", kind)
 }

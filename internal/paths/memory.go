@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/platform"
 )
 
 // PluginID is the id Herdr knows the plugin by.
@@ -40,7 +40,12 @@ func (p Paths) writeStatePointer() error {
 type CommandRunner func(ctx context.Context, name string, args ...string) (string, error)
 
 func execRunner(ctx context.Context, name string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, args...).Output()
+	cmd, err := platform.CommandContext(ctx, name, args)
+	if err != nil {
+		return "", err
+	}
+	cmd.Env = platform.ChildEnv(os.Environ())
+	out, err := cmd.Output()
 	return string(out), err
 }
 

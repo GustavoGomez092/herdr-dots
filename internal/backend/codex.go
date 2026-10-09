@@ -64,7 +64,9 @@ func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
 	if err := checkArgs(c.Kind(), r.Args); err != nil {
 		return Result{}, err
 	}
-	out, stderr, err := c.Runner.Run(ctx, c.BuildCmd(r))
+	cmd := c.BuildCmd(r)
+	defer cmd.Close()
+	out, stderr, err := c.Runner.Run(ctx, cmd)
 	if Preflight(err) {
 		return Result{}, fmt.Errorf("codex: %w", err)
 	}

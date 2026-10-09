@@ -29,6 +29,6 @@ func EditorCommand(editor, file string) *exec.Cmd {
 	cmd := exec.Command(shell)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: quoted + ` /d /s /c "` + editor + ` "` + file + `""`}
 	cmd.Dir = filepath.Dir(file)
-	cmd.Env = append(os.Environ(), "NoDefaultCurrentDirectoryInExePath=1")
+	cmd.Env = ChildEnv(os.Environ())
 	return cmd
 }

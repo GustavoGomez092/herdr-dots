@@ -3,7 +3,6 @@
 package platform
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"unsafe"
@@ -167,18 +166,93 @@ func FixPrivateHint(path string) string {
 	return fmt.Sprintf(`delete the file and set it again, or run: icacls "%s" /inheritance:r /remove:g *S-1-1-0 *S-1-5-11 *S-1-5-32-545`, path)
 }
 
-// OpenNoFollow opens path read-only and fails if it is a symlink or another
-// reparse point (a junction or mount point).
+// OpenNoFollow opens path read-only (a file or a directory) without
+// following a reparse point: CreateFile with FILE_FLAG_OPEN_REPARSE_POINT
+// opens the link itself, and the handle is refused with ErrReparsePoint when
+// it is a symlink, junction, mount point or other reparse point (a
+// deduplicated file excepted). The check reads the handle that is returned,
+// so nothing can be swapped in between. A reparse point higher up the path is
+// VerifyOpenedPath's job.
 func OpenNoFollow(path string) (*os.File, error) {
-	st, err := os.Lstat(path)
+	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
-	if st.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
-		return nil, &os.PathError{Op: "open", Path: path, Err: errors.New("is a symlink or reparse point")}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
-	return os.Open(path)
+	var info struct{ FileAttributes, ReparseTag uint32 } // FILE_ATTRIBUTE_TAG_INFO
+	if err := windows.GetFileInformationByHandleEx(h, windows.FileAttributeTagInfo,
+		(*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		windows.CloseHandle(h)
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	if reparseRefused(info.FileAttributes, info.ReparseTag) {
+		windows.CloseHandle(h)
+		return nil, &os.PathError{Op: "open", Path: path, Err: ErrReparsePoint}
+	}
+	return os.NewFile(uintptr(h), path), nil
 }
+
+// finalPath is the path Windows resolved for handle h (every symlink,
+// junction and mount point followed, short names expanded), \\?\-prefixed.
+func finalPath(h windows.Handle) (string, error) {
+	const flags = 0x0 // VOLUME_NAME_DOS | FILE_NAME_NORMALIZED
+	buf := make([]uint16, windows.MAX_PATH)
+	for {
+		n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), flags)
+		if err != nil {
+			return "", err
+		}
+		if int(n) < len(buf) {
+			return windows.UTF16ToString(buf[:n]), nil
+		}
+		buf = make([]uint16, n+1) // n is the size needed
+	}
+}
+
+// dirFinalPath is dir's final path. dir itself may be reached through a
+// junction (a relocated profile or project); that one is followed.
+func dirFinalPath(dir string) (string, error) {
+	p, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return "", err
+	}
+	h, err := windows.CreateFile(p, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	return finalPath(h)
+}
+
+// VerifyOpenedPath checks that f, opened as dir + rel, really is that file:
+// the handle's final path must equal dir's final path joined with rel
+// (compared without case). A junction or mount point anywhere in rel, which
+// filepath.EvalSymlinks does not follow (Go 1.23+), makes them differ, and
+// the file is refused with ErrReparsePoint.
+func VerifyOpenedPath(f *os.File, dir, rel string) error {
+	got, err := finalPath(windows.Handle(f.Fd()))
+	if err != nil {
+		return fmt.Errorf("read the opened file's path: %w", err)
+	}
+	want, err := dirFinalPath(dir)
+	if err != nil {
+		return fmt.Errorf("read the directory's path: %w", err)
+	}
+	if !finalPathIs(got, want, rel) {
+		return ErrReparsePoint
+	}
+	return nil
+}
+
+// IsVolumeRoot reports whether p is a drive or share root: C:\, C:, \\?\C:\
+// or \\server\share.
+func IsVolumeRoot(p string) bool { return volumeRoot(p) }
 
 // ReservedPathName reports whether a project-relative path (slash or
 // backslash separated) names an NTFS alternate data stream ("a.txt:secret",

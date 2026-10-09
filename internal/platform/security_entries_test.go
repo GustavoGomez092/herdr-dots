@@ -1,6 +1,10 @@
 package platform
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestWindowsReservedDeviceNamesIncludeZeroAndSuperscripts(t *testing.T) {
 	for rel, want := range map[string]bool{
@@ -22,6 +26,16 @@ func TestWindowsReservedDeviceNamesIncludeZeroAndSuperscripts(t *testing.T) {
 
 // Engine pipes are always created with O:<user SID>, so a pipe owner other
 // than the current user (Administrators included) is never legitimate.
+// A pipe with no owner reads "owned by none", never "owned by " or a panic.
+func TestPipeOwnerError(t *testing.T) {
+	if err := pipeOwnerError(""); !errors.Is(err, ErrNotOwner) || !strings.HasSuffix(err.Error(), "the pipe is owned by none") {
+		t.Fatalf("no owner: %v", err)
+	}
+	if err := pipeOwnerError("S-1-5-18"); !errors.Is(err, ErrNotOwner) || !strings.HasSuffix(err.Error(), "the pipe is owned by S-1-5-18") {
+		t.Fatalf("SYSTEM: %v", err)
+	}
+}
+
 func TestPipeOwnerAccepted(t *testing.T) {
 	for name, c := range map[string]struct {
 		owner string

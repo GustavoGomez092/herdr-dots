@@ -91,6 +91,9 @@ type resolver struct {
 	home     string
 	homeInfo os.FileInfo
 	under    map[string]homeHit
+	// lstat is os.Lstat; tests make a path look like a junction.
+	lstat     func(string) (os.FileInfo, error)
+	irregular map[string]bool
 }
 
 type homeHit struct {
@@ -99,7 +102,7 @@ type homeHit struct {
 }
 
 func newResolver() *resolver {
-	r := &resolver{dirs: map[string]map[string]struct{}{}, under: map[string]homeHit{}}
+	r := &resolver{dirs: map[string]map[string]struct{}{}, under: map[string]homeHit{}, lstat: os.Lstat, irregular: map[string]bool{}}
 	if h := homeDir(); h != "" {
 		if real, err := filepath.EvalSymlinks(h); err == nil {
 			h = real
@@ -140,6 +143,29 @@ func (r *resolver) exact(rr, rel string) bool {
 		cur = filepath.Join(cur, comp)
 	}
 	return true
+}
+
+// hasIrregular reports whether any element of rel under rr is irregular:
+// on Windows a junction, mount point or other reparse point that is not a
+// symlink (os.Lstat reports ModeIrregular). Unix never reports it.
+func (r *resolver) hasIrregular(rr, rel string) bool {
+	cur := rr
+	for _, comp := range strings.Split(rel, "/") {
+		if comp == "" || comp == "." {
+			continue
+		}
+		cur = filepath.Join(cur, comp)
+		bad, ok := r.irregular[cur]
+		if !ok {
+			fi, err := r.lstat(cur)
+			bad = err != nil || fi.Mode()&os.ModeIrregular != 0
+			r.irregular[cur] = bad
+		}
+		if bad {
+			return true
+		}
+	}
+	return false
 }
 
 // homeRel returns dir's path relative to the user's home directory when dir is
@@ -201,7 +227,7 @@ func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err 
 	if err != nil {
 		// A symlink leaving the root must read the same whether or not its
 		// target exists: no existence oracle outside the project.
-		if werr := walkInside(rr, lexRel); werr != nil {
+		if werr := walkInside(rr, lexRel, r.lstat); werr != nil {
 			return "", "", werr
 		}
 		if errors.Is(err, os.ErrNotExist) {
@@ -217,6 +243,11 @@ func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err 
 	// The requested spelling and the resolved one must both be exact.
 	if !r.exact(rr, lexRel) || !r.exact(rr, rel) {
 		return "", "", fmt.Errorf("no such file: %s", lexRel)
+	}
+	// Windows: EvalSymlinks does not follow a junction or mount point (Go
+	// 1.23+), so a path through one still looks inside the root here.
+	if r.hasIrregular(rr, lexRel) || r.hasIrregular(rr, rel) {
+		return "", "", ErrOutsideRoot
 	}
 	if Denied(rel, deny) {
 		return "", "", ErrDenied
@@ -235,7 +266,7 @@ func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err 
 // touching anything outside it. It returns ErrOutsideRoot when a symlink on the
 // way points out of the root, and nil when every step stays inside (the caller
 // then reports its own error).
-func walkInside(rr, rel string) error {
+func walkInside(rr, rel string, lstat func(string) (os.FileInfo, error)) error {
 	queue := strings.Split(rel, "/")
 	cur := rr
 	for links := 0; len(queue) > 0; {
@@ -248,9 +279,12 @@ func walkInside(rr, rel string) error {
 		if _, ok := within(rr, next); !ok {
 			return ErrOutsideRoot
 		}
-		fi, err := os.Lstat(next)
+		fi, err := lstat(next)
 		if err != nil {
 			return nil
+		}
+		if fi.Mode()&os.ModeIrregular != 0 {
+			return ErrOutsideRoot // a junction or mount point: its target is unknown
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			cur = next
@@ -284,12 +318,19 @@ func walkInside(rr, rel string) error {
 // the last component (O_NOFOLLOW on Unix; on Windows an Lstat that refuses
 // symlinks and reparse points), and after the open the path must still be its
 // own fully resolved form (so no parent was swapped for a symlink) and name
-// the very file opened. On Unix O_NONBLOCK keeps a FIFO swapped in from
-// hanging the run; callers must still require a regular file or directory.
-func openVerified(abs string) (*os.File, error) {
+// the very file opened. On Windows the handle's final path must also be the
+// root's final path joined with rel, which catches a junction or mount point
+// on the way (platform.VerifyOpenedPath). On Unix O_NONBLOCK keeps a FIFO
+// swapped in from hanging the run; callers must still require a regular file
+// or directory.
+func openVerified(root, abs, rel string) (*os.File, error) {
 	f, err := platform.OpenNoFollow(abs)
 	if err != nil {
 		return nil, err
+	}
+	if err := platform.VerifyOpenedPath(f, root, rel); err != nil {
+		f.Close()
+		return nil, ErrOutsideRoot
 	}
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil || real != abs {

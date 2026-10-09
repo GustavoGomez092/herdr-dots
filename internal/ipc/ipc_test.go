@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -103,9 +102,13 @@ func TestWatchStreamsInitialAndUpdates(t *testing.T) {
 }
 
 func TestCallFailsFastWithoutServer(t *testing.T) {
-	c := Client{Path: filepath.Join(t.TempDir(), "none.sock")}
+	c := Client{Path: testEndpoint(t)} // a real, unserved endpoint on this OS (a pipe name on Windows)
+	start := time.Now()
 	if err := c.Call(context.Background(), CmdPing, nil); err == nil {
 		t.Fatal("want dial error")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("took %v; a missing server must fail fast", d)
 	}
 }
 
