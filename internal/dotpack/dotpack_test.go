@@ -84,7 +84,7 @@ func TestPrepareClampsAndListsEachCapability(t *testing.T) {
 	d.Delivery.Mode = dots.ModeInject
 	d.Capabilities.Write = true
 	d.Backend.Args = []string{"--dangerously-skip-permissions"}
-	data, err := Export(d, nil, ExportOptions{Now: dpNow})
+	data, err := exportRaw(d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestParseAndPrepareSetOriginImport(t *testing.T) {
 func TestPrepareRunsFullValidate(t *testing.T) {
 	d := dpDot()
 	d.Name = "Sec\x1b[31murity"
-	data, err := Export(d, nil, ExportOptions{Now: dpNow})
+	data, err := exportRaw(d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestPrepareRunsFullValidate(t *testing.T) {
 	}
 	d = dpDot()
 	d.Schedule.Cron = "every day please"
-	data, _ = Export(d, nil, ExportOptions{Now: dpNow})
+	data, _ = exportRaw(d)
 	p, _ = Parse(data)
 	if _, _, err := Prepare(p, []string{dots.CapSchedule}); err == nil {
 		t.Fatal("a kept bad cron was accepted")

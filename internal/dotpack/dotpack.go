@@ -38,7 +38,27 @@ const (
 	maxMemoryRunes     = 500
 	maxMemoryPaths     = 10
 	maxMemoryPathRunes = 256
+	maxNoteRunes       = 2000
+	maxVersionRunes    = 64
+	maxMemoryErrors    = 5 // memory problems Parse lists; the rest are counted
 )
+
+// metaProblem is why the note or version can't travel, or nil.
+func metaProblem(name, text string, max int) error {
+	if utf8.RuneCountInString(text) > max {
+		return fmt.Errorf("%s is over %d characters", name, max)
+	}
+	if err := dots.UnsafeText(text, false); err != nil {
+		return fmt.Errorf("%s %w", name, err)
+	}
+	return nil
+}
+
+// formatErr is a decode or scan error from an untrusted file, escaped like
+// cleanKey (the library echoes input) and capped.
+func formatErr(err error) error {
+	return fmt.Errorf("%w: %s", ErrFormat, cleanText(err.Error(), 300))
+}
 
 var (
 	ErrFormat         = errors.New("not a dot pack this herdr-dots can read")
@@ -135,10 +155,18 @@ func Export(d dots.Dot, mem []memory.Entry, o ExportOptions) ([]byte, error) {
 	}
 	// Mirror ClampDot: only "attached" travels.
 	d.Schedule.Projects = slices.DeleteFunc(slices.Clone(d.Schedule.Projects), func(p string) bool { return p != dots.ScheduleAttached })
-	meta := []struct{ name, text string }{{"note", o.Note}, {"version", o.Version}}
+	vd := d
+	vd.Slug = slug
+	if err := vd.Validate(); err != nil {
+		return nil, fmt.Errorf("the dot is not valid: %w", err)
+	}
+	meta := []struct {
+		name, text string
+		max        int
+	}{{"note", o.Note, maxNoteRunes}, {"version", o.Version, maxVersionRunes}}
 	for _, f := range meta {
-		if err := dots.UnsafeText(f.text, false); err != nil {
-			return nil, fmt.Errorf("%s %w", f.name, err)
+		if err := metaProblem(f.name, f.text, f.max); err != nil {
+			return nil, err
 		}
 	}
 	items, err := travelling(slug, mem)
@@ -467,11 +495,14 @@ func stringEnd(s string, i int) int {
 // cleanKey shows a key from an untrusted file in an error: every rune that
 // doesn't print as itself (controls, bidi and other format characters) as
 // \u escapes, clipped to 80 runes.
-func cleanKey(k string) string {
+func cleanKey(k string) string { return cleanText(k, 80) }
+
+// cleanText escapes what doesn't print as itself and clips to max runes.
+func cleanText(k string, max int) string {
 	var b strings.Builder
 	n := 0
 	for _, r := range k {
-		if n == 80 {
+		if n == max {
 			b.WriteString("…")
 			break
 		}
@@ -497,7 +528,7 @@ func Parse(data []byte) (Pack, error) {
 	}
 	text := string(data)
 	if err := preScan(text); err != nil {
-		return Pack{}, fmt.Errorf("%w: %v", ErrFormat, err)
+		return Pack{}, formatErr(err)
 	}
 	var probe struct {
 		Pack struct {
@@ -505,7 +536,7 @@ func Parse(data []byte) (Pack, error) {
 		} `toml:"pack"`
 	}
 	if _, err := toml.Decode(text, &probe); err != nil {
-		return Pack{}, fmt.Errorf("%w: %v", ErrFormat, err)
+		return Pack{}, formatErr(err)
 	}
 	if probe.Pack.Format != Format {
 		return Pack{}, fmt.Errorf("%w: format %d (this version reads format %d)", ErrFormat, probe.Pack.Format, Format)
@@ -513,7 +544,7 @@ func Parse(data []byte) (Pack, error) {
 	doc := fileDoc{Dot: dots.New("")}
 	md, err := toml.Decode(text, &doc)
 	if err != nil {
-		return Pack{}, fmt.Errorf("%w: %v", ErrFormat, err)
+		return Pack{}, formatErr(err)
 	}
 	if un := md.Undecoded(); len(un) > 0 {
 		var keys []string
@@ -527,17 +558,21 @@ func Parse(data []byte) (Pack, error) {
 		return Pack{}, fmt.Errorf("%w: unknown keys %s%s (exported by a newer herdr-dots?)", ErrFormat, strings.Join(keys, ", "), more)
 	}
 	var errs []error
-	for _, f := range []struct{ name, text string }{{"note", doc.Pack.Note}, {"herdr_dots_version", doc.Pack.Version}} {
-		if err := dots.UnsafeText(f.text, false); err != nil {
-			errs = append(errs, fmt.Errorf("pack %s %w", f.name, err))
+	for _, f := range []struct {
+		name, text string
+		max        int
+	}{{"note", doc.Pack.Note, maxNoteRunes}, {"herdr_dots_version", doc.Pack.Version, maxVersionRunes}} {
+		if err := metaProblem(f.name, f.text, f.max); err != nil {
+			errs = append(errs, fmt.Errorf("pack %w", err))
 		}
 	}
 	p := Pack{Meta: doc.Pack, Dot: doc.Dot}
 	p.Dot.Slug, p.Dot.Origin, p.Dot.SourcePath = dots.Slugify(p.Dot.Name), dots.OriginImport, ""
 	perScope := map[memory.Scope]int{}
+	badMemory := 0
 	for i, it := range doc.Memory {
 		e := memory.Entry{Scope: memory.Scope(strings.TrimSpace(it.Scope)), Kind: memory.Kind(strings.TrimSpace(it.Kind)),
-			Text: strings.TrimSpace(it.Text), Paths: it.Paths}
+			Text: strings.TrimSpace(strings.ReplaceAll(it.Text, "\r\n", "\n")), Paths: it.Paths}
 		perScope[e.Scope]++
 		why := ""
 		switch {
@@ -549,10 +584,15 @@ func Parse(data []byte) (Pack, error) {
 			why = memoryProblem(e.Text, e.Paths)
 		}
 		if why != "" {
-			errs = append(errs, fmt.Errorf("memory %d: %s", i+1, why))
+			if badMemory++; badMemory <= maxMemoryErrors {
+				errs = append(errs, fmt.Errorf("memory %d: %s", i+1, why))
+			}
 			continue
 		}
 		p.Memory = append(p.Memory, e)
+	}
+	if badMemory > maxMemoryErrors {
+		errs = append(errs, fmt.Errorf("and %d more memory problems", badMemory-maxMemoryErrors))
 	}
 	if err := scopeCounts(perScope); err != nil {
 		errs = append(errs, fmt.Errorf("memory: %w", err))
