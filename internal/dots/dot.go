@@ -256,19 +256,45 @@ func textErrors(d Dot) []error {
 // selectors, which build an emoji glyph and are allowed there only.
 func emojiJoiner(r rune) bool { return r == 0x200D || r == 0xFE0E || r == 0xFE0F }
 
-// hiddenText reports a character that doesn't show as itself: every format
-// character (Unicode Cf: the bidi controls U+202A-202E, U+2066-2069, U+200E,
-// U+200F and U+061C, zero-width spaces and joiners, the BOM, tag characters
-// U+E0000-E007F, soft hyphens, ...), the line and paragraph separators
-// U+2028/2029, and variation selectors. In a glyph, a ZWJ and the emoji
-// variation selectors are allowed.
+// hiddenText reports a character that doesn't show as itself, or that can
+// carry a hidden byte payload ("emoji smuggling"): every format character
+// (Unicode Cf: bidi controls, zero-width spaces and joiners, the BOM, tag
+// characters, soft hyphens, ...), the line and paragraph separators
+// U+2028/2029, the braille blank U+2800, and the Default_Ignorable_Code_Point
+// set (variation selectors, the combining grapheme joiner, Hangul and
+// halfwidth fillers, Mongolian free variation selectors, ...). In a glyph,
+// only a ZWJ and the emoji variation selectors U+FE0E/FE0F are allowed.
 func hiddenText(s string, glyph bool) bool {
 	return strings.ContainsFunc(s, func(r rune) bool {
 		if emojiJoiner(r) {
 			return !glyph
 		}
-		return unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029
+		return unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029 || r == 0x2800 || unicode.Is(defaultIgnorable, r)
 	})
+}
+
+// defaultIgnorable is Unicode's Default_Ignorable_Code_Point set.
+var defaultIgnorable = &unicode.RangeTable{
+	R16: []unicode.Range16{
+		{Lo: 0x00AD, Hi: 0x00AD, Stride: 1},
+		{Lo: 0x034F, Hi: 0x034F, Stride: 1},
+		{Lo: 0x115F, Hi: 0x1160, Stride: 1},
+		{Lo: 0x17B4, Hi: 0x17B5, Stride: 1},
+		{Lo: 0x180B, Hi: 0x180F, Stride: 1},
+		{Lo: 0x200B, Hi: 0x200F, Stride: 1},
+		{Lo: 0x202A, Hi: 0x202E, Stride: 1},
+		{Lo: 0x2060, Hi: 0x206F, Stride: 1},
+		{Lo: 0x3164, Hi: 0x3164, Stride: 1},
+		{Lo: 0xFE00, Hi: 0xFE0F, Stride: 1},
+		{Lo: 0xFEFF, Hi: 0xFEFF, Stride: 1},
+		{Lo: 0xFFA0, Hi: 0xFFA0, Stride: 1},
+		{Lo: 0xFFF0, Hi: 0xFFF8, Stride: 1},
+	},
+	R32: []unicode.Range32{
+		{Lo: 0x1BCA0, Hi: 0x1BCA3, Stride: 1},
+		{Lo: 0x1D173, Hi: 0x1D17A, Stride: 1},
+		{Lo: 0xE0000, Hi: 0xE0FFF, Stride: 1},
+	},
 }
 
 // ErrUnsafeText is UnsafeText's error.
