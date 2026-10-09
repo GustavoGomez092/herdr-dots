@@ -90,6 +90,7 @@ type Engine struct {
 	readers   map[string]transcript.Reader
 	subs      map[string]context.CancelFunc
 	running   map[key]bool
+	paid      map[key]bool // running reviews whose charge has landed: Usage counts them, so inFlightLocked must not
 	rerun     map[key]bool
 	status    map[key]string
 	warned    map[key]bool
@@ -212,6 +213,7 @@ func New(d Deps) *Engine {
 		readers:  map[string]transcript.Reader{},
 		subs:     map[string]context.CancelFunc{},
 		running:  map[key]bool{},
+		paid:     map[key]bool{},
 		rerun:    map[key]bool{},
 		status:   map[key]string{},
 		warned:   map[key]bool{},
@@ -395,6 +397,12 @@ func (e *Engine) Detach(paneID, slug string) error {
 		return err
 	}
 	e.hook("detach-updated")
+	if empty {
+		// As dropPane's first steps, before e.mu: a council of the pane
+		// gets no card. (An Attach that lands before the section below
+		// re-decides "empty" still loses its council: the pane was empty.)
+		e.abandonCouncil(paneID)
+	}
 	e.mu.Lock()
 	delete(e.status, key{paneID, slug})
 	delete(e.warned, key{paneID, slug})
@@ -433,6 +441,10 @@ func (e *Engine) Detach(paneID, slug string) error {
 			e.d.Logf("pane %s: last dot detached: %d card(s) orphaned", paneID, orphaned)
 		}
 		e.unwatch(paneID)
+		// After the attachment is gone, as in dropPane: in-flight MCP asks
+		// end with ErrPaneClosed, charge nothing, and nothing re-marks the pane.
+		e.cancelAsks(paneID)
+		e.forgetAsks(paneID)
 	}
 	e.broadcast()
 	return nil
@@ -655,6 +667,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 					DotBudgetUSD: d.Budget.MaxUSDPerSession, PaneBudgetUSD: e.config().SessionBudgetUSD,
 				}) {
 					e.running[k] = true
+					delete(e.paid, k)
 					paneCalls++
 					jobs = append(jobs, job{dot: d, turns: tail(memTurns, min(20, 2*d.Context.Turns)), memoryPass: true, seenTo: len(turns)})
 				}
@@ -664,6 +677,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 				continue
 			}
 			e.running[k] = true
+			delete(e.paid, k)
 			paneCalls++
 			jobs = append(jobs, job{dot: d, turns: tail(turns, d.Context.Turns), forceQueue: anyFromDot(newTurns)})
 		}
@@ -787,7 +801,8 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	ctx, cancel := context.WithTimeout(base, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
-	e.charge(paneID, d.Slug, deltaOf(res))
+	e.chargeRun(k, paneID, d.Slug, deltaOf(res), !o.summon)
+	e.hook("run-charged")
 	if err != nil {
 		err = redactErr(err) // defense in depth: adapters redact already
 		sinkErr = err
@@ -904,6 +919,7 @@ func (e *Engine) runFailed(k key, d dots.Dot, turn int, err error) {
 func (e *Engine) finishRun(k key) {
 	e.mu.Lock()
 	delete(e.running, k)
+	delete(e.paid, k)
 	again := e.rerun[k]
 	delete(e.rerun, k)
 	e.mu.Unlock()
@@ -980,6 +996,27 @@ func (e *Engine) restoreStatus(k key, prev string) {
 func (e *Engine) charge(paneID, slug string, d state.Delta) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.chargeLocked(paneID, slug, d)
+}
+
+// chargeRun is charge for a turn review or memory pass (k = pane + dot). When
+// the run is tracked in e.running (review is true: not a manual summon), the
+// same e.mu section marks it paid, so inFlightLocked stops counting it: its
+// usage is in Usage now, and counting both would refuse a concurrent ask or
+// background run at the budget edge for a run that already finished and paid.
+// e.running stays set until finishRun, which keeps the one-run-per-dot and
+// rerun rules.
+func (e *Engine) chargeRun(k key, paneID, slug string, d state.Delta, review bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.chargeLocked(paneID, slug, d)
+	if review && e.running[k] {
+		e.paid[k] = true
+	}
+}
+
+// chargeLocked is charge's body. Caller holds e.mu.
+func (e *Engine) chargeLocked(paneID, slug string, d state.Delta) {
 	if _, ok := e.d.Attachments.Get(paneID); !ok {
 		return
 	}
