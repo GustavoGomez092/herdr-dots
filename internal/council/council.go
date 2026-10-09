@@ -84,6 +84,7 @@ type Candidate struct {
 	Paused    bool // paused on this pane, or every dot is paused
 	Unknown   bool // its dot file is gone
 	CallsLeft int  // max_calls_per_session minus calls already made on this pane
+	OverUSD   bool // its max_usd_per_session is spent on this pane (Phase 4)
 }
 
 // PlanInput is everything Plan needs.
@@ -93,6 +94,10 @@ type PlanInput struct {
 	MaxMembers int         // 0 = no limit
 	PaneLeft   int         // calls left in the pane's session budget
 	Chair      bool        // merge = "chair": a council of 2+ members may cost one more call
+
+	// Phase 4: the pane's known spend and its session_budget_usd (0 = off).
+	PaneCostUSD   float64
+	PaneBudgetUSD float64
 }
 
 // Preflight is who would sit on a council and what it would cost. The engine
@@ -107,6 +112,8 @@ type Preflight struct {
 	EstimatedCalls int               `json:"estimated_calls"`
 	Allowed        bool              `json:"allowed"`
 	Refusal        string            `json:"refusal,omitempty"`
+	PaneCostUSD    float64           `json:"pane_cost_usd,omitempty"`   // known spend on the pane (Phase 4)
+	PaneBudgetUSD  float64           `json:"pane_budget_usd,omitempty"` // session_budget_usd; 0 = off
 	// Seq grows with every preflight the engine computes (0: not stamped);
 	// Request echoes the asking popup's id. A popup shows only its own
 	// preflight or a newer one, never one an earlier popup left behind.
@@ -127,7 +134,8 @@ func EstimateCalls(members, rounds int, chair bool) int {
 // Plan decides eligibility (paused, unknown, out of budget, over max_members)
 // and whether the pane budget covers the whole council.
 func Plan(in PlanInput) Preflight {
-	p := Preflight{Rounds: max(1, in.Rounds), PaneLeft: in.PaneLeft, Chair: in.Chair}
+	p := Preflight{Rounds: max(1, in.Rounds), PaneLeft: in.PaneLeft, Chair: in.Chair,
+		PaneCostUSD: in.PaneCostUSD, PaneBudgetUSD: in.PaneBudgetUSD}
 	for _, c := range in.Candidates {
 		reason := ""
 		switch {
@@ -135,7 +143,7 @@ func Plan(in PlanInput) Preflight {
 			reason = ReasonUnknown
 		case c.Paused:
 			reason = ReasonPaused
-		case c.CallsLeft < p.Rounds:
+		case c.CallsLeft < p.Rounds, c.OverUSD:
 			reason = ReasonBudget
 		case in.MaxMembers > 0 && len(p.Members) >= in.MaxMembers:
 			reason = ReasonMaxMembers
@@ -179,6 +187,9 @@ func (p Preflight) finish(empty string) Preflight {
 	switch {
 	case len(p.Members) == 0:
 		p.Allowed, p.Refusal = false, empty
+	case p.PaneBudgetUSD > 0 && p.PaneCostUSD >= p.PaneBudgetUSD:
+		p.Allowed = false
+		p.Refusal = fmt.Sprintf("pane dollar budget reached: $%.2f of $%.2f spent", p.PaneCostUSD, p.PaneBudgetUSD)
 	case p.EstimatedCalls > p.PaneLeft:
 		p.Allowed = false
 		p.Refusal = fmt.Sprintf("pane budget too low: this council needs %d calls, %d left", p.EstimatedCalls, max(0, p.PaneLeft))

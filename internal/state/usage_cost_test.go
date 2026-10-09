@@ -55,6 +55,32 @@ func TestOldUsageFileLoadsWithZeroCost(t *testing.T) {
 	}
 }
 
+func TestZeroCallDeltaWithUnknownCostIsFlagged(t *testing.T) {
+	u, _ := OpenUsage(filepath.Join(t.TempDir(), "usage.json"))
+	if !u.PaneCostKnown("p") {
+		t.Fatal("an empty pane has no unpriced runs")
+	}
+	_ = u.Add("p", "d", Delta{In: 5})
+	if u.CostKnown("p", "d") || u.PaneCostKnown("p") {
+		t.Fatal("a delta with no price must be flagged unknown even with Calls=0")
+	}
+	if u.Cost("p", "d") != 0 {
+		t.Fatal("unknown cost never counts")
+	}
+}
+
+func TestPaneCostKnownSeesAnyDot(t *testing.T) {
+	u, _ := OpenUsage(filepath.Join(t.TempDir(), "usage.json"))
+	_ = u.Add("p", "a", Delta{Calls: 1, CostUSD: 1, CostKnown: true})
+	if !u.PaneCostKnown("p") {
+		t.Fatal("all priced")
+	}
+	_ = u.Add("p", "council", Delta{Calls: 1})
+	if u.PaneCostKnown("p") || !u.PaneCostKnown("other") {
+		t.Fatal("an unpriced run on any slug, the council's included, taints only its pane")
+	}
+}
+
 func TestResetClearsDollarsToo(t *testing.T) {
 	u, _ := OpenUsage(filepath.Join(t.TempDir(), "usage.json"))
 	_ = u.Add("p", "d", Delta{Calls: 1, CostUSD: 1, CostKnown: true})
