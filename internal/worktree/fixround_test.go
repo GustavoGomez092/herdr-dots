@@ -12,6 +12,9 @@ import (
 	"testing"
 )
 
+// noDeny is an explicit "deny nothing" for tests that are not about the deny-list.
+func noDeny(string) bool { return false }
+
 // userConfig writes the isolated test user's global git config, the one the
 // runner under test reads (testEnv gives every test an empty HOME, so no user
 // config is exercised unless a test says so).
@@ -47,7 +50,7 @@ func TestCaptureAndApplyIgnoreTheUsersDiffConfig(t *testing.T) {
 			if !strings.Contains(string(diff), "diff --git a/src/new.txt b/src/new.txt") {
 				t.Fatalf("the diff header depends on the user's config:\n%s", diff)
 			}
-			if err := Validate(context.Background(), g, co, p, Caps{}); err != nil {
+			if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := Apply(context.Background(), g, repo, diff); err != nil {
@@ -73,7 +76,7 @@ func TestValidateRefusesHeaderPathsThatDifferFromTheChanges(t *testing.T) {
 	})
 	r := strings.NewReplacer("a/src/new.txt", "src/new.txt", "b/src/new.txt", "src/new.txt")
 	p.Diff = []byte(r.Replace(string(p.Diff))) // -p1 now lands it at new.txt
-	if err := Validate(context.Background(), g, co, p, Caps{}); !errors.Is(err, ErrEscape) {
+	if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny}); !errors.Is(err, ErrEscape) {
 		t.Fatalf("err %v, want ErrEscape", err)
 	}
 }
@@ -140,8 +143,11 @@ func TestValidateRefusesDeniedPaths(t *testing.T) {
 		if err := Validate(context.Background(), g, co, p, Caps{Deny: deny}); !errors.Is(err, ErrDenied) {
 			t.Errorf("%s: err %v, want ErrDenied", name, err)
 		}
-		if err := Validate(context.Background(), g, co, p, Caps{}); err != nil {
-			t.Errorf("%s: without a deny func: %v", name, err)
+		if err := Validate(context.Background(), g, co, p, Caps{}); !errors.Is(err, ErrNoDenyCheck) {
+			t.Errorf("%s: with no deny func: err %v, want ErrNoDenyCheck (fail closed)", name, err)
+		}
+		if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny}); err != nil {
+			t.Errorf("%s: an explicit allow-all: %v", name, err)
 		}
 	}
 }
@@ -230,7 +236,7 @@ func TestValidateReadsASymlinkTargetFromThePatchNotTheWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	symlinkOrSkip(t, "a.txt", evil)
-	if err := Validate(context.Background(), g, co, p, Caps{}); !errors.Is(err, ErrEscape) {
+	if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny}); !errors.Is(err, ErrEscape) {
 		t.Fatalf("err %v, want ErrEscape from the patch's own blob", err)
 	}
 }

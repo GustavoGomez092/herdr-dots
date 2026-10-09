@@ -68,6 +68,8 @@ var (
 	// ErrDenied means the patch touches a path the dot may not read or write
 	// (secrets such as .env or id_rsa): Caps.Deny said so.
 	ErrDenied = errors.New("the patch touches a denied path")
+	// ErrNoDenyCheck means Validate got no Caps.Deny: it fails closed.
+	ErrNoDenyCheck = errors.New("worktree: no deny check configured")
 )
 
 // WithoutFilters returns g with every filter driver configured for repo

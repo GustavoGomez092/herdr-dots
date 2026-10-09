@@ -54,7 +54,7 @@ func TestCaptureReturnsOnlyTheDotsChanges(t *testing.T) {
 	if strings.Contains(string(p.Diff), "user edit") {
 		t.Fatal("the user's own uncommitted change leaked into the patch")
 	}
-	if err := Validate(context.Background(), g, co, p, Caps{MaxBytes: 200000, MaxFiles: 50}); err != nil {
+	if err := Validate(context.Background(), g, co, p, Caps{MaxBytes: 200000, MaxFiles: 50, Deny: noDeny}); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestCaptureFlagsAModeChange(t *testing.T) {
 func TestEmptyDraftIsErrEmptyPatch(t *testing.T) {
 	g := isoGit(t)
 	_, co, p, _ := draftT(t, g, newRepo(t), func(string) {})
-	if err := Validate(context.Background(), g, co, p, Caps{}); !errors.Is(err, ErrEmptyPatch) {
+	if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny}); !errors.Is(err, ErrEmptyPatch) {
 		t.Fatalf("err %v, want ErrEmptyPatch", err)
 	}
 }
@@ -88,10 +88,10 @@ func TestValidateEnforcesCaps(t *testing.T) {
 		writeFile(t, filepath.Join(dir, "x.txt"), strings.Repeat("line\n", 100))
 		writeFile(t, filepath.Join(dir, "y.txt"), "y\n")
 	})
-	if err := Validate(context.Background(), g, co, p, Caps{MaxFiles: 1}); !errors.Is(err, ErrTooLarge) {
+	if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny, MaxFiles: 1}); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("files cap: %v", err)
 	}
-	if err := Validate(context.Background(), g, co, p, Caps{MaxBytes: 100}); !errors.Is(err, ErrTooLarge) {
+	if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny, MaxBytes: 100}); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("bytes cap: %v", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestValidateRejectsGitDirsEscapesAndSubmodules(t *testing.T) {
 		"a\x1b[31m":        ErrEscape,
 	} {
 		p := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: path, Status: "M", OldMode: "100644", NewMode: "100644"}}}
-		if err := Validate(context.Background(), Git{}, Checkout{}, p, Caps{}); !errors.Is(err, want) {
+		if err := Validate(context.Background(), Git{}, Checkout{}, p, Caps{Deny: noDeny}); !errors.Is(err, want) {
 			t.Errorf("%q: err %v, want %v", path, err, want)
 		}
 	}
@@ -119,13 +119,13 @@ func TestValidateRejectsGitDirsEscapesAndSubmodules(t *testing.T) {
 	// so (Windows); on Unix they are ordinary files.
 	for _, path := range []string{"con.txt", "src/aux.c", "a.txt:stream"} {
 		p := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: path, Status: "M", OldMode: "100644", NewMode: "100644"}}}
-		err := Validate(context.Background(), Git{}, Checkout{}, p, Caps{})
+		err := Validate(context.Background(), Git{}, Checkout{}, p, Caps{Deny: noDeny})
 		if refused := errors.Is(err, ErrEscape); refused != platform.ReservedPathName(path) {
 			t.Errorf("%q: err %v, want refused=%v", path, err, platform.ReservedPathName(path))
 		}
 	}
 	sub := Patch{Diff: ok, Files: 1, Bytes: 4, Changes: []Change{{Path: "vendor/lib", Status: "M", OldMode: "160000", NewMode: "160000"}}}
-	if err := Validate(context.Background(), Git{}, Checkout{}, sub, Caps{}); !errors.Is(err, ErrEscape) {
+	if err := Validate(context.Background(), Git{}, Checkout{}, sub, Caps{Deny: noDeny}); !errors.Is(err, ErrEscape) {
 		t.Errorf("submodule: %v", err)
 	}
 }
@@ -141,7 +141,7 @@ func TestANewSymlinkPointingOutsideIsRejected(t *testing.T) {
 	if !slices.Contains(p.Flags, FlagSymlink) {
 		t.Fatalf("flags %v", p.Flags)
 	}
-	if err := Validate(context.Background(), g, co, p, Caps{}); !errors.Is(err, ErrEscape) || !strings.Contains(err.Error(), "evil") {
+	if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny}); !errors.Is(err, ErrEscape) || !strings.Contains(err.Error(), "evil") {
 		t.Fatalf("err %v, want ErrEscape naming evil", err)
 	}
 	if err := os.Remove(evil); err != nil {
@@ -151,7 +151,7 @@ func TestANewSymlinkPointingOutsideIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Validate(context.Background(), g, co, p2, Caps{}); err != nil {
+	if err := Validate(context.Background(), g, co, p2, Caps{Deny: noDeny}); err != nil {
 		t.Fatalf("an in-repo symlink is allowed: %v", err)
 	}
 }

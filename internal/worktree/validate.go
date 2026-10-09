@@ -17,8 +17,9 @@ type Caps struct {
 	// the dot may not write (secrets: .env, id_rsa, .npmrc ...). The caller
 	// passes the jail's own check, e.g. func(rel) bool { return
 	// toolloop.Denied(rel, deny) } with toolloop.DefaultDeny plus the dot's
-	// tool_deny_globs, so the case folding matches the jail's. Nil = no check,
-	// so a caller that wants the deny-list must set it.
+	// tool_deny_globs, so the case folding matches the jail's. Required: nil makes
+	// Validate fail closed with ErrNoDenyCheck; pass a func returning false to
+	// deny nothing.
 	Deny func(rel string) bool
 }
 
@@ -41,6 +42,9 @@ func Validate(ctx context.Context, g Git, co Checkout, p Patch, caps Caps) error
 	if len(p.Changes) == 0 || len(p.Diff) == 0 {
 		return ErrEmptyPatch
 	}
+	if caps.Deny == nil {
+		return ErrNoDenyCheck // fail closed: a wiring mistake must not let .env through
+	}
 	if caps.MaxFiles > 0 && p.Files > caps.MaxFiles {
 		return fmt.Errorf("%w: %d files (max %d)", ErrTooLarge, p.Files, caps.MaxFiles)
 	}
@@ -51,7 +55,7 @@ func Validate(ctx context.Context, g Git, co Checkout, p Patch, caps Caps) error
 		if err := CheckPath(c.Path); err != nil {
 			return err
 		}
-		if caps.Deny != nil && caps.Deny(c.Path) {
+		if caps.Deny(c.Path) {
 			return fmt.Errorf("%w: %s", ErrDenied, c.Path)
 		}
 		if c.OldMode == "160000" || c.NewMode == "160000" {
