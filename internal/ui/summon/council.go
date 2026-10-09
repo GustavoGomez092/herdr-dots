@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"herdr-dots/internal/council"
 	"herdr-dots/internal/ipc"
@@ -25,6 +26,7 @@ type councilForm struct {
 	seeded    bool // selection initialised from the first preflight
 	preflight *council.Preflight
 	dots      []view.DotState
+	sending   bool // a convene call is in flight: enter does nothing until it replies
 }
 
 func newCouncilForm(fromList bool) *councilForm {
@@ -88,6 +90,7 @@ func (f *councilForm) current() *council.Preflight {
 
 func (m Model) snapshotCouncil(p view.Pane) Model {
 	f := m.council
+	m.status = ""
 	f.dots = p.Dots
 	f.cursor = max(0, min(f.cursor, len(f.dots)-1))
 	if p.CouncilPreflight != nil {
@@ -99,12 +102,15 @@ func (m Model) snapshotCouncil(p view.Pane) Model {
 			}
 			f.seeded = true
 		}
+	} else {
+		f.preflight = nil // never show a stale estimate; the ticks stay
 	}
 	return m
 }
 
 func (m Model) updateCouncil(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	f := m.council
+	m.status = ""
 	switch msg.String() {
 	case "esc":
 		if f.fromList {
@@ -124,14 +130,10 @@ func (m Model) updateCouncil(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	case "enter":
 		cur := f.current()
-		if cur == nil {
-			m.status = "checking budgets…"
-			return m, nil
+		if cur == nil || !cur.Allowed || f.sending {
+			return m, nil // the view already shows "checking budgets…" or the refusal
 		}
-		if !cur.Allowed {
-			m.status = cur.Refusal
-			return m, nil
-		}
+		f.sending = true
 		c, target, q, slugs := m.caller, m.target, strings.TrimSpace(f.question.Value()), cur.Members
 		return m, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -170,7 +172,17 @@ func (m Model) viewCouncil() string {
 	if len(f.dots) == 0 {
 		b.WriteString(style.Dim.Render("No dots attached to this pane. Press prefix+d to add some.") + "\n")
 	}
-	for i, d := range f.dots {
+	// Fixed lines: title, blank, question, blank, blank, estimate, footer, plus status.
+	fixed := 7
+	if m.status != "" {
+		fixed++
+	}
+	from, to := rowWindow(len(f.dots), f.cursor, m.height-fixed, m.height)
+	if from > 0 {
+		b.WriteString(moreMarker("↑", from))
+	}
+	for i := from; i < to; i++ {
+		d := f.dots[i]
 		marker := "  "
 		if f.onList && i == f.cursor {
 			marker = "▸ "
@@ -188,6 +200,9 @@ func (m Model) viewCouncil() string {
 			line = style.Dim.Render(line + " (" + reason + ")")
 		}
 		b.WriteString(line + "\n")
+	}
+	if to < len(f.dots) {
+		b.WriteString(moreMarker("↓", len(f.dots)-to))
 	}
 	b.WriteString("\n")
 	switch cur := f.current(); {
@@ -218,4 +233,41 @@ func estimateLine(p council.Preflight) string {
 		s += " + chair"
 	}
 	return s + fmt.Sprintf(") · %d left", p.PaneLeft)
+}
+
+// questionWidth is the question input's visible width for a terminal width
+// (the prompt takes two columns); 0 leaves it unbounded until a size arrives.
+func questionWidth(termWidth int) int {
+	if termWidth <= 0 {
+		return 0
+	}
+	return max(10, termWidth-4)
+}
+
+// rowWindow picks the slice [from, to) of n rows to show so the cursor row is
+// visible in avail lines, leaving room for the "more" markers. height 0 (size
+// unknown) shows everything.
+func rowWindow(n, cursor, avail, height int) (from, to int) {
+	if height <= 0 || n <= avail {
+		return 0, n
+	}
+	size := max(1, avail-2) // two lines reserved for the markers
+	from = max(0, min(cursor-size/2, n-size))
+	return from, from + size
+}
+
+func moreMarker(arrow string, n int) string {
+	return style.Dim.Render(fmt.Sprintf("  %s %d more", arrow, n)) + "\n"
+}
+
+// clampWidth cuts every line of s to width columns (0 means unknown).
+func clampWidth(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, width, "…")
+	}
+	return strings.Join(lines, "\n")
 }

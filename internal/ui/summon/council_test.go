@@ -1,10 +1,12 @@
 package summon
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"herdr-dots/internal/council"
 	"herdr-dots/internal/ipc"
@@ -202,5 +204,141 @@ func TestCouncilPopupBlocksAZeroTickSelection(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "select at least one dot") {
 		t.Fatal(m.View())
+	}
+}
+
+func manyDots(n int) []view.DotState {
+	out := make([]view.DotState, n)
+	for i := range out {
+		out[i] = view.DotState{Slug: fmt.Sprintf("dot%02d", i), Name: fmt.Sprintf("Dot%02d", i), Glyph: "●"}
+	}
+	return out
+}
+
+func manySnap(n int) SnapshotMsg {
+	ds := manyDots(n)
+	cands := make([]council.Candidate, n)
+	for i, d := range ds {
+		cands[i] = council.Candidate{Slug: d.Slug, CallsLeft: 40}
+	}
+	p := council.Plan(council.PlanInput{Candidates: cands, Rounds: 1, MaxMembers: 30, PaneLeft: 500, Chair: true})
+	return SnapshotMsg(view.Snapshot{Panes: []view.Pane{{PaneID: "w1:p1", Dots: ds, CouncilPreflight: &p}}})
+}
+
+func TestCouncilPopupKeepsItsFramingInAShortWindow(t *testing.T) {
+	var m tea.Model = NewCouncil("w1:p1", &fakeCaller{})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+	m, _ = m.Update(manySnap(20))
+	m, _ = run(m, "tab")
+	for i := 0; i < 20; i++ {
+		v := m.View()
+		if n := strings.Count(v, "\n") + 1; n > 12 {
+			t.Fatalf("step %d: %d lines in a 12-line window:\n%s", i, n, v)
+		}
+		for _, want := range []string{"COUNCIL → w1:p1", "▸ [x] ● " + fmt.Sprintf("Dot%02d", i), "estimate:", "esc cancel"} {
+			if !strings.Contains(v, want) {
+				t.Fatalf("step %d: missing %q:\n%s", i, want, v)
+			}
+		}
+		m, _ = run(m, "j")
+	}
+	if v := m.View(); !strings.Contains(v, "↑") || strings.Contains(v, "↓") {
+		t.Fatalf("at the end only the up marker shows:\n%s", v)
+	}
+}
+
+func TestCouncilPopupNeverExceedsTheWidth(t *testing.T) {
+	var m tea.Model = NewCouncil("w1:p1", &fakeCaller{})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m, _ = m.Update(councilSnap(preflightFor(50, copyPaused...)))
+	m, _ = run(m, strings.Repeat("x", 300))
+	for _, line := range strings.Split(m.View(), "\n") {
+		if w := ansi.StringWidth(line); w > 40 {
+			t.Fatalf("line of width %d: %q", w, line)
+		}
+	}
+}
+
+func TestSummonListKeepsTheCursorVisibleInAShortWindow(t *testing.T) {
+	var m tea.Model = New("w1:p1", &fakeCaller{})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 10})
+	m, _ = m.Update(SnapshotMsg(view.Snapshot{Panes: []view.Pane{{PaneID: "w1:p1", Dots: manyDots(20)}}}))
+	for i := 0; i < 19; i++ {
+		m, _ = run(m, "j")
+	}
+	v := m.View()
+	if n := strings.Count(v, "\n") + 1; n > 10 || !strings.Contains(v, "SUMMON A DOT") || !strings.Contains(v, "▸ ● Dot19") {
+		t.Fatalf("%d lines:\n%s", n, v)
+	}
+}
+
+func TestCouncilPopupDropsStaleStatus(t *testing.T) {
+	fc := &fakeCaller{}
+	var m tea.Model = NewCouncil("w1:p1", fc)
+	m, _ = m.Update(councilSnap(preflightFor(2, copyPaused...)))
+	m, _ = run(m, "enter")
+	if !strings.Contains(m.View(), "pane budget too low") {
+		t.Fatal(m.View())
+	}
+	m, _ = run(m, "tab", "space") // drop Security: the refusal lifts
+	if strings.Contains(m.View(), "pane budget too low") {
+		t.Fatalf("stale refusal:\n%s", m.View())
+	}
+	fc.err = errString("council already running")
+	m, _ = run(m, "enter")
+	if !strings.Contains(m.View(), "council already running") {
+		t.Fatal(m.View())
+	}
+	m, _ = run(m, "j")
+	if strings.Contains(m.View(), "council already running") {
+		t.Fatalf("an error clears on the next key:\n%s", m.View())
+	}
+	fc.err = errString("again")
+	m, _ = run(m, "enter")
+	m, _ = m.Update(councilSnap(preflightFor(2, copyPaused...)))
+	if strings.Contains(m.View(), "again") {
+		t.Fatalf("an error clears on the next snapshot:\n%s", m.View())
+	}
+}
+
+func TestCouncilPopupSendsOnce(t *testing.T) {
+	fc := &fakeCaller{}
+	var m tea.Model = NewCouncil("w1:p1", fc)
+	m, _ = m.Update(councilSnap(preflightFor(50, copyPaused...)))
+	m, cmd := m.Update(ckey("enter"))
+	if cmd == nil {
+		t.Fatal("first enter must send")
+	}
+	if _, again := m.Update(ckey("enter")); again != nil {
+		t.Fatal("enter while a send is in flight must do nothing")
+	}
+	fc.err = errString("boom")
+	msg := cmd()
+	if len(fc.calls) != 1 {
+		t.Fatalf("calls %v", fc.calls)
+	}
+	m, _ = m.Update(msg) // the error reply re-arms enter
+	if _, retry := m.Update(ckey("enter")); retry == nil {
+		t.Fatal("enter works again after an error reply")
+	}
+}
+
+func TestCouncilPopupDropsAStalePreflightButKeepsTicks(t *testing.T) {
+	fc := &fakeCaller{}
+	var m tea.Model = NewCouncil("w1:p1", fc)
+	m, _ = m.Update(councilSnap(preflightFor(50, copyPaused...)))
+	m, _ = run(m, "tab", "space") // untick Security
+	m, _ = m.Update(councilSnap(nil))
+	v := m.View()
+	if !strings.Contains(v, "checking budgets…") || strings.Contains(v, "estimate:") {
+		t.Fatalf("a snapshot without a preflight must not leave a stale estimate:\n%s", v)
+	}
+	m, _ = run(m, "enter")
+	if len(fc.calls) != 0 {
+		t.Fatalf("calls %v", fc.calls)
+	}
+	m, _ = m.Update(councilSnap(preflightFor(50, copyPaused...)))
+	if !strings.Contains(m.View(), "[ ] ◆ Security") {
+		t.Fatalf("ticks are kept:\n%s", m.View())
 	}
 }

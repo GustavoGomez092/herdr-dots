@@ -33,6 +33,8 @@ type Model struct {
 	askSlug string
 	input   textinput.Model
 	status  string
+	width   int // terminal size from tea.WindowSizeMsg; 0 until known
+	height  int
 
 	onCouncil bool         // the selection is on the "⊕ Council" entry above the dots
 	council   *councilForm // non-nil: the popup is in council mode (council.go)
@@ -67,8 +69,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.council != nil {
 			m = m.snapshotCouncil(p)
 		}
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		if m.council != nil {
+			m.council.question.Width = questionWidth(m.width)
+		}
 	case errMsg:
 		m.status = msg.err.Error()
+		if m.council != nil {
+			m.council.sending = false
+		}
 	case tea.KeyMsg:
 		if m.council != nil {
 			return m.updateCouncil(msg)
@@ -114,6 +124,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.onCouncil && len(m.dots) > 0 {
 				m.council = newCouncilForm(true)
+				m.council.question.Width = questionWidth(m.width)
+				m.status = ""
 				m.council.dots = m.dots
 				return m, m.preflight()
 			}
@@ -130,8 +142,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) View() string {
 	if m.council != nil {
-		return m.viewCouncil()
+		return clampWidth(m.viewCouncil(), m.width)
 	}
+	return clampWidth(m.viewList(), m.width)
+}
+
+func (m Model) viewList() string {
 	var b strings.Builder
 	b.WriteString(style.Title.Render("SUMMON A DOT → "+m.target) + "\n\n")
 	if len(m.dots) == 0 {
@@ -144,12 +160,29 @@ func (m Model) View() string {
 		}
 		b.WriteString(marker + "⊕ Council (all attached)\n")
 	}
-	for i, d := range m.dots {
+	// Fixed lines: title, blank, council entry, blank, footer, plus the optional
+	// question input and status.
+	fixed := 5
+	if m.asking {
+		fixed += 2
+	}
+	if m.status != "" {
+		fixed += 2
+	}
+	from, to := rowWindow(len(m.dots), m.cursor, m.height-fixed, m.height)
+	if from > 0 {
+		b.WriteString(moreMarker("↑", from))
+	}
+	for i := from; i < to; i++ {
+		d := m.dots[i]
 		marker := "  "
 		if i == m.cursor && !m.onCouncil {
 			marker = "▸ "
 		}
 		b.WriteString(fmt.Sprintf("%s%s %s\n", marker, style.Glyph(d.Glyph, d.Color), d.Name))
+	}
+	if to < len(m.dots) {
+		b.WriteString(moreMarker("↓", len(m.dots)-to))
 	}
 	if m.asking {
 		b.WriteString("\n" + m.input.View() + "\n")
