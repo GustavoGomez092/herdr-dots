@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"herdr-dots/internal/backend"
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/engine"
@@ -125,9 +124,10 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
 		return nil, err
 	}
 	home, _ := os.UserHomeDir()
+	backends := newBackendSet(p, configLoaderLogged(p.ConfigFile(), logf), logf)
 	return engine.New(engine.Deps{
 		Herdr:   hc,
-		Backend: func(kind string) (backend.Backend, error) { return backend.New(kind, backend.ExecRunner{}) },
+		Backend: backends.Get,
 		Reader: func(a state.Attachment) transcript.Reader {
 			return transcript.Select(transcript.SelectOptions{
 				Agent: a.Agent, SessionKind: a.SessionKind, SessionValue: a.SessionValue,

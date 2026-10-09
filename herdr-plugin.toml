@@ -1,7 +1,7 @@
 # Herdr Dots — always-on specialist agents for Herdr. Still a scaffold (0.x), not done.
 id = "herdr-dots"
 name = "Herdr Dots"
-version = "0.3.0"
+version = "0.4.0"
 min_herdr_version = "0.8.0"
 description = "Specialist agents (dots) that join your Claude Code / Codex sessions and review each turn. Scaffold release."
 platforms = ["macos", "linux"]

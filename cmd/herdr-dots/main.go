@@ -26,6 +26,7 @@ var commands = map[string]handler{
 	"action":     runAction,
 	"setup-keys": runSetupKeys,
 	"memory":     runMemory,
+	"keys":       runKeys,
 }
 
 func usage() error {

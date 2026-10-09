@@ -130,8 +130,17 @@ func runManage([]string) error {
 	}
 	cfg, _ := config.Load(p.ConfigFile()) // malformed config -> defaults; the engine logs the error
 	newDot := func() dots.Dot { return newDotFromConfig(cfg) }
+	set := newBackendSet(p, configLoader(p.ConfigFile()), nil)
+	prices := set.Prices()
 	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
-		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject}), tea.WithAltScreen())
+		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject,
+		CheckDot:  set.CheckDot,
+		Models:    set.Models,
+		Estimate:  func(d dots.Dot) string { return estimateLine(prices, d) },
+		Keys:      set.creds(cfg),
+		TestKey:   set.TestProvider,
+		OllamaURL: set.OllamaURL(),
+	}), tea.WithAltScreen())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return manage.SnapshotMsg(s) }, nil)

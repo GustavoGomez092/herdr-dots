@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/openai/openai-go/v3 v3.74.0
+	golang.org/x/term v0.37.0
 	golang.org/x/text v0.41.0
 )
 
