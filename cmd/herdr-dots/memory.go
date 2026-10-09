@@ -459,7 +459,9 @@ func (c *memCLI) mark(verb string, args []string) error {
 	if err != nil {
 		return err
 	}
+	was := false
 	got, err := c.store.Update(pid, ref, func(e *memory.Entry) error {
+		was = e.Status == memory.StatusArchived
 		switch verb {
 		case "pin":
 			e.Pinned = true
@@ -472,7 +474,7 @@ func (c *memCLI) mark(verb string, args []string) error {
 		return err
 	}
 	past := map[string]string{"pin": "pinned", "unpin": "unpinned"}[verb]
-	if got.Status == memory.StatusArchived {
+	if got.Status == memory.StatusArchived && !was {
 		fmt.Fprintln(c.out, c.archivedAtOnce(past, got))
 		return nil
 	}
@@ -564,6 +566,10 @@ func (c *memCLI) archivedAtOnce(verb string, e memory.Entry) string {
 		whose = textutil.SanitizeModelText(e.Dot)
 	case memory.ScopeGlobal:
 		whose = "global"
+	}
+	if e.Source != memory.SourceImport {
+		return fmt.Sprintf("%s was archived at once: %s's memory is full (limit %d); research notes give way first. Forget an entry or raise the limit.",
+			e.Ref(), whose, c.store.Cap(e.Scope))
 	}
 	return fmt.Sprintf("%s %s, but it was archived at once: %s's memory is full (limit %d) and imported entries give way to yours. Forget an entry or raise the limit, then import it again.",
 		verb, e.Ref(), whose, c.store.Cap(e.Scope))

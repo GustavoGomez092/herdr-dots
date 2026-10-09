@@ -408,6 +408,9 @@ func archivedSay(status string, got memory.Entry, was bool) string {
 	case memory.ScopeGlobal:
 		whose = "global"
 	}
+	if got.Source != memory.SourceImport {
+		return status + ", then archived: " + whose + " memory is full and research notes give way first"
+	}
 	return status + ", then archived: " + whose + " memory is full and imports give way to your own entries"
 }
 

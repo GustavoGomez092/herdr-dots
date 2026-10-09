@@ -608,7 +608,9 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 	// yield archives the incoming research entry or approved import when
 	// nothing of its rank or lower is left to make room.
 	yield := func() int {
-		if keepRank != capRankNone && live-n > limit {
+		// Never two entries for one: when the cap already archived an entry
+		// of the keep's rank or lower, the fresh one stays.
+		if keepRank != capRankNone && n == 0 && live-n > limit {
 			archive(keepAt)
 			n++
 		}
