@@ -308,7 +308,7 @@ func TestNothingVisibleMeansNothingToActOn(t *testing.T) {
 func TestSelectedRowStaysOnScreenInAShortPopup(t *testing.T) {
 	st, n := seed(t), 0
 	for i := 0; i < 30; i++ {
-		if _, err := st.Add(pid, memory.Entry{Scope: memory.ScopeProject, Kind: memory.KindNote, Text: fmt.Sprintf("note number %02d", i), Source: memory.SourceUser}); err != nil {
+		if _, err := st.Add(pid, memory.Entry{Scope: memory.ScopeProject, Kind: memory.KindNote, Text: fmt.Sprintf("note number %03d", i), Source: memory.SourceUser}); err != nil {
 			t.Fatal(err)
 		}
 	}

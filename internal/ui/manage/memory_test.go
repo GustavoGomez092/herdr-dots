@@ -3,6 +3,7 @@ package manage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,5 +174,27 @@ func TestMemoryWithoutAProjectIsGlobalOnlyAndRefusesProjectScope(t *testing.T) {
 		if e.IsDir() && e.Name() != "_global" {
 			t.Fatalf("unexpected directory written: %s", e.Name())
 		}
+	}
+}
+
+// Final review Important 3: the memory screen opened from manage scrolls.
+func TestMemoryScreenFromManageScrolls(t *testing.T) {
+	m, _, _, st := memSetup(t)
+	for i := 0; i < 30; i++ {
+		addMem(t, st, memPID, memory.Entry{Scope: memory.ScopeProject, Kind: memory.KindNote, Text: fmt.Sprintf("note number %03d", i), Source: memory.SourceUser})
+	}
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = press(m, "P")
+	for i := 0; i < 25; i++ {
+		m = press(m, "j")
+	}
+	v := m.View()
+	if !strings.Contains(v, "MEMORY → project") || !strings.Contains(v, "▸ p:m26") || strings.Count(v, "\n") >= 10 {
+		t.Fatalf("header and selected p:m26 must fit in 10 lines:\n%s", v)
+	}
+	// Later size changes reach the memory screen too.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 7})
+	if v := m.View(); !strings.Contains(v, "MEMORY → project") || !strings.Contains(v, "▸ p:m26") || strings.Count(v, "\n") >= 7 {
+		t.Fatalf("after a resize to 7 lines:\n%s", v)
 	}
 }

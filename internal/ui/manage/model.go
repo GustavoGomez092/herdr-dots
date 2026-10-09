@@ -83,6 +83,7 @@ type Model struct {
 	delSlug   string // dot the confirm screen asks about, fixed when D is pressed
 	delName   string
 	width     int
+	height    int
 	mem       *memui.Model // open memory browser (scrMemory)
 }
 
@@ -116,7 +117,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		default:
 			if ws, ok := msg.(tea.WindowSizeMsg); ok {
-				m.width = ws.Width
+				m.width, m.height = ws.Width, ws.Height
 			}
 			nm, cmd := m.mem.Update(msg)
 			mm := nm.(memui.Model)
@@ -134,8 +135,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		mm := memui.New(msg.deps)
 		m.mem, m.scr = &mm, scrMemory
-		if m.width > 0 {
-			nm, _ := mm.Update(tea.WindowSizeMsg{Width: m.width})
+		if m.width > 0 || m.height > 0 {
+			nm, _ := mm.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 			mm = nm.(memui.Model)
 			m.mem = &mm
 		}
@@ -143,7 +144,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case memDeletedMsg:
 		m.status = fmt.Sprintf("deleted %s and its memory (%d files)", msg.name, msg.files)
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 	case SnapshotMsg:
 		m.snap = view.Snapshot(msg)
 		m.attached = map[string]bool{}
