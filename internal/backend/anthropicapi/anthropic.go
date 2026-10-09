@@ -18,6 +18,7 @@ import (
 	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/pricing"
+	"herdr-dots/internal/textutil"
 )
 
 // DefaultModel is used when a dot sets no model (decision 7).
@@ -213,7 +214,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		return backend.PartialAPI(run), err
 	}
 	if out.Model != "" && out.Model != model {
-		b.o.Log("anthropic-api: %s answered for %s (refusal fallback)", out.Model, model)
+		b.o.Log("anthropic-api: %s answered for %s (refusal fallback)", textutil.SanitizeModelText(out.Model), textutil.SanitizeModelText(model))
 	}
 	return backend.FinishAPI(r, run)
 }

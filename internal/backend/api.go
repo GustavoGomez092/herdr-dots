@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"herdr-dots/internal/pricing"
+	"herdr-dots/internal/textutil"
 )
 
 // Backend kinds (a dot's [backend].kind).
@@ -58,9 +59,12 @@ type ModelChecker interface {
 // the feed and counts toward the failure stop.
 var ErrRefused = errors.New("refused")
 
-// Refused is the run error for a refusal: "refused (cyber)".
+// Refused is the run error for a refusal: "refused (cyber)". category is
+// provider text (a category or the refusal itself): control characters are
+// stripped, since the error reaches the engine log and the feed.
 func Refused(category string) error {
-	if strings.TrimSpace(category) == "" {
+	category = strings.Join(strings.Fields(textutil.SanitizeModelText(category)), " ")
+	if category == "" {
 		category = "unspecified"
 	}
 	return fmt.Errorf("%w (%s)", ErrRefused, category)

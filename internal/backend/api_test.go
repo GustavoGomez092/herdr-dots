@@ -119,6 +119,10 @@ func TestRefusedError(t *testing.T) {
 	if Refused("").Error() != "refused (unspecified)" {
 		t.Fatal("empty category")
 	}
+	// Final review item 11: refusal text is model text.
+	if err := Refused("I can't\x1b]0;x\x07\nhelp"); strings.ContainsAny(err.Error(), "\x1b\x07\n") || !errors.Is(err, ErrRefused) {
+		t.Fatalf("unsanitized refusal %q", err)
+	}
 }
 
 // Recorded-style `claude -p --output-format json` usage: with prompt caching

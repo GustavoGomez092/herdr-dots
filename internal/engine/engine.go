@@ -18,6 +18,7 @@ import (
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
+	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/transcript"
 	"herdr-dots/internal/view"
 )
@@ -713,8 +714,11 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 
 func (e *Engine) runFailed(k key, d dots.Dot, turn int, err error) {
 	err = redactErr(err) // defense in depth: adapters redact already
-	e.d.Logf("dot %s on %s: %v", d.Slug, k.pane, err)
-	e.feed(k.pane, d.Slug, turn, state.OutcomeError, err.Error())
+	// Run errors can carry provider text (a refusal): no control characters
+	// in the log, the feed or a toast.
+	msg := textutil.SanitizeModelText(err.Error())
+	e.d.Logf("dot %s on %s: %s", d.Slug, k.pane, msg)
+	e.feed(k.pane, d.Slug, turn, state.OutcomeError, msg)
 	e.setStatus(k, view.StatusError)
 	stopped := false
 	_ = e.d.Attachments.Update(k.pane, func(a *state.Attachment) {
@@ -726,7 +730,7 @@ func (e *Engine) runFailed(k key, d dots.Dot, turn int, err error) {
 		}
 	})
 	if stopped {
-		e.notify(d, fmt.Sprintf("stopped after %d failures: %s (press r in the Dots pane to reset)", e.d.MaxFailures, err))
+		e.notify(d, fmt.Sprintf("stopped after %d failures: %s (press r in the Dots pane to reset)", e.d.MaxFailures, msg))
 	}
 }
 
