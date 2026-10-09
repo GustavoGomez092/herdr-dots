@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"herdr-dots/internal/schedule"
@@ -51,7 +53,21 @@ func (s ScheduleSpec) Targets() []string {
 
 // Proactive reports whether the dot does any background work.
 func (d Dot) Proactive() bool {
-	return d.Research.Enabled || d.Schedule.Cron != "" || d.Trigger.OnCommit
+	return d.Research.Enabled || strings.TrimSpace(d.Schedule.Cron) != "" || d.Trigger.OnCommit
+}
+
+// unsafeText reports a control rune other than (when allowed) newline and tab.
+func unsafeText(s string, allowWhitespace bool) bool {
+	for _, r := range s {
+		if !unicode.IsControl(r) {
+			continue
+		}
+		if allowWhitespace && (r == '\n' || r == '\t') {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (r ResearchSpec) validate() []error {
@@ -66,11 +82,39 @@ func (r ResearchSpec) validate() []error {
 		errs = append(errs, fmt.Errorf("research topics: at most 10, got %d", len(r.Topics)))
 	}
 	for _, t := range r.Topics {
-		if strings.TrimSpace(t) == "" || utf8.RuneCountInString(t) > 200 {
+		if strings.TrimSpace(t) == "" || strings.TrimSpace(textutil.SanitizeModelText(t)) == "" || utf8.RuneCountInString(t) > 200 {
 			errs = append(errs, fmt.Errorf("research topic %q must be 1-200 characters", t))
+		} else if unsafeText(t, false) {
+			errs = append(errs, fmt.Errorf("research topic %q must be one line with no control characters", t))
 		}
 	}
 	return errs
+}
+
+// Minimum gap between two scheduled slots (controller ruling P8-R5).
+const (
+	minScheduleGap   = 15 * time.Minute
+	scheduleProbe    = 7 * 24 * time.Hour
+	scheduleMaxSlots = 7 * 24 * 60
+)
+
+// tooFrequent walks a week of slots from a fixed reference time (UTC; dots
+// have no time zone setting) and reports whether any gap is under 15 minutes.
+func tooFrequent(spec schedule.Spec) bool {
+	ref := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	end := ref.Add(scheduleProbe)
+	prev := spec.Next(ref.Add(-time.Second))
+	for i := 0; i < scheduleMaxSlots && !prev.IsZero() && prev.Before(end); i++ {
+		next := spec.Next(prev)
+		if next.IsZero() {
+			return false
+		}
+		if next.Sub(prev) < minScheduleGap {
+			return true
+		}
+		prev = next
+	}
+	return false
 }
 
 func (s ScheduleSpec) validate() []error {
@@ -78,21 +122,42 @@ func (s ScheduleSpec) validate() []error {
 	if s.CatchUpHours < 0 || s.CatchUpHours > 168 {
 		errs = append(errs, fmt.Errorf("schedule catch_up_hours must be 0-168, got %d", s.CatchUpHours))
 	}
-	if strings.TrimSpace(s.Cron) == "" {
-		return errs
-	}
-	if _, err := schedule.Parse(s.Cron); err != nil {
-		errs = append(errs, fmt.Errorf("schedule cron: %v", err))
-	}
-	if strings.TrimSpace(s.Task) == "" {
-		errs = append(errs, fmt.Errorf("schedule task is required when cron is set"))
-	} else if utf8.RuneCountInString(s.Task) > 2000 {
+	// Task and projects are checked even with no cron, so a hidden oversized
+	// or unsafe value can't sit in the file.
+	if utf8.RuneCountInString(s.Task) > 2000 {
 		errs = append(errs, fmt.Errorf("schedule task must be at most 2000 characters"))
 	}
+	if unsafeText(s.Task, true) {
+		errs = append(errs, fmt.Errorf("schedule task must not contain control characters"))
+	}
+	if len(s.Projects) > 10 {
+		errs = append(errs, fmt.Errorf("schedule projects: at most 10, got %d", len(s.Projects)))
+	}
+	seen := map[string]bool{}
 	for _, p := range s.Projects {
 		if p != ScheduleAttached && !filepath.IsAbs(p) {
 			errs = append(errs, fmt.Errorf("schedule project %q must be an absolute path or %q", p, ScheduleAttached))
+			continue
 		}
+		key := p
+		if p != ScheduleAttached {
+			key = filepath.Clean(p)
+		}
+		if seen[key] {
+			errs = append(errs, fmt.Errorf("schedule project %q is a duplicate", p))
+		}
+		seen[key] = true
+	}
+	if strings.TrimSpace(s.Cron) == "" {
+		return errs
+	}
+	if spec, err := schedule.Parse(s.Cron); err != nil {
+		errs = append(errs, fmt.Errorf("schedule cron: %v", err))
+	} else if tooFrequent(spec) {
+		errs = append(errs, fmt.Errorf("schedule cron fires more often than every 15 minutes"))
+	}
+	if strings.TrimSpace(s.Task) == "" {
+		errs = append(errs, fmt.Errorf("schedule task is required when cron is set"))
 	}
 	return errs
 }

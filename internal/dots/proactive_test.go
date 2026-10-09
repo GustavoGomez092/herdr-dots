@@ -167,3 +167,88 @@ func TestProactiveSettingsDoNotTouchCapabilities(t *testing.T) {
 		t.Fatal("proactive settings must not grant write")
 	}
 }
+
+func TestPromptTextMustBeSafeAtValidation(t *testing.T) {
+	cases := map[string]func(*Dot){
+		"schedule task":  func(d *Dot) { d.Schedule.Cron, d.Schedule.Task = "@daily", "x\x1b]52;c;eA==\x07" },
+		"research topic": func(d *Dot) { d.Research.Topics = []string{"line one\nline two"} },
+		"topic tab":      func(d *Dot) { d.Research.Topics = []string{"a\tb"} },
+		"only control":   func(d *Dot) { d.Research.Topics = []string{"\x1b\x07"} },
+		"task no cron":   func(d *Dot) { d.Schedule.Task = "x\x1b[2J" },
+	}
+	for name, mutate := range cases {
+		d := proactiveDot()
+		mutate(&d)
+		if d.Validate() == nil {
+			t.Errorf("%s should be rejected", name)
+		}
+	}
+	d := proactiveDot()
+	d.Schedule.Cron, d.Schedule.Task = "@daily", "line one\n\tline two"
+	if err := d.Validate(); err != nil {
+		t.Fatalf("newline and tab are fine in a task: %v", err)
+	}
+}
+
+func TestScheduleProjectsCappedDedupedAndCheckedWithoutCron(t *testing.T) {
+	d := proactiveDot()
+	for i := 0; i < 11; i++ {
+		d.Schedule.Projects = append(d.Schedule.Projects, filepath.Join(t.TempDir(), "p"))
+	}
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "at most 10") {
+		t.Fatalf("cap without cron: %v", err)
+	}
+	d = proactiveDot()
+	p := filepath.Join(t.TempDir(), "p")
+	d.Schedule.Projects = []string{p, p + string(filepath.Separator) + ".." + string(filepath.Separator) + "p"}
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicates: %v", err)
+	}
+	d = proactiveDot()
+	d.Schedule.Projects = []string{"relative"}
+	if d.Validate() == nil {
+		t.Fatal("relative project without cron must be rejected")
+	}
+	d = proactiveDot()
+	d.Schedule.Task = strings.Repeat("x", 2001)
+	if d.Validate() == nil {
+		t.Fatal("oversized task without cron must be rejected")
+	}
+}
+
+func TestScheduleMinimumInterval(t *testing.T) {
+	for _, c := range []string{"* * * * *", "*/5 * * * *", "*/14 * * * *"} {
+		d := proactiveDot()
+		d.Schedule.Cron, d.Schedule.Task = c, "x"
+		if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "schedule cron fires more often than every 15 minutes") {
+			t.Errorf("%s: %v", c, err)
+		}
+	}
+	for _, c := range []string{"*/15 * * * *", "0 9 * * 1-5", "@hourly"} {
+		d := proactiveDot()
+		d.Schedule.Cron, d.Schedule.Task = c, "x"
+		if err := d.Validate(); err != nil {
+			t.Errorf("%s: %v", c, err)
+		}
+	}
+}
+
+func TestWhitespaceCronIsOffEverywhere(t *testing.T) {
+	d := proactiveDot()
+	d.Schedule.Cron = "   "
+	if d.Proactive() || d.Validate() != nil {
+		t.Fatal("whitespace-only cron is off")
+	}
+}
+
+func TestSaveInvalidCronWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	d := proactiveDot()
+	d.Schedule.Cron, d.Schedule.Task = "every day", "x"
+	if err := Save(dir, d, true); err == nil || !strings.Contains(err.Error(), "schedule cron") {
+		t.Fatalf("got %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("wrote %v", entries)
+	}
+}
