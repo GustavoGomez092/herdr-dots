@@ -142,7 +142,9 @@ func TestPaneDollarBudgetFromConfig(t *testing.T) {
 }
 
 func TestUnknownCostNeverCountsTowardDollarBudgets(t *testing.T) {
-	be := &costBE{res: backend.Result{Verdict: backend.Verdict{Severity: "info"}, CostUSD: 0, CostKnown: false}}
+	// A real unpriced run has tokens (one with none never reached the
+	// provider and costs a known $0: final review item 8).
+	be := &costBE{res: backend.Result{Verdict: backend.Verdict{Severity: "info"}, InputTokens: 100, OutputTokens: 5, CostUSD: 0, CostKnown: false}}
 	d := apiDot("Local")
 	d.Budget.MaxUSDPerSession = 0.01
 	r := costRig(t, be, 0.01, d)

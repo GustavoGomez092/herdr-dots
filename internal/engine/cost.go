@@ -25,11 +25,19 @@ func requestFor(d dots.Dot, cwd string) backend.Request {
 	}
 }
 
-// deltaOf is the usage a run adds to state.Usage.
+// deltaOf is the usage a run adds to state.Usage. A run that reported no
+// tokens and no cost never reached the provider (no key, connection refused):
+// it cost a known $0, so it doesn't mark the dot's spend unknown. An unpriced
+// run with tokens (codex, a model missing from prices.toml) stays unknown.
 func deltaOf(res backend.Result) state.Delta {
+	known := res.CostKnown
+	if !known && res.CostUSD == 0 && res.InputTokens == 0 && res.OutputTokens == 0 &&
+		res.CacheReadTokens == 0 && res.CacheWriteTokens == 0 {
+		known = true
+	}
 	return state.Delta{Calls: 1, In: res.InputTokens, Out: res.OutputTokens,
 		CacheRead: res.CacheReadTokens, CacheWrite: res.CacheWriteTokens,
-		CostUSD: res.CostUSD, CostKnown: res.CostKnown}
+		CostUSD: res.CostUSD, CostKnown: known}
 }
 
 // costDetail is the feed suffix for a finished run:
