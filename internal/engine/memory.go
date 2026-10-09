@@ -238,6 +238,9 @@ func (e *Engine) applyMemoryOps(paneID string, d dots.Dot, turn int, mr memRun, 
 func suppressedBy(mr memRun, msg string, turn int, session string) (string, bool) {
 	best, ref := 0.0, ""
 	for _, en := range mr.cands {
+		if en.Kind != memory.KindFinding && en.Kind != memory.KindDismissed {
+			continue // research and question entries never suppress
+		}
 		if en.Kind == memory.KindFinding {
 			if en.Source != memory.SourceOutcome && en.Source != memory.SourceUser {
 				continue

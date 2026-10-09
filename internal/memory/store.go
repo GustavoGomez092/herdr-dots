@@ -496,11 +496,16 @@ func (s *Store) capFor(sc Scope) int {
 // alone are over the limit, and never to make room for a new proposal:
 // unapproved memory never pushes out approved memory. Pinned and
 // developer-written entries are never archived, nor is keep.
+//
+// Research and question entries go before every other kind (Phase 8): fresh
+// research must never push out the dismissed and finding entries that stop
+// repeats. When keep is itself research and no older research can make room,
+// keep is archived instead of a non-research entry.
 func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) int {
 	if limit <= 0 {
 		return 0
 	}
-	live, active, keepProposed := 0, 0, false
+	live, active, keepProposed, keepResearch, keepAt := 0, 0, false, false, -1
 	var proposed, cands []int
 	for i, e := range f.Entries {
 		if e.Status == StatusArchived {
@@ -512,6 +517,7 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		}
 		if e.ID == keep {
 			keepProposed = e.Status == StatusProposed
+			keepResearch, keepAt = isResearchKind(e.Kind), i
 			continue
 		}
 		if e.Pinned || e.Source == SourceUser {
@@ -543,14 +549,25 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		return n
 	}
 	sort.SliceStable(cands, func(a, b int) bool {
+		ra, rb := isResearchKind(f.Entries[cands[a]].Kind), isResearchKind(f.Entries[cands[b]].Kind)
+		if ra != rb {
+			return ra
+		}
 		return capScore(f.Entries[cands[a]], now) < capScore(f.Entries[cands[b]], now)
 	})
 	for _, i := range cands[:min(over, len(cands))] {
+		if keepResearch && !isResearchKind(f.Entries[i].Kind) {
+			// No research left to evict: the new research entry yields.
+			archive(keepAt)
+			return n + 1
+		}
 		archive(i)
 		n++
 	}
 	return n
 }
+
+func isResearchKind(k Kind) bool { return k == KindResearch || k == KindQuestion }
 
 // capScore ranks entries for archiving: rarely used, long unused first.
 func capScore(e Entry, now time.Time) float64 {

@@ -132,6 +132,9 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, kinds 
 			if x.Source != SourceModel || x.Dot != dot || (x.Scope == ScopeProject && x.Status != StatusProposed) {
 				return fmt.Errorf("%w: %s", ErrDenied, ref)
 			}
+			if op.Op == "update" && !slices.Contains(kinds, x.Kind) {
+				return fmt.Errorf("%w: %s", ErrDenied, ref) // research entries change only in a research pass
+			}
 			if op.Op == "forget" {
 				f.Entries = slices.Delete(f.Entries, i, i+1)
 				return nil

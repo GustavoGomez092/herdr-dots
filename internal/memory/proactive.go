@@ -1,12 +1,14 @@
 package memory
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"herdr-dots/internal/fsutil"
@@ -145,7 +147,9 @@ func (s *Store) SeeDots(p string, slugs []string, now time.Time) error {
 
 // RecentDotProjects lists projects where dot was attached at or after since.
 // Projects with unreadable metadata are skipped; their errors are returned
-// joined, alongside the projects that could be read.
+// joined, alongside the projects that could be read. A project whose
+// meta.json SeeDots created but SeeProject hasn't filled in yet has no name,
+// and its Roots may be empty.
 func (s *Store) RecentDotProjects(dot string, since time.Time) ([]ProjectMeta, error) {
 	all, err := s.Projects()
 	var out []ProjectMeta
@@ -163,6 +167,13 @@ func (s *Store) RecentDotProjects(dot string, since time.Time) ([]ProjectMeta, e
 func (s *Store) scrubDotProactiveLocked(p, dot string) error {
 	var errs []error
 	f, err := s.readScheduleLocked(p)
+	if errors.Is(err, ErrCorrupt) {
+		// It holds only slugs and times: replace it, as ClaimSchedule does, so
+		// forgetting succeeds and a recreated dot inherits no stale claim.
+		s.logf("memory: %v; replacing it", err)
+		f.Version, f.Last = fileVersion, map[string]time.Time{dot: {}}
+		err = nil
+	}
 	if err != nil {
 		errs = append(errs, err)
 	} else if _, ok := f.Last[dot]; ok {
@@ -183,6 +194,8 @@ func (s *Store) scrubDotProactiveLocked(p, dot string) error {
 		var m ProjectMeta
 		if err := json.Unmarshal(data, &m); err != nil {
 			errs = append(errs, fmt.Errorf("%w: %s/meta.json: %v", ErrCorrupt, p, err))
+		} else if m.Version > fileVersion {
+			errs = append(errs, fmt.Errorf("%w (%s has version %d)", ErrVersion, path, m.Version))
 		} else if _, ok := m.DotsSeen[dot]; ok {
 			delete(m.DotsSeen, dot)
 			out, err := json.MarshalIndent(m, "", "  ")
@@ -190,6 +203,40 @@ func (s *Store) scrubDotProactiveLocked(p, dot string) error {
 				err = fsutil.WriteFileAtomic(path, append(out, '\n'), 0o600)
 			}
 			errs = append(errs, err)
+		}
+	}
+	errs = append(errs, removeMetaAsidesLocked(filepath.Join(s.Dir, p), dot))
+	return errors.Join(errs...)
+}
+
+// removeMetaAsidesLocked deletes meta.json.corrupt-* asides that mention the
+// dot's slug. An aside doesn't parse, so it can't be edited safely; it holds
+// only a name, roots and dot stamps, so the whole aside goes. Asides that never
+// name the dot are left alone.
+func removeMetaAsidesLocked(dir, slug string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var errs []error
+	needle := []byte(`"` + slug + `"`)
+	for _, e := range ents {
+		if !strings.HasPrefix(e.Name(), "meta.json.corrupt-") || e.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if bytes.Contains(data, needle) {
+			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)

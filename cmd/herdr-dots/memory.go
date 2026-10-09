@@ -119,7 +119,7 @@ func (c *memCLI) flags(name string) *memFlags {
 	f.fs.StringVar(&f.project, "project", "", "project path or id")
 	f.fs.StringVar(&f.dot, "dot", "", "dot slug")
 	f.fs.StringVar(&f.scope, "scope", "", "project, dot or global")
-	f.fs.StringVar(&f.kind, "kind", "", "convention, decision, finding, dismissed, preference or note")
+	f.fs.StringVar(&f.kind, "kind", "", "convention, decision, finding, dismissed, preference, note, research or question")
 	f.fs.StringVar(&f.globs, "paths", "", "comma-separated path globs")
 	f.fs.BoolVar(&f.all, "all", false, "include archived entries")
 	f.fs.BoolVar(&f.asJSON, "json", false, "print JSON")
