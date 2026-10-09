@@ -11,6 +11,7 @@ import (
 
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/config"
+	"herdr-dots/internal/council"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/memory"
@@ -44,6 +45,11 @@ type Deps struct {
 type key struct{ pane, slug string }
 
 type runOpts struct {
+	// Council members (council.go) only.
+	noForce bool                        // summon semantics, but the member may pass ("nothing from my side")
+	ctx     context.Context             // cancels the run with its council; nil = the engine's context
+	sink    func(backend.Result, error) // receives the result instead of route; called exactly once
+
 	forceQueue bool   // the turn was started by a dot: never auto-inject
 	summon     bool   // manual summon: always a card, bypasses running flags
 	question   string // summon question
@@ -80,6 +86,12 @@ type Engine struct {
 	cfgChecked time.Time
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
+
+	// Council state (council.go), guarded by mu; maps are created lazily.
+	councils    map[string]*councilRun       // by pane: the council in progress
+	preflights  map[string]council.Preflight // by pane: the last preflight, for snapshots
+	councilSeq  int
+	councilWait time.Duration // tests only: deadline for all member runs; 0 = run timeout × rounds
 
 	// Memory state, guarded by mu. Memory I/O never happens under mu.
 	learning map[key]bool            // a memory pass is running
@@ -568,6 +580,14 @@ func (e *Engine) upgradeFromScrollback(att state.Attachment) state.Attachment {
 
 func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o runOpts) {
 	k := key{paneID, d.Slug}
+	base := e.ctx
+	if o.ctx != nil {
+		base = o.ctx
+	}
+	sinkRes, sinkErr := backend.Result{}, errRunNotStarted
+	if o.sink != nil {
+		defer func() { o.sink(sinkRes, sinkErr) }() // registered first: runs last
+	}
 	defer func() {
 		if !o.summon {
 			e.finishRun(k)
@@ -577,7 +597,8 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	}()
 	select {
 	case e.sem <- struct{}{}:
-	case <-e.ctx.Done():
+	case <-base.Done():
+		sinkErr = base.Err()
 		return
 	}
 	defer func() { <-e.sem }()
@@ -598,6 +619,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	}
 	be, err := e.d.Backend(d.Backend.Kind)
 	if err != nil {
+		sinkErr = err
 		e.runFailed(k, d, turn, err)
 		return
 	}
@@ -605,7 +627,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	req := backend.Request{
 		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
 		Model: d.Backend.Model, Args: d.Backend.Args, RepoRead: d.Context.RepoRead,
-		Cwd: att.Cwd, Turns: turns, Question: o.question, Force: o.summon,
+		Cwd: att.Cwd, Turns: turns, Question: o.question, Force: o.summon && !o.noForce,
 		Memory: mem.block, Learn: mem.learn,
 	}
 	if o.memoryPass {
@@ -614,14 +636,16 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		}
 		req.Pass, req.RepoRead, req.Question, req.Force = backend.PassMemory, false, "", false
 	}
-	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
+	ctx, cancel := context.WithTimeout(base, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
 	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
 	if err != nil {
+		sinkErr = err
 		e.runFailed(k, d, turn, err)
 		return
 	}
+	sinkRes, sinkErr = res, nil
 	e.touchMemory(mem)
 	_ = e.d.Attachments.Update(paneID, func(a *state.Attachment) {
 		if da := a.Find(d.Slug); da != nil {
@@ -664,6 +688,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	}
 	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, res.Verdict.Message)
 	e.setStatus(k, view.StatusFlagged)
+	if o.sink != nil {
+		return // council member: the council turns every answer into one card
+	}
 	e.route(paneID, d, turn, res.Verdict, o)
 }
 
@@ -789,6 +816,7 @@ func (e *Engine) Snapshot() view.Snapshot {
 		}
 		pv.Cards = e.d.Queue.Visible(a.PaneID)
 		pv.Feed = e.d.Feed.Recent(a.PaneID, 20)
+		pv.Council, pv.CouncilPreflight = e.councilViewLocked(a.PaneID)
 		s.Panes = append(s.Panes, pv)
 		seen[a.PaneID] = true
 	}

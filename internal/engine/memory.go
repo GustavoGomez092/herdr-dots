@@ -317,6 +317,10 @@ func (e *Engine) spawnOutcome(c queue.Card, kind string) {
 }
 
 func (e *Engine) recordOutcome(c queue.Card, kind, orig string, edited bool) {
+	if c.Kind == queue.KindCouncil {
+		e.recordCouncilOutcomes(c, kind, edited) // one outcome per contributing member (council_memory.go)
+		return
+	}
 	e.mu.Lock()
 	d, known := e.dots[c.Dot]
 	e.mu.Unlock()
@@ -358,6 +362,9 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	c, ok := e.d.Queue.Get(cardID)
 	if !ok {
 		return fmt.Errorf("card %s: %w", cardID, queue.ErrNotFound)
+	}
+	if c.Kind == queue.KindCouncil && as != memory.AsConvention {
+		return errors.New("a council card can only be remembered as a project convention (c)")
 	}
 	ev := memory.Evidence{Pane: c.PaneID, Turn: c.Turn, Card: c.ID}
 	pid := c.Project

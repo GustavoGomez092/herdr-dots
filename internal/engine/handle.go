@@ -93,6 +93,20 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 	case ipc.CmdMemoryChanged:
 		e.MemoryChanged()
 		return nil
+	case ipc.CmdCouncil:
+		var a ipc.CouncilArgs
+		if err := decode(raw, &a); err != nil {
+			return err
+		}
+		_, err := e.Council(ctx, a.PaneID, a.Question, a.Slugs)
+		return err
+	case ipc.CmdCouncilPreflight:
+		var a ipc.CouncilArgs
+		if err := decode(raw, &a); err != nil {
+			return err
+		}
+		_, err := e.CouncilPreflight(a.PaneID, a.Slugs)
+		return err
 	}
 	return fmt.Errorf("unknown command %q", cmd)
 }
