@@ -54,6 +54,8 @@ type Pane struct {
 	Cards  []queue.Card      `json:"cards"`
 	Feed   []state.FeedEntry `json:"feed"`
 
+	HiddenCards int `json:"hidden_cards,omitempty"` // queued cards not in Cards: past MaxCardsPerPane or over the byte budget (Trim)
+
 	ProjectID       string `json:"project_id,omitempty"`
 	ProjectName     string `json:"project_name,omitempty"`
 	MemoryEntries   int    `json:"memory_entries"`   // project + dot entries for this project
@@ -132,7 +134,12 @@ type LibraryDot struct {
 	Rel         string   `json:"rel,omitempty"`          // project dots: the file from the repository root (for display)
 	TrustedAt   string   `json:"trusted_at,omitempty"`   // project dots: where trust was given when it was another checkout ("~"-abbreviated); "" = here
 	Root        string   `json:"root,omitempty"`         // project dots: the checkout this entry is from; a project dot is (Root, Slug) (ruling P9-R13)
-	Purpose     string   `json:"purpose,omitempty"`      // project dots: the purpose of the trusted copy that runs; "" while untrusted
+	// Purpose is display text: the start of the trusted copy's purpose (what
+	// runs), "" while untrusted. Snapshots cut it to a bounded length (Trim),
+	// so it is not the full trusted copy; PurposeCut says it was cut, and a
+	// screen showing it must say so (ruling P10-R3).
+	Purpose    string `json:"purpose,omitempty"`
+	PurposeCut bool   `json:"purpose_cut,omitempty"`
 }
 
 type Invalid struct {

@@ -2,6 +2,7 @@ package view
 
 import (
 	"encoding/json"
+	"strconv"
 	"unicode/utf8"
 )
 
@@ -19,24 +20,34 @@ const (
 	minLibraryPurpose = 160
 )
 
-// Trim bounds s for broadcasting. Each pane keeps its first MaxCardsPerPane
-// cards in queue order (most severe, then oldest) and its newest
-// MaxFeedPerPane feed entries, and each library purpose is cut to 1 KB.
-// While the JSON is still over maxBytes, feeds shrink to 5 entries, library
-// purposes to 160 bytes, then the pane with the most cards drops its last
-// card, one at a time, down to one card per pane.
+// Trim bounds s for broadcasting (see TrimSize).
+func Trim(s Snapshot, maxBytes int) Snapshot {
+	out, _ := TrimSize(s, maxBytes)
+	return out
+}
+
+// TrimSize bounds s for broadcasting and returns the result with its JSON
+// size, which is over maxBytes only at the floors below.
+//
+// Each pane keeps its first MaxCardsPerPane cards in queue order (most
+// severe, then oldest) and its newest MaxFeedPerPane feed entries, and each
+// library purpose is cut to 1 KB. While the JSON is still over maxBytes,
+// feeds shrink to 5 entries, library purposes to 160 bytes, then the pane
+// with the most cards drops its last card, one at a time, down to one card
+// per pane. Pane.HiddenCards counts the cards a pane doesn't show.
 //
 // Only display text is shortened, never what the UIs gate actions on. A card
 // is shown whole or not at all: the UIs act on cards they show, so no card
 // text is ever cut, and a kept digest keeps every part (SendCardsSeen checks
 // the part count the developer saw). Library entries are never dropped, and
-// only their purpose is cut: trust state, hashes, paths and capability lists
-// stay as built. Trim does not modify s.
-func Trim(s Snapshot, maxBytes int) Snapshot {
+// only their purpose is cut, marked PurposeCut (ruling P10-R3): trust state,
+// hashes, paths and capability lists stay as built. s is not modified.
+func TrimSize(s Snapshot, maxBytes int) (Snapshot, int) {
 	out := s
 	out.Panes = make([]Pane, len(s.Panes))
 	for i, p := range s.Panes {
 		if len(p.Cards) > MaxCardsPerPane {
+			p.HiddenCards += len(p.Cards) - MaxCardsPerPane
 			p.Cards = p.Cards[:MaxCardsPerPane]
 		}
 		if len(p.Feed) > MaxFeedPerPane {
@@ -45,8 +56,9 @@ func Trim(s Snapshot, maxBytes int) Snapshot {
 		out.Panes[i] = p
 	}
 	out.Library = cutPurposes(s.Library, maxLibraryPurpose)
-	if size(out) <= maxBytes {
-		return out
+	total := size(out)
+	if total <= maxBytes {
+		return out, total
 	}
 	for i := range out.Panes {
 		if f := out.Panes[i].Feed; len(f) > minFeedPerPane {
@@ -54,8 +66,9 @@ func Trim(s Snapshot, maxBytes int) Snapshot {
 		}
 	}
 	out.Library = cutPurposes(s.Library, minLibraryPurpose)
-	// Measure once, then subtract each dropped card (and its comma).
-	for total := size(out); total > maxBytes; {
+	// Measure once, then account for each dropped card (and its comma) and
+	// the growing hidden count.
+	for total = size(out); total > maxBytes; {
 		most := -1
 		for i, p := range out.Panes {
 			if len(p.Cards) > 1 && (most < 0 || len(p.Cards) > len(out.Panes[most].Cards)) {
@@ -65,15 +78,27 @@ func Trim(s Snapshot, maxBytes int) Snapshot {
 		if most < 0 {
 			break // one card per pane is the floor
 		}
-		c := out.Panes[most].Cards
-		total -= size(c[len(c)-1]) + 1
-		out.Panes[most].Cards = c[:len(c)-1]
+		p := &out.Panes[most]
+		total -= size(p.Cards[len(p.Cards)-1]) + 1
+		total += hiddenLen(p.HiddenCards+1) - hiddenLen(p.HiddenCards)
+		p.Cards = p.Cards[:len(p.Cards)-1]
+		p.HiddenCards++
 	}
-	return out
+	return out, total
+}
+
+// hiddenLen is the JSON length of a pane's hidden_cards field (with its
+// comma): omitted when 0.
+func hiddenLen(n int) int {
+	if n == 0 {
+		return 0
+	}
+	return len(`,"hidden_cards":`) + len(strconv.Itoa(n))
 }
 
 // cutPurposes copies lib with each purpose cut to at most n bytes (plus an
-// ellipsis), on a rune boundary.
+// ellipsis) on a rune boundary, and marked cut. A cut keeps at least the
+// first rune: an empty purpose means untrusted.
 func cutPurposes(lib []LibraryDot, n int) []LibraryDot {
 	if lib == nil {
 		return nil
@@ -85,7 +110,10 @@ func cutPurposes(lib []LibraryDot, n int) []LibraryDot {
 			for j > 0 && !utf8.RuneStart(d.Purpose[j]) {
 				j--
 			}
-			d.Purpose = d.Purpose[:j] + "…"
+			if j == 0 {
+				_, j = utf8.DecodeRuneInString(d.Purpose)
+			}
+			d.Purpose, d.PurposeCut = d.Purpose[:j]+"…", true
 		}
 		out[i] = d
 	}

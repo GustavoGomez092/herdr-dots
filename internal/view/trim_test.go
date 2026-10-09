@@ -99,8 +99,8 @@ func projectLibrary(roots int) []LibraryDot {
 }
 
 // checkLibrary: every entry is kept, every field but Purpose is untouched,
-// and each purpose is a valid UTF-8 prefix of the original within limit
-// bytes plus the ellipsis.
+// each purpose is a valid UTF-8 prefix of the original within limit bytes
+// plus the ellipsis, and each cut one is marked cut (ruling P10-R3).
 func checkLibrary(t *testing.T, got, want []LibraryDot, limit int) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -112,7 +112,10 @@ func checkLibrary(t *testing.T, got, want []LibraryDot, limit int) {
 			!strings.HasPrefix(w.Purpose, strings.TrimSuffix(g.Purpose, "…")) || !strings.HasPrefix(g.Purpose, "Review the diff.") {
 			t.Fatalf("purpose of %s: %d bytes, valid %v", g.Slug, len(g.Purpose), utf8.ValidString(g.Purpose))
 		}
-		g.Purpose, w.Purpose = "", ""
+		if !g.PurposeCut {
+			t.Fatalf("purpose of %s was cut but not marked cut", g.Slug)
+		}
+		g.Purpose, w.Purpose, g.PurposeCut = "", "", false
 		if !reflect.DeepEqual(g, w) {
 			t.Fatalf("a field that gates actions changed:\n got %+v\nwant %+v", g, w)
 		}
@@ -174,5 +177,61 @@ func TestTrimKeepsDigestPartsAndPatchFields(t *testing.T) {
 		if !reflect.DeepEqual(c, p.Cards[i]) {
 			t.Fatalf("card %s changed", c.ID)
 		}
+	}
+}
+
+// Ruling P10-R3: a cut purpose is marked cut, so no screen presents it as the
+// whole trusted copy; an uncut one is not; and a purpose is never cut to ""
+// ("" means untrusted).
+func TestTrimMarksCutPurposesAndNeverEmptiesOne(t *testing.T) {
+	lib := []LibraryDot{
+		{Slug: "long", Origin: "project", Trusted: true, Purpose: strings.Repeat("p", 5000)},
+		{Slug: "short", Origin: "project", Trusted: true, Purpose: "Be helpful."},
+		{Slug: "untrusted", Origin: "project"},
+	}
+	got := Trim(Snapshot{Library: lib}, MaxSnapshotBytes).Library
+	if !got[0].PurposeCut || got[0].Purpose == "" || got[1].PurposeCut || got[1].Purpose != "Be helpful." || got[2].PurposeCut || got[2].Purpose != "" {
+		t.Fatalf("marks: %+v", got)
+	}
+	if lib[0].PurposeCut {
+		t.Fatal("Trim modified its input")
+	}
+	// Even a limit inside the first rune keeps that rune.
+	if c := cutPurposes([]LibraryDot{{Purpose: "𝄞𝄞"}}, 2); c[0].Purpose != "𝄞…" || !c[0].PurposeCut {
+		t.Fatalf("cut to %q", c[0].Purpose)
+	}
+}
+
+// HiddenCards counts the cards a pane doesn't show: past MaxCardsPerPane and
+// dropped for the byte budget. The UIs say how many are hidden.
+func TestTrimCountsHiddenCards(t *testing.T) {
+	got := Trim(Snapshot{Panes: []Pane{bigPane("w1:p1", 150, 0, 10), bigPane("w1:p2", 3, 0, 10)}}, MaxSnapshotBytes)
+	if got.Panes[0].HiddenCards != 50 || got.Panes[1].HiddenCards != 0 {
+		t.Fatalf("hidden: %d and %d", got.Panes[0].HiddenCards, got.Panes[1].HiddenCards)
+	}
+	s := Snapshot{Panes: []Pane{bigPane("w1:p1", 120, 50, 6000), bigPane("w1:p2", 100, 50, 6000)}}
+	got, n := TrimSize(s, MaxSnapshotBytes)
+	if n != jsonSize(t, got) || n > MaxSnapshotBytes {
+		t.Fatalf("TrimSize says %d bytes, the JSON is %d", n, jsonSize(t, got))
+	}
+	for i, p := range got.Panes {
+		if p.HiddenCards == 0 || p.HiddenCards != len(s.Panes[i].Cards)-len(p.Cards) {
+			t.Fatalf("pane %s: %d hidden, %d of %d shown", p.PaneID, p.HiddenCards, len(p.Cards), len(s.Panes[i].Cards))
+		}
+	}
+}
+
+// The library floor: an entry carries trust state, so none is ever dropped,
+// even when the identifiers alone are over budget. TrimSize reports the
+// overflow so the engine can log it.
+func TestTrimNeverDropsALibraryEntry(t *testing.T) {
+	s := Snapshot{Library: projectLibrary(32), Panes: []Pane{bigPane("w1:p1", 10, 50, 10)}}
+	got, n := TrimSize(s, MaxSnapshotBytes)
+	checkLibrary(t, got.Library, s.Library, minLibraryPurpose)
+	if n <= MaxSnapshotBytes || n != jsonSize(t, got) {
+		t.Fatalf("TrimSize says %d bytes, the JSON is %d; the library alone is over budget", n, jsonSize(t, got))
+	}
+	if len(got.Panes[0].Cards) != 1 || got.Panes[0].HiddenCards != 9 {
+		t.Fatalf("cards: %d shown, %d hidden", len(got.Panes[0].Cards), got.Panes[0].HiddenCards)
 	}
 }

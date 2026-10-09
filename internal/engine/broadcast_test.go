@@ -1,9 +1,15 @@
 package engine
 
 import (
+	"fmt"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"herdr-dots/internal/queue"
+	"herdr-dots/internal/view"
 )
 
 // A burst of 1,000 changes in one second reaches watchers as at most 11
@@ -54,18 +60,48 @@ func TestFirstBroadcastAfterAQuietGapIsImmediate(t *testing.T) {
 	for len(ch) > 0 {
 		<-ch
 	}
-	start := time.Now()
 	r.e.TogglePauseAll()
+	// Sent at once means sent before broadcast returns: the snapshot is
+	// already in the channel. No clock bound, so a loaded host under -race
+	// can't make this flaky; a coalesced (delayed) send would not be there.
 	select {
 	case s := <-ch:
 		if !s.PausedAll {
 			t.Fatal("snapshot without the change")
 		}
-		if d := time.Since(start); d > minBroadcastGap/2 {
-			t.Fatalf("first broadcast took %v", d)
+	default:
+		t.Fatal("the first broadcast after a quiet gap was not sent at once")
+	}
+}
+
+// A snapshot still over budget after trimming (the floors: one card per pane,
+// every library entry) is logged once per session, not on every broadcast.
+func TestAnOverBudgetSnapshotIsLoggedOncePerSession(t *testing.T) {
+	var mu sync.Mutex
+	var over int
+	r := newRigWith(t, func(d *Deps) {
+		d.Logf = func(f string, a ...any) {
+			if strings.Contains(fmt.Sprintf(f, a...), "over the snapshot budget") {
+				mu.Lock()
+				over++
+				mu.Unlock()
+			}
 		}
-	case <-time.After(time.Second):
-		t.Fatal("no broadcast")
+	})
+	r.e.Snapshot()
+	if _, err := r.q.Add(queue.Card{PaneID: "w9:p9", Dot: "security", Severity: "critical", Mode: "queue",
+		Body: strings.Repeat("x", view.MaxSnapshotBytes)}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if p, ok := r.e.Snapshot().Pane("w9:p9"); !ok || len(p.Cards) != 1 {
+			t.Fatal("the one card is the floor: it is shown")
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if over != 1 {
+		t.Fatalf("logged %d times; want once per session", over)
 	}
 }
 

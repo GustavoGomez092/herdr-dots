@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -26,7 +27,32 @@ const (
 	soakMaxRSS     = 80 << 20 // peak resident memory
 	soakDots       = 12
 	soakPanes      = 4
+
+	soakBurstTurns = 30 // turns burst into one pane
+	soakBurstGap   = 200 * time.Millisecond
+	soakBurstEvery = 5 * time.Minute // after the first, at the start
+	soakSettle     = 3 * time.Second // after a burst's last turn, for its runs to finish
 )
+
+// soakBody pads every finding, so a pane with MaxCardsPerPane cards is over
+// the snapshot byte budget and Trim's byte path runs, not only its card cap.
+var soakBody = strings.Repeat("The error path returns before the lock is released. ", 45)
+
+// soakBackend flags something critical on every odd call, for as long as the
+// soak runs: half the runs make a card.
+type soakBackend struct{ calls, flagged atomic.Int64 }
+
+func (b *soakBackend) Kind() string                { return "claude-cli" }
+func (b *soakBackend) Check(context.Context) error { return nil }
+func (b *soakBackend) Run(context.Context, backend.Request) (backend.Result, error) {
+	n := b.calls.Add(1)
+	v := backend.Verdict{Relevant: false, Severity: "info"}
+	if n%2 == 1 {
+		b.flagged.Add(1)
+		v = backend.Verdict{Relevant: true, Severity: "critical", Message: fmt.Sprintf("Finding %d. %s", n, soakBody)}
+	}
+	return backend.Result{Verdict: v, InputTokens: 10, OutputTokens: 5}, nil
+}
 
 func soakEnv(name string, def time.Duration) time.Duration {
 	if v := os.Getenv(name); v != "" {
@@ -49,10 +75,13 @@ func peakRSS() int64 {
 	return int64(ru.Maxrss) * rssUnit
 }
 
-// TestSoak runs 12 scripted dots on 4 panes: turns end every few seconds on
-// a random pane, half the runs flag something, and a simulated developer
-// sends or dismisses cards every minute. Then the panes go quiet and the
-// idle engine's CPU is measured.
+// TestSoak runs 12 scripted dots on 4 panes. A turn ends every 3 seconds,
+// round robin over the panes, and half the runs flag something (soakBackend).
+// At the start and every 5 minutes, 30 turns burst into one pane, 200 ms
+// apart: its queue passes MaxCardsPerPane and the byte budget, so Trim and
+// broadcast coalescing both run, and the broadcast rate is measured over the
+// burst. A simulated developer sends or dismisses every pending card each
+// minute. Then the panes go quiet and the idle engine's CPU is measured.
 //
 //	SOAK_DURATION=8h SOAK_IDLE=10m go test -tags soak -run TestSoak -timeout 9h -v ./internal/engine/
 func TestSoak(t *testing.T) {
@@ -66,12 +95,13 @@ func TestSoak(t *testing.T) {
 		ds = append(ds, d)
 		slugs = append(slugs, dots.Slugify(d.Name))
 	}
+	be := &soakBackend{}
 	r := newRigWith(t, func(d *Deps) {
 		d.Config.SessionBudgetCalls = 1 << 30
 		d.Config.MaxParallelRuns = 3
 		d.PollInterval = time.Second
+		d.Backend = func(string) (backend.Backend, error) { return be, nil }
 	}, ds...)
-	r.be.set(critical, backend.Verdict{Relevant: false, Severity: "info"})
 	panes := make([]string, soakPanes)
 	for i := range panes {
 		panes[i] = fmt.Sprintf("w1:p%d", i+1)
@@ -84,29 +114,72 @@ func TestSoak(t *testing.T) {
 		}
 	}
 	ch, stop := r.e.Watch()
-	defer stop()
-	var sent, biggest atomic.Int64
+	var sent, biggest, mostCards, mostHidden atomic.Int64
+	quit, readerDone := make(chan struct{}), make(chan struct{})
 	go func() {
-		for s := range ch {
-			sent.Add(1)
-			if b, _ := json.Marshal(s); int64(len(b)) > biggest.Load() {
-				biggest.Store(int64(len(b)))
+		defer close(readerDone)
+		for {
+			select {
+			case s := <-ch:
+				sent.Add(1)
+				if b, _ := json.Marshal(s); int64(len(b)) > biggest.Load() {
+					biggest.Store(int64(len(b)))
+				}
+				for _, p := range s.Panes {
+					if n := int64(len(p.Cards) + p.HiddenCards); n > mostCards.Load() {
+						mostCards.Store(n)
+					}
+					if n := int64(p.HiddenCards); n > mostHidden.Load() {
+						mostHidden.Store(n)
+					}
+				}
+			case <-quit:
+				return
 			}
 		}
 	}()
+	defer func() { stop(); close(quit); <-readerDone }()
 	startGoroutines := runtime.NumGoroutine()
+
+	turns := 0
+	turnOn := func(i int) {
+		r.mu.Lock()
+		rd := r.readers[fmt.Sprintf("s%d", i+1)]
+		r.mu.Unlock()
+		rd.add(transcript.Turn{User: fmt.Sprintf("change %d", turns), Assistant: "done"})
+		r.srv.Push(panes[i], herdr.StatusWorking)
+		r.srv.Push(panes[i], herdr.StatusIdle)
+		turns++
+	}
+	var bursts int
+	var worstRate float64 // broadcasts a second, the highest of any burst
+	burst := func() {
+		cards0, sent0, start := be.flagged.Load(), sent.Load(), time.Now()
+		for i := 0; i < soakBurstTurns; i++ {
+			turnOn(0)
+			time.Sleep(soakBurstGap)
+		}
+		time.Sleep(soakSettle)
+		window, n := time.Since(start), sent.Load()-sent0
+		rate := float64(n) / window.Seconds()
+		worstRate = max(worstRate, rate)
+		bursts++
+		t.Logf("burst %d: %d cards made, %d broadcasts in %v (%.1f a second)", bursts, be.flagged.Load()-cards0, n, window.Round(time.Millisecond), rate)
+		if limit := int64(window/minBroadcastGap) + 1; n > limit {
+			t.Errorf("burst %d: %d broadcasts in %v; at most 10 a second allows %d", bursts, n, window, limit)
+		}
+	}
 
 	t.Logf("busy phase %v, then idle %v", busy, idle)
 	end := time.Now().Add(busy)
 	nextTidy := time.Now().Add(time.Minute)
-	for turn := 0; time.Now().Before(end); turn++ {
-		p := panes[turn%soakPanes]
-		r.mu.Lock()
-		rd := r.readers[fmt.Sprintf("s%d", turn%soakPanes+1)]
-		r.mu.Unlock()
-		rd.add(transcript.Turn{User: fmt.Sprintf("change %d", turn), Assistant: "done"})
-		r.srv.Push(p, herdr.StatusWorking)
-		r.srv.Push(p, herdr.StatusIdle)
+	nextBurst := time.Now()
+	for i := 0; time.Now().Before(end); i++ {
+		if time.Now().After(nextBurst) {
+			burst()
+			nextBurst = time.Now().Add(soakBurstEvery)
+		}
+		turnOn(i % soakPanes)
 		if time.Now().After(nextTidy) { // the developer works through the queue
 			for i, c := range r.q.All() {
 				if c.Status == "pending" {
@@ -129,9 +202,13 @@ func TestSoak(t *testing.T) {
 	rss := peakRSS()
 	goroutines := runtime.NumGoroutine()
 	snap, _ := json.Marshal(r.e.Snapshot())
-	t.Logf("runs %d, broadcasts %d, biggest snapshot %d B, final snapshot %d B, peak RSS %.1f MB, idle CPU %.3f%%, goroutines %d -> %d",
-		r.be.n(), sent.Load(), biggest.Load(), len(snap), float64(rss)/(1<<20), idleCPU*100, startGoroutines, goroutines)
+	t.Logf("runs %d, cards %d, most cards on a pane %d (%d hidden at most), broadcasts %d, biggest snapshot %d B, final snapshot %d B, worst burst %.1f broadcasts a second, peak RSS %.1f MB, idle CPU %.3f%%, goroutines %d -> %d",
+		be.calls.Load(), be.flagged.Load(), mostCards.Load(), mostHidden.Load(), sent.Load(), biggest.Load(), len(snap), worstRate,
+		float64(rss)/(1<<20), idleCPU*100, startGoroutines, goroutines)
 
+	if mostHidden.Load() == 0 || mostCards.Load() <= view.MaxCardsPerPane {
+		t.Errorf("no pane passed %d cards (most %d, hidden %d): the soak never exercised Trim", view.MaxCardsPerPane, mostCards.Load(), mostHidden.Load())
+	}
 	if idleCPU > soakMaxIdleCPU {
 		t.Errorf("idle CPU %.3f%% is over the 1%% budget", idleCPU*100)
 	}

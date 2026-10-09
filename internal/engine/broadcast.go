@@ -2,6 +2,7 @@ package engine
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"herdr-dots/internal/view"
@@ -20,12 +21,21 @@ type throttle struct {
 	seq     uint64    // sends started: each sendSnapshot takes the next number before it builds
 	sent    uint64    // the newest send handed to the watchers
 
+	overLogged atomic.Bool // a snapshot over budget after trimming was logged (once per session; not under mu)
+
 	built func() // tests only (set before Start): called between building and handing over a snapshot
 }
 
 // Snapshot is the engine state for the UIs, trimmed to the snapshot budget.
+// One still over it (Trim keeps every library entry and one card per pane)
+// is logged once per session.
 func (e *Engine) Snapshot() view.Snapshot {
-	return view.Trim(e.buildSnapshot(), view.MaxSnapshotBytes)
+	s, n := view.TrimSize(e.buildSnapshot(), view.MaxSnapshotBytes)
+	if n > view.MaxSnapshotBytes && e.bc.overLogged.CompareAndSwap(false, true) {
+		e.d.Logf("snapshot: %d bytes after trimming, over the snapshot budget of %d (every library entry and one card per pane are kept); logged once per session",
+			n, view.MaxSnapshotBytes)
+	}
+	return s
 }
 
 // broadcast tells every watcher about a change. The first change after a
