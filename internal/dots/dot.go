@@ -53,6 +53,8 @@ type Dot struct {
 	Context  ContextSpec  `toml:"context"`
 	Budget   BudgetSpec   `toml:"budget"`
 	Memory   MemorySpec   `toml:"memory"`
+
+	Capabilities CapabilitySpec `toml:"capabilities"`
 }
 
 type BackendSpec struct {
@@ -111,6 +113,8 @@ func New(name string) Dot {
 		Context:  ContextSpec{Turns: 3, RepoRead: true, Verbosity: "normal"},
 		Budget:   BudgetSpec{MaxCallsPerSession: 40},
 		Memory:   DefaultMemory(),
+
+		Capabilities: DefaultCapabilities(),
 	}
 }
 
@@ -180,6 +184,7 @@ func (d Dot) Validate() error {
 		add("budget max_calls_per_session must be >= 1")
 	}
 	errs = append(errs, d.Memory.validate()...)
+	errs = append(errs, d.Capabilities.validate(d.Backend.Kind)...)
 	errs = append(errs, validateAPI(d)...)
 	return errors.Join(errs...)
 }

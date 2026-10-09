@@ -26,6 +26,7 @@ const (
 	StatusSent      Status = "sent"      // delivered (terminal)
 	StatusDismissed Status = "dismissed" // thrown away (terminal)
 	StatusOrphaned  Status = "orphaned"  // its main pane closed; viewable, dismissable
+	StatusApplied   Status = "applied"   // a patch card applied to the working tree (terminal)
 )
 
 var (
@@ -34,7 +35,7 @@ var (
 )
 
 var allowed = map[Status][]Status{
-	StatusPending:  {StatusSent, StatusDismissed, StatusAuto, StatusOrphaned},
+	StatusPending:  {StatusSent, StatusDismissed, StatusAuto, StatusOrphaned, StatusApplied},
 	StatusAuto:     {StatusSent, StatusPending, StatusDismissed, StatusOrphaned},
 	StatusOrphaned: {StatusDismissed},
 }
@@ -60,10 +61,22 @@ type Card struct {
 	Question string     `json:"question,omitempty"` // the council question ("" = review the recent turns)
 	Parts    []CardPart `json:"parts,omitempty"`    // every member's own answer, in roster order
 	Note     string     `json:"note,omitempty"`     // shown under the card, never sent ("merged without chair …")
+
+	// Patch cards (Kind == KindPatch) only. A patch card is never inject or
+	// auto-delivered without approval: it is created pending in queue mode.
+	PatchID    string   `json:"patch_id,omitempty"`    // the draft id: patches/<id>.patch and <id>.json
+	DiffStat   string   `json:"diff_stat,omitempty"`   // "3 files +42 −7"
+	PatchFlags []string `json:"patch_flags,omitempty"` // binary, mode, symlink, symlink-kept, submodule-skipped, conflicts
 }
 
 // KindCouncil marks a council card: one digest merged from several dots.
 const KindCouncil = "council"
+
+// KindPatch marks a patch card: a write-capable dot's drafted fix (Phase 7).
+const KindPatch = "patch"
+
+// FlagConflicts marks a patch card applied with conflict markers left in files.
+const FlagConflicts = "conflicts"
 
 // CardPart is one council member's answer on a council card.
 type CardPart struct {
@@ -111,7 +124,7 @@ func Open(path string) (*Store, error) {
 func (s *Store) save() error {
 	var terminal, live []Card
 	for _, c := range s.cards {
-		if c.Status == StatusSent || c.Status == StatusDismissed {
+		if c.Status == StatusSent || c.Status == StatusDismissed || c.Status == StatusApplied {
 			terminal = append(terminal, c)
 		} else {
 			live = append(live, c)
@@ -248,6 +261,23 @@ func (s *Store) Edit(id, body string) error {
 			return err
 		}
 		c.Body = body
+		return nil
+	})
+}
+
+// SetStatusNote moves a card to st like SetStatus and, in the same write,
+// sets its note and adds flags (for a patch card applied with conflicts).
+func (s *Store) SetStatusNote(id string, st Status, note string, flags ...string) error {
+	return s.mutate(id, func(c *Card) error {
+		if !slices.Contains(allowed[c.Status], st) {
+			return fmt.Errorf("%w: %s → %s", ErrTransition, c.Status, st)
+		}
+		c.Status, c.Note = st, note
+		for _, f := range flags {
+			if !slices.Contains(c.PatchFlags, f) {
+				c.PatchFlags = append(c.PatchFlags, f)
+			}
+		}
 		return nil
 	})
 }

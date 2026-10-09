@@ -2,6 +2,8 @@
 package view
 
 import (
+	"time"
+
 	"herdr-dots/internal/council"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
@@ -60,6 +62,23 @@ type Pane struct {
 
 	Council          *CouncilState      `json:"council,omitempty"`           // a council in progress
 	CouncilPreflight *council.Preflight `json:"council_preflight,omitempty"` // the last preflight, for the popup
+
+	Drafts []DraftState `json:"drafts,omitempty"` // drafts running for this pane (Phase 7)
+}
+
+// Draft phases (DraftState.Phase).
+const (
+	DraftSnapshot   = "snapshot"   // snapshotting the working tree and checking out the worktree
+	DraftRunning    = "running"    // the dot is editing its isolated copy
+	DraftValidating = "validating" // capturing and validating the patch
+)
+
+// DraftState is one draft in progress.
+type DraftState struct {
+	ID        string    `json:"id"`
+	Slug      string    `json:"slug"`
+	Phase     string    `json:"phase"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 // Council phases (CouncilState.Phase).
@@ -86,6 +105,9 @@ type LibraryDot struct {
 	Backend string `json:"backend"`
 	Model   string `json:"model"`
 	Mode    string `json:"mode"`
+
+	Write               bool `json:"write,omitempty"`                 // [capabilities] write (Phase 7)
+	WriteTimeoutSeconds int  `json:"write_timeout_seconds,omitempty"` // shown in the draft confirm
 }
 
 type Invalid struct {
@@ -100,6 +122,7 @@ type Snapshot struct {
 	Invalid       []Invalid    `json:"invalid"`
 	InjectEnabled bool         `json:"inject_enabled"`
 	PausedAll     bool         `json:"paused_all"`
+	WriteEnabled  bool         `json:"write_enabled"` // config write_enabled (Phase 7)
 }
 
 func (s Snapshot) Pane(id string) (Pane, bool) {

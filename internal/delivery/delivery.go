@@ -4,6 +4,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"herdr-dots/internal/herdr"
@@ -12,6 +13,9 @@ import (
 )
 
 const MaxInjectChars = 2000
+
+// ErrPatchInject: patch cards are never injected; they need the user's approval.
+var ErrPatchInject = errors.New("patch cards are never injected")
 
 type Target interface {
 	PaneGet(ctx context.Context, paneID string) (herdr.PaneInfo, error)
@@ -81,6 +85,13 @@ func TruncateRunes(s string, n int) string {
 func Send(ctx context.Context, t Target, paneID string, cards []queue.Card, inject bool) (Gate, error) {
 	if len(cards) == 0 {
 		return Now, nil
+	}
+	if inject {
+		for _, c := range cards {
+			if c.Kind == queue.KindPatch {
+				return Busy, ErrPatchInject
+			}
+		}
 	}
 	p, err := t.PaneGet(ctx, paneID)
 	if err != nil {
