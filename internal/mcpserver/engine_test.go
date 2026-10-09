@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/platform/platformtest"
 	"herdr-dots/internal/view"
 )
 
@@ -31,19 +30,16 @@ func (s stubEngine) Query(_ context.Context, cmd string, raw json.RawMessage) (a
 	return ipc.DotsResult{ProjectID: testPID, Dots: []ipc.DotInfo{{Slug: "security"}}}, nil
 }
 
+// shortSock is a fresh engine endpoint: a short unix socket path, or a named
+// pipe on Windows.
 func shortSock(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "mcpe")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return filepath.Join(dir, "e.sock")
+	return platformtest.Endpoint(t)
 }
 
 func startStub(t *testing.T, path string) context.CancelFunc {
 	t.Helper()
-	ln, err := net.Listen("unix", path)
+	ln, err := ipc.Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"herdr-dots/internal/platform"
 )
 
 // CodexMCPServer is the Dots MCP server's name in Codex's config.toml
@@ -40,15 +42,17 @@ func codexMCPOff(env []string) []string {
 }
 
 // codexConfigPath is the config.toml a codex child with env reads:
-// $CODEX_HOME/config.toml, else $HOME/.codex/config.toml ("" when neither is set).
+// $CODEX_HOME/config.toml, else platform.CodexConfig of the home variable
+// (HOME; USERPROFILE on Windows), "" when neither is set. Names compare in
+// platform.EnvKey form, so case-insensitively on Windows.
 func codexConfigPath(env []string) string {
 	var home, codexHome string
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
-		switch k {
-		case "CODEX_HOME":
+		switch platform.EnvKey(k) {
+		case platform.EnvKey("CODEX_HOME"):
 			codexHome = v
-		case "HOME":
+		case platform.EnvKey(platform.HomeEnv):
 			home = v
 		}
 	}
@@ -56,7 +60,7 @@ func codexConfigPath(env []string) string {
 	case codexHome != "":
 		return filepath.Join(codexHome, "config.toml")
 	case home != "":
-		return filepath.Join(home, ".codex", "config.toml")
+		return platform.CodexConfig(home)
 	}
 	return ""
 }

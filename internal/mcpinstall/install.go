@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/platform"
 )
 
 type Client string
@@ -61,20 +62,22 @@ func (e Env) get(k string) string {
 	return e.Getenv(k)
 }
 
-// ClaudeConfigPath is the file `claude mcp add --scope user` edits.
+// ClaudeConfigPath is the file `claude mcp add --scope user` edits
+// (platform.ClaudeUserConfig under CLAUDE_CONFIG_DIR or the home directory).
 func (e Env) ClaudeConfigPath() string {
 	if d := e.get("CLAUDE_CONFIG_DIR"); d != "" {
-		return filepath.Join(d, ".claude.json")
+		return platform.ClaudeUserConfig(d)
 	}
-	return filepath.Join(e.Home, ".claude.json")
+	return platform.ClaudeUserConfig(e.Home)
 }
 
-// CodexConfigPath is Codex's user config.
+// CodexConfigPath is Codex's user config: CODEX_HOME/config.toml, else
+// platform.CodexConfig (~/.codex/config.toml, %USERPROFILE%\.codex on Windows).
 func (e Env) CodexConfigPath() string {
 	if d := e.get("CODEX_HOME"); d != "" {
 		return filepath.Join(d, "config.toml")
 	}
-	return filepath.Join(e.Home, ".codex", "config.toml")
+	return platform.CodexConfig(e.Home)
 }
 
 // Command is one CLI call; a MayFail command's failure is ignored (and its

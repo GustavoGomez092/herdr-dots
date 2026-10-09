@@ -10,7 +10,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -502,8 +501,11 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 	if fi, err := os.Lstat(gitDir); err != nil || !fi.IsDir() {
 		return nil, errors.New("not a git work tree root")
 	}
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=", "-c", "core.hooksPath="+platform.DevNull,
-		"--git-dir="+gitDir, "--work-tree="+root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	cmd, err := platform.CommandContext(ctx, "git", []string{"-c", "core.fsmonitor=", "-c", "core.hooksPath=" + platform.DevNull,
+		"--git-dir=" + gitDir, "--work-tree=" + root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"})
+	if err != nil {
+		return nil, err
+	}
 	cmd.Dir = root
 	cmd.Env = gitEnv(os.Environ())
 	cmd.WaitDelay = 500 * time.Millisecond

@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"herdr-dots/internal/mcpinstall"
 	"herdr-dots/internal/paths"
+	"herdr-dots/internal/platform"
 )
 
 // setupIO is everything setup-mcp touches, so tests can fake it.
@@ -39,11 +39,18 @@ func runSetupMCP(args []string) error {
 	home, _ := os.UserHomeDir()
 	return setupMCP(args, setupIO{
 		in: os.Stdin, out: os.Stdout,
+		// platform.Command runs an npm claude.cmd/codex.cmd shim through
+		// cmd.exe with every argument quoted, and refuses a path cmd.exe
+		// can't carry (a %, " or !) before anything runs.
 		run: func(a []string) (string, error) {
-			out, err := exec.Command(a[0], a[1:]...).CombinedOutput()
+			cmd, err := platform.Command(a[0], a[1:])
+			if err != nil {
+				return "", err
+			}
+			out, err := cmd.CombinedOutput()
 			return string(out), err
 		},
-		lookPath: exec.LookPath,
+		lookPath: platform.LookPath,
 		env:      mcpinstall.Env{Getenv: os.Getenv, Home: home},
 		now:      time.Now,
 		exe:      exe,
