@@ -23,6 +23,14 @@ const (
 // OutcomeCouncil: a council card was created (the entry's Dot is "council").
 const OutcomeCouncil = "council"
 
+// Proactive run outcomes (Phase 8). The entry's Turn is 0 and its Detail
+// starts with the run's label ("research: …", "commit a1b2c3d: …").
+const (
+	OutcomeResearch  = "research"
+	OutcomeScheduled = "scheduled"
+	OutcomeCommit    = "commit"
+)
+
 // Draft outcomes (Phase 7): a patch card was created (detail: the diffstat),
 // and a patch was applied to the working tree (detail: conflicts, if any).
 const (
