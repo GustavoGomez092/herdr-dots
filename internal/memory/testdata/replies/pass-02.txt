@@ -1,0 +1,1 @@
+{"remember":[{"op":"add","scope":"project","kind":"convention","text":"All input validation must go through zod schemas located in web/src/schemas (team rule), e.g. signup.ts used by web/src/pages/signup.tsx.","paths":["web/src/schemas/**","web/src/pages/**"]}]}

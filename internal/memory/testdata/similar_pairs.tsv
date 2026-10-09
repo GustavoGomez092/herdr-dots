@@ -1,0 +1,41 @@
+label	message	remembered
+same	The JWT is stored in localStorage, which any XSS payload can read; move it to an httpOnly cookie.	JWT stored in localStorage is readable by any XSS payload; move it to an httpOnly cookie.
+same	Rate limiting is missing on /login. Add a per-IP token bucket and return 429 with Retry-After.	Rate limiting is missing on /login.
+same	CSRF protection is absent on the /admin form posts.	CSRF tokens are absent on /admin form posts.
+same	The users query concatenates the email into SQL; use a parameterized query.	The users query concatenates email into SQL: use a parameterized query instead.
+same	Passwords are hashed with MD5. Switch to bcrypt or argon2id.	Passwords are hashed with MD5; switch to bcrypt or argon2id.
+same	The hero button has no visible focus state for keyboard users.	Hero button lacks a visible focus state for keyboard users.
+same	Error messages leak stack traces to the client in production.	Stack traces leak to the client in production error messages.
+same	The upload endpoint accepts any file type; validate the MIME type and extension.	Upload endpoint accepts any file type: validate MIME type and extension.
+same	Missing alt text on the product images in the gallery.	Product images in the gallery are missing alt text.
+same	The session cookie is missing the Secure and SameSite flags.	Session cookie lacks Secure and SameSite flags.
+same	API keys are logged in plain text by the request logger.	The request logger writes API keys in plain text.
+same	The retry loop has no backoff and will hammer the payment API.	Retry loop has no backoff and hammers the payment API.
+same	Headline uses title case; the style guide says sentence case.	Headline uses title case but the style guide requires sentence case.
+same	No index on orders.customer_id, so the dashboard query does a full table scan.	Missing index on orders.customer_id makes the dashboard query scan the full table.
+same	The webhook handler doesn't verify the Stripe signature.	Webhook handler does not verify the Stripe signature header.
+different	Rate limiting on /login uses a fixed window; switch to a sliding window to stop bursts at the boundary.	Rate limiting is missing on /login.
+different	The JWT expiry is 30 days; shorten it to 15 minutes and add refresh tokens.	JWT stored in localStorage is readable by any XSS payload; move it to an httpOnly cookie.
+different	CSRF tokens on /admin are generated with Math.random; use a CSPRNG.	CSRF tokens are absent on /admin form posts.
+different	The users query selects every column; list only the fields the page needs.	The users query concatenates email into SQL: use a parameterized query instead.
+different	Password reset links never expire; give them a 1-hour lifetime.	Passwords are hashed with MD5; switch to bcrypt or argon2id.
+different	The hero button text is too vague; say what happens on click.	Hero button lacks a visible focus state for keyboard users.
+different	Error responses use three different JSON shapes; standardize on one error envelope.	Stack traces leak to the client in production error messages.
+different	The upload endpoint has no size limit; cap uploads at 10 MB.	Upload endpoint accepts any file type: validate MIME type and extension.
+different	Gallery images aren't lazy loaded and slow the first paint.	Product images in the gallery are missing alt text.
+different	The session store keeps sessions in memory, so a restart logs everyone out.	Session cookie lacks Secure and SameSite flags.
+different	The request logger drops the correlation ID, so traces can't be joined.	The request logger writes API keys in plain text.
+different	The payment API client ignores 409 conflicts; treat them as already processed.	Retry loop has no backoff and hammers the payment API.
+different	The subheading repeats the headline word for word; cut it or add new information.	Headline uses title case but the style guide requires sentence case.
+different	orders.customer_id has no foreign key constraint, so orphan orders can appear.	Missing index on orders.customer_id makes the dashboard query scan the full table.
+different	The webhook handler processes events synchronously and times out under load; queue them.	Webhook handler does not verify the Stripe signature header.
+same	Keeping the JWT in localStorage in web/src/auth.ts lets any injected script steal it and take over the session.	web/src/auth.ts storing the JWT in localStorage exposes it to any XSS (one injected script can exfiltrate the token and hijack the session).
+different	web/src/auth.ts never clears the stored token on logout, so a shared browser keeps the session.	web/src/auth.ts storing the JWT in localStorage exposes it to any XSS (one injected script can exfiltrate the token and hijack the session).
+same	Saving avatar uploads under ./uploads with the client-provided filename in internal/media/avatar.go allows path traversal and overwriting other users' files.	internal/media/avatar.go (POST /avatar): saving under ./uploads with the client-provided filename allows path traversal and overwriting other users' files.
+different	internal/media/avatar.go has no size limit on POST /avatar; wrap the body in http.MaxBytesReader at 2 MB.	internal/media/avatar.go (POST /avatar): saving under ./uploads with the client-provided filename allows path traversal and overwriting other users' files.
+same	internal/httpx/logging.go writes every header and the whole request body to stdout.	internal/httpx/logging.go logs all headers and the full request body to stdout.
+different	internal/httpx/logging.go does not sanitize CR/LF in the logged path, which allows log injection.	internal/httpx/logging.go logs all headers and the full request body to stdout.
+same	The password reset token in internal/auth/reset.go is md5(email + timestamp), so it can be guessed.	internal/auth/reset.go: token = md5(email + timestamp) is predictable.
+different	internal/auth/reset.go should return the same response whether or not the email exists, to stop account enumeration.	internal/auth/reset.go: token = md5(email + timestamp) is predictable.
+same	The search in internal/users/search.go builds SQL with fmt.Sprintf from the user's q, which allows SQL injection.	SQL injection in internal/users/search.go: building the query with fmt.Sprintf and interpolating q lets an attacker dump or modify the users table.
+different	internal/users/search.go has no LIMIT or pagination, so one request can dump the whole users table.	SQL injection in internal/users/search.go: building the query with fmt.Sprintf and interpolating q lets an attacker dump or modify the users table.

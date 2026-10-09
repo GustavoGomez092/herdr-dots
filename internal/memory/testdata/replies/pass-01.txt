@@ -1,0 +1,1 @@
+{"remember":[{"op":"add","scope":"project","kind":"convention","text":"Session tokens are stored in httpOnly cookies (Secure, SameSite=Lax) rather than JS-accessible storage.","paths":["internal/auth/**"]}]}
