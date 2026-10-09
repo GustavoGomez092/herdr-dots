@@ -15,7 +15,7 @@
 | Phase | Version | Increment | Origin | Spec | Plan outline |
 |---|---|---|---|---|---|
 | 1 | 0.1.0 | Core loop (scaffold) | v1 roadmap | [v1 spec](2026-10-08-herdr-dots-design.md) | [v1 plan](../plans/2026-10-08-herdr-dots-v1.md) |
-| **2** | 0.2.0 | **Dot memory: VITAL** | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-2-dot-memory-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-2-dot-memory-outline.md) |
+| **2** | 0.2.0 | **Dot memory: VITAL** | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-2-dot-memory-design.md) | [plan](../plans/2026-10-08-herdr-dots-phase-2-dot-memory.md) |
 | 3 | 0.3.0 | Council mode (with dot-to-dot cross-review) | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-3-council-mode-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-3-council-mode-outline.md) |
 | 4 | 0.4.0 | API and Ollama backends, keys, cost | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-4-api-backends-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-4-api-backends-outline.md) |
 | 5 | 0.5.0 | Dots MCP server | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-5-mcp-server-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-5-mcp-server-outline.md) |

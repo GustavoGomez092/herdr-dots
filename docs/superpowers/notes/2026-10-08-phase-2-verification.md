@@ -87,3 +87,23 @@ Assumption holds: yes (0/20 false positives, under the 10% limit).
 
 ## Safety
 `~/.claude/settings.json` was snapshotted to `/tmp/claude-settings-before.json` before the first live step; `diff` after the last live step printed nothing.
+
+## E2E (Task 16)
+
+Automated replacement for the human checklist, run against herdr 0.8.2 in the isolated `--session dots-test`, scratch repo `/tmp/dots-test-repo` (one root commit added so the project resolves by git), Claude panes on haiku (`--model haiku` as agent args; no slash commands), Security (queue) and Copywriter (observe) dots with `model = "haiku"`. As in the v1 E2E (Task 22b), NO `plugin link` (Herdr's plugin registry is global to the user): the built binary ran as `herdr-dots engine --ensure` with `HERDR_SOCKET_PATH` set to the dots-test socket, `HERDR_PLUGIN_ID=herdr-dots` and `HERDR_PLUGIN_CONFIG_DIR`/`HERDR_PLUGIN_STATE_DIR` under `/tmp/dots-e2e2`. Driven with `herdr --session dots-test agent prompt ... --wait` plus a throwaway Go client over `internal/ipc` (attach/dismiss/watch; deleted, not committed).
+
+| # | Item | Result |
+|---|---|---|
+| 1 | Attach Security (queue) and Copywriter (observe) | PASS: snapshot pane `w1:p1` lists both dots with modes `queue` / `observe` |
+| 2 | "store the login token in localStorage" -> Security card; header shows project and `mem 0` | PASS by snapshot: card (warn) created; pane `project_name` "dots-test-repo", `project_id` `g-0d19a150a2c3245a`, `memory_entries` 0. Visual header: NOT-AUTOMATABLE (no pane screenshot) |
+| 3 | Dismiss the card -> `mem 1` | PASS: snapshot `memory_entries` 0 -> 1; `memory list` shows `d:m1 security dismissed active` with the card text |
+| 4 | Near-identical later verdict is suppressed; feed shows `suppressed (d:m1)` | NOT REPRODUCED LIVE. Across about 8 further turns (localStorage and console.log of tokens, repeated), the feed never showed `suppressed`. What did happen: dismissed entries were read into every run (`USES` rose to 15/14/12/10) and Security answered `pass` on the repeated requests (prompt-level avoidance), while each non-pass verdict was worded as a new finding (new `d:m2..d:m6` dismissed entries) and scored below 0.7. The deterministic filter is therefore only covered by unit tests (`TestSuppressionThresholdOnLabeledPairs` and the engine suppression tests), not by this run. Not a product failure; a limitation of a live check against a model that rewords |
+| 5 | Observe-mode Copywriter learns without a card | PASS: after 5 copy-change turns the roster showed `learning: true` once, the feed got `learned 2` (and an earlier `memory pass: nothing new`), Copywriter calls rose 1 -> 2 and it made no card; entries landed as proposals `p:m2`, `p:m3` (dot `copywriter`, status `proposed`) |
+| 6 | Forget an entry | PASS via CLI (popup `M`/`x`/`y` is NOT-AUTOMATABLE): `memory forget d:m6 --dot security` -> "forgot d:m6", dismissed count 6 -> 5 |
+| 7 | CLI sees the same project and entries | PASS: `memory projects` -> `g-0d19a150a2c3245a  dots-test-repo  /private/tmp/dots-test-repo`; `memory list --project /tmp/dots-test-repo` shows the same entries the snapshot counted (snapshot `memory_entries` 10 / `memory_proposals` 4 before the forget) |
+| 8 | `memory_enabled = false` in config.toml stops reads and writes within seconds | PASS: wrote `memory_enabled = false`, waited 8 s, prompted for a SQL-concatenation finding; Security created card 7 (turn 17); dismissing it left `memory list` byte-identical to the list taken before the change (no new `d:` entry and no `USES` bump), whereas the same dismissal with memory on had created an entry each time |
+| 9 | Server and engine stopped | PASS: engine killed (pid scoped to `/tmp/dots-e2e2`), `herdr --session dots-test server stop`, `ps` shows no herdr or engine process |
+
+Observations (not fixed here): feed and turn numbering in the snapshot is capped, so older feed lines scroll out; when Claude asked a question (AskUserQuestion) after repeated identical prompts it went `blocked` and further dot reviews paused until Enter was sent to the pane, which cost some of the early suppression attempts.
+
+Safety: `~/.claude/settings.json` was snapshotted to `/tmp/claude-settings-before.json` before the first live step; `diff` after the last live step printed nothing. Nothing was linked; user config untouched; `e2e-scratch/` deleted.
