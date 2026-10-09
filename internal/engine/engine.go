@@ -236,7 +236,7 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 		return err
 	}
 	e.subscribe(paneID)
-	e.spawn(func() { e.processPane(paneID) })
+	e.spawn(func() { e.processPaneIfIdle(paneID) })
 	e.broadcast()
 	return nil
 }
@@ -343,6 +343,18 @@ func (e *Engine) onIdle(paneID string) {
 	}
 	e.processPane(paneID)
 	e.flushAuto(paneID)
+}
+
+// processPaneIfIdle is processPane for callers that are not onIdle (a rerun
+// after a run, Attach's catch-up). If the agent is working, the transcript's
+// last turn may be half written, so it does nothing: LastSeenTurn hasn't
+// moved, and the next idle/done event reviews the finished turn.
+func (e *Engine) processPaneIfIdle(paneID string) {
+	p, err := e.d.Herdr.PaneGet(e.ctx, paneID)
+	if err != nil || (p.AgentStatus != herdr.StatusIdle && p.AgentStatus != herdr.StatusDone) {
+		return
+	}
+	e.processPane(paneID)
 }
 
 type job struct {
@@ -527,7 +539,7 @@ func (e *Engine) finishRun(k key) {
 	e.mu.Unlock()
 	e.broadcast()
 	if again {
-		e.spawn(func() { e.processPane(k.pane) })
+		e.spawn(func() { e.processPaneIfIdle(k.pane) })
 	}
 }
 

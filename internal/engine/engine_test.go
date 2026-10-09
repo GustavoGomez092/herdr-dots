@@ -27,6 +27,7 @@ type fakeBackend struct {
 	verdicts []backend.Verdict // consumed in order; the last one repeats
 	err      error
 	calls    []backend.Request
+	gate     chan struct{} // optional: runs block (after being recorded) until closed
 }
 
 func (f *fakeBackend) Kind() string                { return "claude-cli" }
@@ -41,8 +42,14 @@ func (f *fakeBackend) set(vs ...backend.Verdict) { f.mu.Lock(); f.verdicts = vs;
 func (f *fakeBackend) fail(err error)            { f.mu.Lock(); f.err = err; f.mu.Unlock() }
 func (f *fakeBackend) Run(_ context.Context, r backend.Request) (backend.Result, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, r)
+	gate := f.gate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate // the run is in flight until the test closes gate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return backend.Result{}, f.err
 	}
@@ -621,6 +628,54 @@ func TestDismissAndEditWaitForInFlightDelivery(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A run that ends while the agent is already working on the next prompt must
+// not review the half-written turn; the next idle event picks it up whole.
+func TestRerunWaitsForIdleInsteadOfReadingAHalfFinishedTurn(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue))
+	r.readers["s1"].add(transcript.Turn{User: "one"})
+	gate := make(chan struct{})
+	r.be.mu.Lock()
+	r.be.gate = gate
+	r.be.mu.Unlock()
+	r.attach(t, "security")
+	eventually(t, "catch-up run in flight", func() bool { return r.be.n() == 1 })
+
+	// Turn two ends during the run: the dot is busy, so it is marked for a rerun.
+	r.turnEnds(t, transcript.Turn{User: "two"})
+	k := key{pane, "security"}
+	eventually(t, "rerun requested", func() bool { r.e.mu.Lock(); defer r.e.mu.Unlock(); return r.e.rerun[k] })
+	// The agent starts on the next prompt; its turn is half written.
+	r.srv.Push(pane, herdr.StatusWorking)
+	r.readers["s1"].add(transcript.Turn{User: "three", Assistant: "partial…"})
+	close(gate)
+	eventually(t, "run finished", func() bool { r.e.mu.Lock(); defer r.e.mu.Unlock(); return !r.e.running[k] })
+	time.Sleep(100 * time.Millisecond)
+	if n := r.be.n(); n != 1 {
+		t.Fatalf("a rerun while the agent works read a half-finished turn (%d calls)", n)
+	}
+	if ls := lastSeen(r, "security"); ls != 1 {
+		t.Fatalf("LastSeenTurn moved to %d while the agent worked", ls)
+	}
+	r.srv.Push(pane, herdr.StatusDone)
+	eventually(t, "review after the turn finished", func() bool {
+		return r.be.n() == 2 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "three"
+	})
+}
+
+// Attaching while the agent works defers the catch-up to the next idle event.
+func TestAttachCatchUpWaitsForIdle(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue))
+	r.readers["s1"].add(transcript.Turn{User: "one"})
+	r.srv.Push(pane, herdr.StatusWorking)
+	r.attach(t, "security")
+	time.Sleep(100 * time.Millisecond)
+	if r.be.n() != 0 {
+		t.Fatal("catch-up must not run while the agent is working")
+	}
+	r.srv.Push(pane, herdr.StatusIdle)
+	eventually(t, "catch-up on idle", func() bool { return r.be.n() == 1 })
 }
 
 // configRig watches a config.toml in a temp dir; check sets ConfigCheck.
