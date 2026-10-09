@@ -736,6 +736,64 @@ func TestEngineShutdownMidCouncilLeavesNoCard(t *testing.T) {
 	}
 }
 
+func feedErrors(r *rig, slug string) []state.FeedEntry {
+	var out []state.FeedEntry
+	for _, f := range r.e.d.Feed.Recent(pane, 100) {
+		if f.Dot == slug && f.Outcome == state.OutcomeError {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// Final review item 7: a member run cancelled because its pane closed or the
+// engine stopped writes no feed error and bumps no failure streak; a real
+// timeout still does.
+func TestCancelledMemberRunsAreNotFailures(t *testing.T) {
+	t.Run("pane closed", func(t *testing.T) {
+		r, cb := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+		seat(t, r, "security", "frontend")
+		cb.on("Security", step{hang: true})
+		cb.on("Frontend", step{hang: true})
+		convene(t, r, "")
+		eventually(t, "both members running", func() bool { return cb.running() == 2 })
+		r.srv.RemovePane(pane)
+		eventually(t, "in-flight member runs cancelled", func() bool { return cb.running() == 0 })
+		time.Sleep(50 * time.Millisecond)
+		for _, slug := range []string{"security", "frontend"} {
+			if errs := feedErrors(r, slug); len(errs) != 0 {
+				t.Fatalf("%s: feed errors for a closed pane: %+v", slug, errs)
+			}
+		}
+	})
+	t.Run("engine stopped", func(t *testing.T) {
+		r, cb, cancel := councilRigCancel(t, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+		seat(t, r, "security", "frontend")
+		cb.on("Security", says("critical", "JWT in localStorage."))
+		cb.on("Frontend", step{hang: true})
+		convene(t, r, "")
+		eventually(t, "one member hangs", func() bool { return cb.total() == 2 && cb.running() == 1 })
+		cancel()
+		r.e.Wait()
+		if errs := feedErrors(r, "frontend"); len(errs) != 0 {
+			t.Fatalf("feed errors on shutdown: %+v", errs)
+		}
+		a, _ := r.atts.Get(pane)
+		if da := a.Find("frontend"); da == nil || da.Failures != 0 {
+			t.Fatalf("shutdown bumps no failure streak: %+v", da)
+		}
+	})
+	t.Run("real timeout", func(t *testing.T) {
+		r, cb := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+		r.e.councilWait = 100 * time.Millisecond
+		seat(t, r, "security", "frontend")
+		cb.on("Security", says("critical", "JWT in localStorage."))
+		cb.on("Frontend", step{hang: true})
+		convene(t, r, "")
+		eventually(t, "the timeout is a feed error", func() bool { return len(feedErrors(r, "frontend")) == 1 })
+	})
+}
+
 // Fix round: the pane closing while the chair runs gives no card.
 func TestPaneClosedDuringChairAbandonsIt(t *testing.T) {
 	r, cb := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -647,6 +648,13 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
 	if err != nil {
 		sinkErr = err
+		if errors.Is(base.Err(), context.Canceled) {
+			// Its council was abandoned (the pane closed) or the engine is
+			// stopping: not the dot's failure, and maybe no pane to show it.
+			// A real timeout is DeadlineExceeded and still fails below.
+			e.d.Logf("dot %s on %s: run cancelled: %v", d.Slug, paneID, err)
+			return
+		}
 		e.runFailed(k, d, turn, err)
 		return
 	}
