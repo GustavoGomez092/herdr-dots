@@ -25,6 +25,7 @@ var commands = map[string]handler{
 	"summon-ui":  runSummonUI,
 	"action":     runAction,
 	"setup-keys": runSetupKeys,
+	"memory":     runMemory,
 }
 
 func usage() error {
