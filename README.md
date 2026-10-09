@@ -448,7 +448,11 @@ Linux, but it has not been run on Windows yet.
 - Forgetting is real: `forget` removes the entry from disk, `--scrub` also removes its ledger lines,
   and `purge` deletes a project's whole memory.
   Deleting a dot's memory in all projects (the manage popup) also removes the ledger lines its
-  cards left and the project conventions it proposed that you never approved.
+  cards left and the project conventions it proposed that you never approved. It also deletes the
+  copies of that dot's memory file that were set aside as damaged (`<dot>.json.corrupt-*`).
+  A damaged project file set aside as `project.json.corrupt-*` mixes every dot's entries and is
+  never edited, so it may still hold a deleted dot's text: `herdr-dots memory purge` is what
+  clears those.
 - Memory text is stripped of control characters (terminal escape sequences) when it is written and
   when it is read, like the feed.
 

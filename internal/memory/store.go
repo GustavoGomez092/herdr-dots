@@ -1199,10 +1199,36 @@ func (s *Store) DeleteDot(slug string) (DotDeletion, error) {
 			case !errors.Is(err, fs.ErrNotExist):
 				perrs = append(perrs, err)
 			}
+			perrs = append(perrs, removeDotAsidesLocked(filepath.Join(dir, "dots"), slug))
 			return errors.Join(perrs...)
 		}))
 	}
 	return out, errors.Join(errs...)
+}
+
+// removeDotAsidesLocked deletes dots/<slug>.json.corrupt-* in dir: a dot's
+// corrupt asides hold only that dot's entries, so forgetting the dot forgets
+// them too (P7-R2). A failure is returned, never ignored. Mixed project-level
+// asides (project.json.corrupt-*) can't be edited safely; `memory purge`
+// clears those. The caller holds the project lock.
+func removeDotAsidesLocked(dir, slug string) error {
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range ents {
+		if !strings.HasPrefix(e.Name(), slug+".json.corrupt-") || e.IsDir() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // scrubDotLedgerLocked deletes every ledger line of dot in project p and
