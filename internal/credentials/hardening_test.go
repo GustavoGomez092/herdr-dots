@@ -39,9 +39,7 @@ func TestSymlinkRefusedEvenWhenTargetIsOwnerOnly(t *testing.T) {
 	if err := os.WriteFile(real, []byte("[anthropic]\napi_key = \"sk-ant-api03-abcdefghijklmnop\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(real, f.Path); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, real, f.Path)
 	k, _, err := f.Lookup("anthropic")
 	if err == nil || k != "" || !strings.Contains(err.Error(), "regular file") {
 		t.Fatalf("key %q err %v", k, err)

@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"herdr-dots/internal/platform"
 )
 
 // Final review item 15: a deadline that hits while the body is read stays
@@ -47,7 +48,7 @@ func TestScrubKeepsConnectionRefused(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 	_, err := (Client{Base: time.Millisecond}).Do(context.Background(), "GET", url, nil, nil)
-	if !errors.Is(err, syscall.ECONNREFUSED) {
-		t.Fatalf("err %v: want errors.Is ECONNREFUSED", err)
+	if !platform.ConnRefused(err) {
+		t.Fatalf("err %v: want a connection refusal (platform.ConnRefused)", err)
 	}
 }

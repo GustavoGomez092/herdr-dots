@@ -16,10 +16,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"herdr-dots/internal/credentials"
+	"herdr-dots/internal/platform"
 )
 
 // maxBody caps how much of a response is read.
@@ -243,13 +243,17 @@ func (c Client) scrub(err error) error {
 			s.causes = append(s.causes, sentinel)
 		}
 	}
+	if platform.ConnRefused(err) {
+		s.causes = append(s.causes, platform.ErrConnRefused)
+	}
 	return s
 }
 
 // keptSentinels are what a scrubbed error still matches with errors.Is: the
-// deadline and cancellation (callers report timeouts), and connection
-// refused (the editor's save check treats it as "unreachable").
-var keptSentinels = []error{context.DeadlineExceeded, context.Canceled, os.ErrDeadlineExceeded, syscall.ECONNREFUSED}
+// deadline and cancellation (callers report timeouts). Connection refused
+// is kept too, as platform.ErrConnRefused (platform.ConnRefused matches it on
+// every OS; the editor's save check treats it as "unreachable").
+var keptSentinels = []error{context.DeadlineExceeded, context.Canceled, os.ErrDeadlineExceeded}
 
 // scrubbed is a redacted error. It unwraps only to sentinels, never to the
 // original error, whose text may carry the secret.

@@ -20,6 +20,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
+
+	"herdr-dots/internal/platform"
 )
 
 // Tool is one read-only tool offered to a model. Schema is a JSON schema
@@ -83,15 +85,17 @@ func Note(want bool, cwd string, tools bool) string {
 	return ""
 }
 
-// Unavailable reports whether root is too broad for repo tools: "/", the
-// user's home directory, or any ancestor of it. A pane started in $HOME would
-// otherwise expose dotfiles and credentials the deny-list can't enumerate.
+// Unavailable reports whether root is too broad for repo tools: a file
+// system root ("/", or on Windows a drive root such as C:\ or a share root),
+// the user's home directory, or any ancestor of it. A pane started in $HOME
+// would otherwise expose dotfiles and credentials the deny-list can't
+// enumerate.
 func Unavailable(root string) bool {
 	rr, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return false // a missing root yields tools that fail, never a panic
 	}
-	if rr == string(filepath.Separator) {
+	if filepath.Dir(rr) == rr { // a file system root on any OS
 		return true
 	}
 	rootInfo, err := os.Stat(rr)
@@ -498,11 +502,12 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 	if fi, err := os.Lstat(gitDir); err != nil || !fi.IsDir() {
 		return nil, errors.New("not a git work tree root")
 	}
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=", "-c", "core.hooksPath="+platform.DevNull,
 		"--git-dir="+gitDir, "--work-tree="+root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	cmd.Dir = root
 	cmd.Env = gitEnv(os.Environ())
 	cmd.WaitDelay = 500 * time.Millisecond
+	platform.HideWindow(cmd)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
 	if err := cmd.Run(); err != nil {
@@ -524,7 +529,8 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 func gitEnv(env []string) []string {
 	out := make([]string, 0, len(env)+3)
 	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
+		raw, _, _ := strings.Cut(kv, "=")
+		name := platform.EnvKey(raw)
 		if strings.HasPrefix(name, "HERDR_") || strings.HasPrefix(name, "GIT_CONFIG") || strings.HasPrefix(name, "CLAUDE_CODE_") {
 			continue
 		}

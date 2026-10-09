@@ -13,12 +13,12 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/backend/httpx"
 	"herdr-dots/internal/backend/toolloop"
+	"herdr-dots/internal/platform"
 	"herdr-dots/internal/pricing"
 	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/transcript"
@@ -419,7 +419,7 @@ func mapErr(err error, base, model string) error {
 		}
 		return fmt.Errorf("ollama error: %s", textutil.SanitizeModelText(se.Error()))
 	}
-	if errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(err.Error(), "connection refused") {
+	if platform.ConnRefused(err) || strings.Contains(err.Error(), "connection refused") {
 		return backend.MarkUnreachable(fmt.Errorf("Ollama isn't running at %s: start it with `ollama serve`", base))
 	}
 	return fmt.Errorf("ollama at %s: %s", base, textutil.SanitizeModelText(err.Error()))

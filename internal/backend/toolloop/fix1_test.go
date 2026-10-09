@@ -131,7 +131,7 @@ func TestNoToolsForHomeOrAboveIt(t *testing.T) {
 	if err := os.MkdirAll(proj, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	for _, r := range []string{home, parent, "/"} {
 		if got := RepoTools(r, DefaultLimits()); len(got) != 0 {
 			t.Errorf("RepoTools(%q) gave %d tools", r, len(got))
@@ -151,9 +151,7 @@ func TestNoToolsForHomeOrAboveIt(t *testing.T) {
 // Minor 4: no existence oracle outside the root.
 func TestNoExistenceOracleOutsideRoot(t *testing.T) {
 	root, outside := repoDir(t)
-	if err := os.Symlink(filepath.Join(outside, "missing.txt"), filepath.Join(root, "dangling.txt")); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, filepath.Join(outside, "missing.txt"), filepath.Join(root, "dangling.txt"))
 	for _, p := range []string{"dangling.txt", "outdir/missing.txt", "outdir/notes.txt"} {
 		_, _, err := ResolveInRoot(root, p, DefaultDeny)
 		if !errors.Is(err, ErrOutsideRoot) {

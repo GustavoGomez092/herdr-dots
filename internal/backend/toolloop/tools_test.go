@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -31,15 +32,9 @@ func repoDir(t *testing.T) (root, outside string) {
 	write(root, ".env", "API_KEY=supersecret\n")
 	write(root, "config/secrets/prod.json", `{"token":"x"}`)
 	write(root, "bin/blob.dat", "ab\x00cd")
-	if err := os.Symlink(filepath.Join(outside, "notes.txt"), filepath.Join(root, "escape.txt")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(root, "outdir")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(".env", filepath.Join(root, "innocent.txt")); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, filepath.Join(outside, "notes.txt"), filepath.Join(root, "escape.txt"))
+	symlinkOrSkip(t, outside, filepath.Join(root, "outdir"))
+	symlinkOrSkip(t, ".env", filepath.Join(root, "innocent.txt"))
 	return root, outside
 }
 
@@ -167,9 +162,7 @@ func TestOpenRejectsParentSwappedForSymlink(t *testing.T) {
 	if err := os.Rename(filepath.Join(root, "sub"), filepath.Join(root, "sub.old")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, filepath.Join(root, "sub")); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, outside, filepath.Join(root, "sub"))
 	f, err := openVerified(abs)
 	if err == nil {
 		f.Close()
@@ -238,5 +231,34 @@ func TestListWithoutGitWalksAndCaps(t *testing.T) {
 	out, err := run(t, RepoTools(root, lim), "list_files", map[string]any{"glob": "**/*"})
 	if err != nil || strings.Count(out, ".go") != 2 || !strings.Contains(out, "stopped at 2") || strings.Contains(out, "HEAD") {
 		t.Fatalf("list:\n%s\n%v", out, err)
+	}
+}
+
+// setHome points the user's home directory at dir on every OS:
+// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
+// symlinkOrSkip creates a symlink, skipping the test where the OS refuses
+// (Windows without Developer Mode or admin rights).
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+}
+
+func TestResolveInRootNeverReachesAStreamOrDevice(t *testing.T) {
+	root, _ := repoDir(t)
+	for _, p := range []string{".env::$DATA", "main.go:hidden", "NUL", "web/CON.ts", ".env."} {
+		if abs, _, err := ResolveInRoot(root, p, DefaultDeny); err == nil {
+			t.Errorf("%s resolved to %s", p, abs)
+		}
 	}
 }

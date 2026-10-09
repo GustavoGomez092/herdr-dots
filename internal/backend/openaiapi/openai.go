@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -23,6 +22,7 @@ import (
 	"herdr-dots/internal/backend/httpx"
 	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/credentials"
+	"herdr-dots/internal/platform"
 	"herdr-dots/internal/pricing"
 	"herdr-dots/internal/textutil"
 )
@@ -278,7 +278,7 @@ func mapErr(err error, key, model string) error {
 		}
 	}
 	msg := errors.New(clip(credentials.Redact(err.Error(), key), 300))
-	if errors.Is(err, syscall.ECONNREFUSED) {
+	if platform.ConnRefused(err) {
 		return backend.MarkUnreachable(msg)
 	}
 	return msg

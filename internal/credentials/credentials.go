@@ -17,13 +17,16 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/platform"
 )
 
 var (
 	// ErrNoCredentials means no key was found for a provider.
 	ErrNoCredentials = errors.New("no credentials")
-	// ErrInsecurePerms means credentials.toml is readable by group or others.
-	ErrInsecurePerms = errors.New("credentials.toml is readable by others: run chmod 600")
+	// ErrInsecurePerms means credentials.toml is readable by other users
+	// (Unix group/other bits; on Windows, a DACL entry for anyone but the
+	// owner, SYSTEM and Administrators). The error carries the OS's fix.
+	ErrInsecurePerms = errors.New("credentials.toml is readable by others")
 	// ErrNotOwner means credentials.toml belongs to another user.
 	ErrNotOwner = errors.New("credentials.toml is owned by another user")
 	// ErrBadKey means a key failed the shape check in Set.
@@ -111,7 +114,9 @@ func (f File) Lookup(provider string) (string, string, error) {
 }
 
 // read loads credentials.toml. A missing file is empty. The file must be a
-// regular file owned by this user with no group or other permission bits.
+// regular file owned by this user that no other user can read
+// (platform.CheckPrivateFile on the opened file: mode bits on Unix, the DACL
+// on Windows).
 func (f File) read() (map[string]entry, error) {
 	fd, st, err := openChecked(f.Path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -126,11 +131,14 @@ func (f File) read() (map[string]entry, error) {
 	if fd == nil || !st.Mode().IsRegular() {
 		return nil, fmt.Errorf("credentials.toml must be a regular file (%s)", f.Path)
 	}
-	if st.Mode().Perm()&0o077 != 0 {
-		return nil, ErrInsecurePerms
-	}
-	if !ownedByMe(st) {
-		return nil, ErrNotOwner
+	if err := platform.CheckPrivateFile(fd); err != nil {
+		switch {
+		case errors.Is(err, platform.ErrNotOwner):
+			return nil, ErrNotOwner
+		case errors.Is(err, platform.ErrNotPrivate):
+			return nil, fmt.Errorf("%w: %s", ErrInsecurePerms, platform.FixPrivateHint(f.Path))
+		}
+		return nil, err
 	}
 	data, err := io.ReadAll(io.LimitReader(fd, 1<<20))
 	if err != nil {
