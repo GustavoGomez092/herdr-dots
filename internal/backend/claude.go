@@ -12,6 +12,22 @@ import (
 	"herdr-dots/internal/platform"
 )
 
+// A claude draft run gets the tools in ClaudeWriteTools. Only the read
+// tools are pre-approved (ClaudeWriteAllowed): a bare Edit or Write allow
+// rule approves edits to any path, while acceptEdits approves edits inside
+// the working directory only (verified live, Phase 7 V1). ClaudeWriteDenied
+// are refused even if a setting would allow them.
+const (
+	ClaudeWriteTools   = "Read,Grep,Glob,Edit,Write"
+	ClaudeWriteAllowed = "Read,Grep,Glob"
+	ClaudeWriteDenied  = "Bash,WebFetch,WebSearch"
+)
+
+// writeSettings is the draft run's --settings: hooks off, and the worktree's
+// .git file and any .claude/ directory (settings, hooks) are not editable
+// even under acceptEdits.
+const writeSettings = `{"disableAllHooks":true,"permissions":{"deny":["Edit(.git)","Write(.git)","Edit(.git/**)","Write(.git/**)","Edit(.claude/**)","Write(.claude/**)","Edit(**/.git)","Write(**/.git)","Edit(**/.claude/**)","Write(**/.claude/**)"]}}`
+
 type ClaudeCLI struct {
 	Runner  Runner
 	Bin     string          // default "claude"
@@ -55,14 +71,18 @@ const hooklessSettings = `{"disableAllHooks":true}`
 // after the run. If the files can't be written, the v1 argv is used.
 func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	sys := SystemPrompt(r)
-	settingsArg, promptFlag, promptArg := hooklessSettings, "--append-system-prompt", sys
+	settings := hooklessSettings
+	if WriteMode(r) {
+		settings = writeSettings
+	}
+	settingsArg, promptFlag, promptArg := settings, "--append-system-prompt", sys
 	shim := false
 	if p, err := resolveBin(c.bin()); err == nil {
 		shim = platform.IsBatchFile(p)
 	}
 	var cleanup func()
 	if shim || utf8.RuneCountInString(sys) > platform.MaxInlinePrompt {
-		if files, done, err := writeRunFiles(map[string]string{"system.txt": sys, "settings.json": hooklessSettings}); err == nil {
+		if files, done, err := writeRunFiles(map[string]string{"system.txt": sys, "settings.json": settings}); err == nil {
 			cleanup = done
 			promptFlag, promptArg = "--append-system-prompt-file", files["system.txt"]
 			if shim {
@@ -80,9 +100,24 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	if r.Model != "" {
 		args = append(args, "--model", r.Model)
 	}
-	if r.RepoRead {
+	switch {
+	case WriteMode(r):
+		// A draft: file tools only; acceptEdits approves edits inside the
+		// worktree (print mode can't ask, so edits elsewhere are denied); no
+		// shell, no web. Never bypassPermissions.
+		// --restricted ignores user/project/local settings files, so a repo's
+		// .claude/settings.json can't add allow rules or directories; it keeps
+		// --settings, confines file tools to the working dir and refuses
+		// bypassPermissions. Verified live on Claude Code 2.1.295 (subscription
+		// auth): with a repo allow-Edit/Write rule, a Write to the parent dir
+		// was denied and an inside edit worked; with writeSettings, Write to
+		// .git and .claude/settings.local.json was denied in a linked worktree.
+		args = append(args, "--restricted")
+		args = append(args, "--tools", ClaudeWriteTools, "--allowedTools", ClaudeWriteAllowed,
+			"--permission-mode", "acceptEdits", "--disallowedTools", ClaudeWriteDenied)
+	case r.RepoRead:
 		args = append(args, "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob")
-	} else {
+	default:
 		args = append(args, "--tools", "")
 	}
 	// Denied args (dots.Validate rejects them too) are dropped so they can never

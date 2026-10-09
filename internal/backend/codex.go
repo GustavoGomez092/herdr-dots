@@ -60,7 +60,14 @@ func (c CodexCLI) BuildCmd(r Request) Cmd {
 	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: env, Stdin: SystemPrompt(r) + "\n\n" + UserPrompt(r)}
 }
 
+// ErrCodexCannotDraft: `codex exec` always offers its shell tool, and
+// write-capable dots get no shell (decision 5), so codex never drafts.
+var ErrCodexCannotDraft = errors.New("codex-cli can't draft fixes: codex exec always has a shell, and write-capable dots get none")
+
 func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
+	if r.Write || r.Pass == PassWrite {
+		return Result{}, ErrCodexCannotDraft
+	}
 	if err := checkArgs(c.Kind(), r.Args); err != nil {
 		return Result{}, err
 	}

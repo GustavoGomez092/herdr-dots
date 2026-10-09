@@ -26,6 +26,17 @@ var deniedArgs = map[string][]argRule{
 		{flag: "--mcp-config", takes: true, variadic: true},
 		{flag: "--append-system-prompt-file", takes: true, variadic: true},
 		{flag: "--add-dir", takes: true, variadic: true},
+		{flag: "--restricted"},
+		{flag: "--setting-sources", takes: true, variadic: true},
+		{flag: "-w", takes: true, variadic: true},
+		{flag: "--worktree", takes: true, variadic: true},
+		{flag: "--plugin-dir", takes: true, variadic: true},
+		{flag: "--plugin-url", takes: true, variadic: true},
+		{flag: "--agent", takes: true, variadic: true},
+		{flag: "--agents", takes: true, variadic: true},
+		{flag: "--resume", takes: true, variadic: true},
+		{flag: "--continue"},
+		{flag: "--system-prompt", takes: true, variadic: true},
 	},
 	"codex-cli": {
 		{flag: "--dangerously-bypass-approvals-and-sandbox"},
@@ -35,6 +46,9 @@ var deniedArgs = map[string][]argRule{
 		{flag: "-s", takes: true},
 		{flag: "-c", takes: true, when: sandboxOrMCP},
 		{flag: "--config", takes: true, when: sandboxOrMCP},
+		{flag: "--add-dir", takes: true, variadic: true}, // more writable roots
+		{flag: "-C", takes: true},                        // another working root
+		{flag: "--cd", takes: true},
 	},
 }
 

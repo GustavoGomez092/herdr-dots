@@ -29,7 +29,11 @@ type Request struct {
 	Force     bool   // summoned: must answer
 	Memory    string // pre-rendered memory block (memory.Render); "" = none
 	Learn     bool   // the dot may return memory ops in its reply
-	Pass      string // PassReview or PassMemory
+	Pass      string // PassReview, PassMemory or PassWrite
+	// Write gives the run file-editing tools confined to Cwd (an isolated
+	// worktree). Backends honor it only together with Pass == PassWrite, so
+	// one stray field can never make a review write.
+	Write bool
 
 	// Phase 4: API backends. Zero values mean provider defaults.
 	Effort        string // "" | low | medium | high | xhigh | max (anthropic-api, openai-api)
@@ -39,11 +43,16 @@ type Request struct {
 	Fallbacks     string // anthropic-api: "" or "default" = on, "off"
 }
 
-// Pass values: a normal review, or an observe dot's memory-only pass.
+// Pass values: a normal review, an observe dot's memory-only pass, or a
+// draft run that edits an isolated copy of the repository (Phase 7).
 const (
 	PassReview = ""
 	PassMemory = "memory"
+	PassWrite  = "write"
 )
+
+// WriteMode reports whether r is a draft run allowed to edit files.
+func WriteMode(r Request) bool { return r.Write && r.Pass == PassWrite }
 
 // Model-written memory ops kept per reply.
 const (

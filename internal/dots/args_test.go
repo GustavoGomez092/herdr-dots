@@ -23,6 +23,26 @@ var claudeDenied = [][]string{
 	{"--append-system-prompt-file=/etc/passwd"},
 	{"--add-dir", "/"},
 	{"--bare"},
+	{"--restricted"},
+	{"--setting-sources", "x"},
+	{"--setting-sources=x"},
+	{"-w", "x"},
+	{"--worktree", "x"},
+	{"--worktree=x"},
+	{"--plugin-dir", "x"},
+	{"--plugin-dir=x"},
+	{"--plugin-url", "x"},
+	{"--plugin-url=x"},
+	{"--agent", "x"},
+	{"--agent=x"},
+	{"--agents", "x"},
+	{"--agents=x"},
+	{"--resume", "x"},
+	{"--resume=x"},
+	{"--continue"},
+	{"--system-prompt", "x"},
+	{"--system-prompt=x"},
+	{"-wx"},
 }
 
 var codexDenied = [][]string{
@@ -37,6 +57,11 @@ var codexDenied = [][]string{
 	{"-csandbox_mode=danger-full-access"},
 	{"--config", "mcp_servers.x.command=sh"},
 	{"--config=sandbox_workspace_write.network_access=true"},
+	{"--add-dir", "/"},
+	{"-C", "/"},
+	{"-C/"},
+	{"--cd", "/"},
+	{"--cd=/"},
 }
 
 func TestValidateRejectsUnsafeBackendArgs(t *testing.T) {
