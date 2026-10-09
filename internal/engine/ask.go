@@ -341,9 +341,14 @@ func (e *Engine) Ask(ctx context.Context, paneID, slug, question string, include
 	stop := context.AfterFunc(e.ctx, cancel) // an engine shutdown ends the ask
 	defer stop()
 	defer e.trackAsk(paneID, cancel)() // a closing pane ends it too
+	// A pane that closed before trackAsk could not cancel this ask: check
+	// again now that it can (and never read with an empty attachment).
+	att, ok := e.d.Attachments.Get(paneID)
+	if !ok {
+		return ipc.AskResult{}, ErrPaneClosed
+	}
 	var turns []transcript.Turn
 	if includeTurns {
-		att, _ := e.d.Attachments.Get(paneID)
 		ts, err := e.reader(att).Turns(runCtx)
 		if err != nil {
 			return ipc.AskResult{}, fmt.Errorf("read conversation: %w", err)

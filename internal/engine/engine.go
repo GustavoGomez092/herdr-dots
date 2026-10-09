@@ -682,7 +682,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	ctx, cancel := context.WithTimeout(base, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
-	_ = e.d.Usage.Add(paneID, d.Slug, deltaOf(res))
+	e.charge(paneID, d.Slug, deltaOf(res))
 	if err != nil {
 		err = redactErr(err) // defense in depth: adapters redact already
 		sinkErr = err
@@ -844,14 +844,29 @@ func (e *Engine) statusOf(k key) string {
 }
 
 // restoreStatus puts back the status a cancelled ask replaced, unless
-// something else has set a new one meanwhile.
+// something else has set a new one meanwhile. A closed pane keeps no status:
+// a reused pane id must not inherit it.
 func (e *Engine) restoreStatus(k key, prev string) {
 	e.mu.Lock()
-	if e.status[k] == view.StatusThinking {
+	if _, ok := e.d.Attachments.Get(k.pane); !ok { // e.mu -> stores; dropPane deletes under e.mu
+		delete(e.status, k)
+	} else if e.status[k] == view.StatusThinking {
 		e.status[k] = prev
 	}
 	e.mu.Unlock()
 	e.broadcast()
+}
+
+// charge records a run's usage, unless its pane closed meanwhile: dropPane
+// reset the pane's usage, and a reused pane id must not inherit the spend.
+// The check and the add share e.mu with dropPane's reset and delete.
+func (e *Engine) charge(paneID, slug string, d state.Delta) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.d.Attachments.Get(paneID); !ok {
+		return
+	}
+	_ = e.d.Usage.Add(paneID, slug, d)
 }
 
 func (e *Engine) setStatus(k key, s string) {

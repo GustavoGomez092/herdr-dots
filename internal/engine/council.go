@@ -459,7 +459,7 @@ func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.Counc
 	ctx, cancel := context.WithTimeout(run.ctx, cfg.RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
-	_ = e.d.Usage.Add(run.paneID, councilSlug, deltaOf(res)) // the chair's dollars count against the pane
+	e.charge(run.paneID, councilSlug, deltaOf(res)) // the chair's dollars count against the pane
 	if err != nil {
 		return "", redactErr(err)
 	}

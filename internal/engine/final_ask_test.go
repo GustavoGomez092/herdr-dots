@@ -204,6 +204,58 @@ func TestCancelledAskNeverReadsAsTheDotFailing(t *testing.T) {
 	}
 }
 
+// paneLeftovers counts the status entries and usage the engine keeps for pane.
+func paneLeftovers(r *rig) (statuses, calls int) {
+	r.e.mu.Lock()
+	for k := range r.e.status {
+		if k.pane == pane {
+			statuses++
+		}
+	}
+	r.e.mu.Unlock()
+	return statuses, r.usage.PaneCalls(pane)
+}
+
+// Final review M5: the run of an ask whose pane closed leaves no status and
+// no spend behind, so a reused pane id inherits neither; both when the run
+// still succeeds and when the cancel makes it fail.
+func TestClosedPaneKeepsNothingFromItsCancelledAsk(t *testing.T) {
+	check := func(t *testing.T, r *rig, release func()) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { _, err := r.e.Ask(context.Background(), pane, "security", "q", false); done <- err }()
+		eventually(t, "the ask runs", func() bool {
+			r.e.mu.Lock()
+			defer r.e.mu.Unlock()
+			return r.e.status[key{pane, "security"}] == view.StatusThinking
+		})
+		r.e.dropPane(pane)
+		if err := <-done; !errors.Is(err, ErrPaneClosed) {
+			t.Fatalf("got %v", err)
+		}
+		release()
+		eventually(t, "the run ends", func() bool {
+			r.e.mu.Lock()
+			defer r.e.mu.Unlock()
+			return len(r.e.asking) == 0
+		})
+		if st, calls := paneLeftovers(r); st != 0 || calls != 0 {
+			t.Fatalf("the closed pane keeps %d status entries and %d calls", st, calls)
+		}
+	}
+	t.Run("the run succeeds", func(t *testing.T) {
+		r := newRig(t, dot("Security", dots.ModeQueue))
+		r.attach(t, "security")
+		check(t, r, gateRuns(t, r))
+	})
+	t.Run("the cancel fails the run", func(t *testing.T) {
+		r, cb := councilRig(t, nil, member("Security", dots.ModeQueue))
+		seat(t, r, "security")
+		cb.on("Security", step{hang: true})
+		check(t, r, func() {})
+	})
+}
+
 // Final review I1: an ask that starts while a council is being set up (its
 // transcript read) still keeps that dot out of the council.
 func TestCouncilStartingDuringAnAskLeavesTheDotOut(t *testing.T) {
