@@ -28,6 +28,13 @@ func TestCodexBuildCmd(t *testing.T) {
 	}
 }
 
+func TestCodexBuildCmdEnvNonNilWhenAllStripped(t *testing.T) {
+	env := CodexCLI{Environ: func() []string { return []string{"HERDR_X=1"} }}.BuildCmd(req()).Env
+	if env == nil || len(env) != 0 {
+		t.Fatalf("Env = %#v, want non-nil empty", env)
+	}
+}
+
 func TestParseCodexOutput(t *testing.T) {
 	out := strings.Join([]string{
 		`{"type":"thread.started","thread_id":"t"}`,

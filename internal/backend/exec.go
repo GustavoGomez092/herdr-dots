@@ -53,7 +53,8 @@ func (ExecRunner) Run(ctx context.Context, c Cmd) ([]byte, []byte, error) {
 // CLAUDE_CODE_ENTRYPOINT, and CLAUDE_CODE_CHILD_SESSION, but preserves other
 // CLAUDE_* variables that carry auth and config (CLAUDE_CONFIG_DIR, etc.).
 func CleanEnv(env []string) []string {
-	var out []string
+	// Non-nil on purpose: a nil exec.Cmd.Env inherits the full parent environment.
+	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
 		if strings.HasPrefix(k, "HERDR_") || k == "CLAUDECODE" || k == "CLAUDE_CODE_ENTRYPOINT" || k == "CLAUDE_CODE_CHILD_SESSION" {

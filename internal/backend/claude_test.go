@@ -101,6 +101,13 @@ func TestClaudeRunMapsLoginFailureToHint(t *testing.T) {
 	}
 }
 
+func TestClaudeBuildCmdEnvNonNilWhenAllStripped(t *testing.T) {
+	env := ClaudeCLI{Environ: func() []string { return []string{"HERDR_X=1"} }}.BuildCmd(req()).Env
+	if env == nil || len(env) != 0 {
+		t.Fatalf("Env = %#v, want non-nil empty", env)
+	}
+}
+
 func TestClaudeCheckMissingBinary(t *testing.T) {
 	err := ClaudeCLI{Bin: "definitely-not-a-real-binary-xyz"}.Check(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "not found") {
