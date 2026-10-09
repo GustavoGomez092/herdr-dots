@@ -1,6 +1,7 @@
 package summon
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -74,9 +75,10 @@ func TestCouncilPopupAsksForAPreflightOnOpen(t *testing.T) {
 	if msg := cmd(); msg != nil {
 		t.Fatalf("unexpected message %v", msg)
 	}
-	if len(fc.calls) != 1 || fc.calls[0] != ipc.CmdCouncilPreflight+` {"pane_id":"w1:p1"}` {
+	if len(fc.calls) != 1 || !strings.HasPrefix(fc.calls[0], ipc.CmdCouncilPreflight+` {"pane_id":"w1:p1","request":"`) {
 		t.Fatalf("calls %v", fc.calls)
 	}
+	sentRequest(t, fc.calls[0])
 }
 
 func TestCouncilPopupWaitsForThePreflight(t *testing.T) {
@@ -344,6 +346,56 @@ func TestCouncilPopupDropsAStalePreflightButKeepsTicks(t *testing.T) {
 	m, _ = m.Update(councilSnap(preflightFor(50, copyPaused...)))
 	if !strings.Contains(m.View(), "[ ] ◆ Security") {
 		t.Fatalf("ticks are kept:\n%s", m.View())
+	}
+}
+
+// sentRequest is the request id of the popup's preflight call.
+func sentRequest(t *testing.T, call string) string {
+	t.Helper()
+	var a ipc.CouncilArgs
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(call, ipc.CmdCouncilPreflight+" ")), &a); err != nil || a.Request == "" {
+		t.Fatalf("preflight call %q carries no request id (%v)", call, err)
+	}
+	return a.Request
+}
+
+func stamped(pf *council.Preflight, seq uint64, request string) *council.Preflight {
+	pf.Seq, pf.Request = seq, request
+	return pf
+}
+
+// Final review item 6: a reopened popup ignores the preflight an earlier
+// popup left in the snapshot; it seeds its ticks from its own preflight and
+// then shows only preflights at least as new.
+func TestCouncilPopupIgnoresAnOlderPreflight(t *testing.T) {
+	fc := &fakeCaller{}
+	var m tea.Model = NewCouncil("w1:p1", fc)
+	m.Init()()
+	own := sentRequest(t, fc.calls[0])
+	// The old popup's preflight: Copy was eligible, Security was not.
+	old := stamped(preflightFor(50, council.Candidate{Slug: "security", Paused: true}, council.Candidate{Slug: "frontend", CallsLeft: 40}, council.Candidate{Slug: "copy", CallsLeft: 40}), 3, "old-popup")
+	m, _ = m.Update(councilSnap(old))
+	if v := m.View(); !strings.Contains(v, "checking budgets…") || strings.Contains(v, "[x]") {
+		t.Fatalf("an older preflight must not be shown or seed the ticks:\n%s", v)
+	}
+	m, _ = m.Update(councilSnap(stamped(preflightFor(50, copyPaused...), 4, own)))
+	v := m.View()
+	for _, want := range []string{"[x] ◆ Security", "[x] ▲ Frontend", "[ ] ✎ Copy (paused)", "estimate: 3 calls"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("own preflight: missing %q\n%s", want, v)
+		}
+	}
+	m, _ = m.Update(councilSnap(stamped(preflightFor(2, copyPaused...), 5, "another-popup")))
+	if !strings.Contains(m.View(), "pane budget too low") {
+		t.Fatalf("a newer preflight is shown:\n%s", m.View())
+	}
+	m, _ = m.Update(councilSnap(old))
+	if v := m.View(); !strings.Contains(v, "checking budgets…") || strings.Contains(v, "pane budget too low") {
+		t.Fatalf("an older preflight is not shown:\n%s", v)
+	}
+	m, _ = m.Update(councilSnap(stamped(preflightFor(50, copyPaused...), 6, "another-popup")))
+	if v := m.View(); !strings.Contains(v, "[x] ◆ Security") || !strings.Contains(v, "[x] ▲ Frontend") {
+		t.Fatalf("the ticks seeded from the popup's own preflight stay:\n%s", v)
 	}
 }
 

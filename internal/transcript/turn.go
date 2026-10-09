@@ -70,6 +70,25 @@ func DotPrefix(glyph, name string) string { return fmt.Sprintf("[%s %s dot]", gl
 
 var prefixRe = regexp.MustCompile(`(?m)^\[\S+ (.+?) dot\]`)
 
+// NeutralMarker is put in front of a message line that looks like a dot
+// header, so FromDots never reads it as one.
+const NeutralMarker = "› "
+
+// NeutraliseDotPrefixes marks every line of a dot's message that would parse
+// as a dot header (also after leading spaces): "[⊕ Council dot] x" becomes
+// "› [⊕ Council dot] x". Delivery calls it on message bodies only, so the
+// real leading prefix stays intact and a body can't make its turn count as
+// from other dots (a forged council header would silence every dot).
+func NeutraliseDotPrefixes(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		if prefixRe.MatchString(strings.TrimLeft(l, " \t")) {
+			lines[i] = NeutralMarker + l
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func FromDots(text string) []string {
 	var out []string
 	for _, m := range prefixRe.FindAllStringSubmatch(text, -1) {

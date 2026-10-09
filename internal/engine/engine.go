@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -49,6 +50,7 @@ type runOpts struct {
 	noForce bool                        // summon semantics, but the member may pass ("nothing from my side")
 	ctx     context.Context             // cancels the run with its council; nil = the engine's context
 	sink    func(backend.Result, error) // receives the result instead of route; called exactly once
+	noLearn bool                        // round 2: the run reads other members' text, so it never learns
 
 	forceQueue bool   // the turn was started by a dot: never auto-inject
 	summon     bool   // manual summon: always a card, bypasses running flags
@@ -88,10 +90,11 @@ type Engine struct {
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
 	// Council state (council.go), guarded by mu; maps are created lazily.
-	councils    map[string]*councilRun       // by pane: the council in progress
-	preflights  map[string]council.Preflight // by pane: the last preflight, for snapshots
-	councilSeq  int
-	councilWait time.Duration // tests only: deadline for all member runs; 0 = run timeout × rounds
+	councils     map[string]*councilRun       // by pane: the council in progress
+	preflights   map[string]council.Preflight // by pane: the last preflight, for snapshots
+	councilSeq   int
+	preflightSeq uint64        // stamps every preflight (council.Preflight.Seq)
+	councilWait  time.Duration // tests only: deadline for all member runs; 0 = run timeout × rounds
 
 	// Memory state, guarded by mu. Memory I/O never happens under mu.
 	learning map[key]bool            // a memory pass is running
@@ -624,6 +627,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		return
 	}
 	mem := e.loadMemory(&att, d, turns) // outside every engine lock
+	if o.noLearn {
+		mem.learn = false // no remember ops asked for, none applied
+	}
 	req := backend.Request{
 		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
 		Model: d.Backend.Model, Args: d.Backend.Args, RepoRead: d.Context.RepoRead,
@@ -642,6 +648,13 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
 	if err != nil {
 		sinkErr = err
+		if errors.Is(base.Err(), context.Canceled) {
+			// Its council was abandoned (the pane closed) or the engine is
+			// stopping: not the dot's failure, and maybe no pane to show it.
+			// A real timeout is DeadlineExceeded and still fails below.
+			e.d.Logf("dot %s on %s: run cancelled: %v", d.Slug, paneID, err)
+			return
+		}
 		e.runFailed(k, d, turn, err)
 		return
 	}

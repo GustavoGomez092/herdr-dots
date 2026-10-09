@@ -3,6 +3,7 @@ package summon
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +26,8 @@ type councilForm struct {
 	selected  map[string]bool
 	seeded    bool // selection initialised from the first preflight
 	preflight *council.Preflight
+	request   string // id of this popup's preflight request (ipc.CouncilArgs.Request)
+	ownSeq    uint64 // Seq of the preflight that answered it; 0 until it arrives
 	dots      []view.DotState
 	sending   bool // a convene call is in flight: enter does nothing until it replies
 }
@@ -44,12 +47,16 @@ func NewCouncil(target string, c Caller) Model {
 	return m
 }
 
+// preflight asks the engine for a preflight under a fresh request id.
 func (m Model) preflight() tea.Cmd {
 	c, target := m.caller, m.target
+	m.council.request = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	m.council.ownSeq = 0
+	request := m.council.request
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := c.Call(ctx, ipc.CmdCouncilPreflight, ipc.CouncilArgs{PaneID: target}); err != nil {
+		if err := c.Call(ctx, ipc.CmdCouncilPreflight, ipc.CouncilArgs{PaneID: target, Request: request}); err != nil {
 			return errMsg{err}
 		}
 		return nil
@@ -92,7 +99,7 @@ func (m Model) snapshotCouncil(p view.Pane) Model {
 	f := m.council
 	f.dots = p.Dots
 	f.cursor = max(0, min(f.cursor, len(f.dots)-1))
-	if p.CouncilPreflight != nil {
+	if p.CouncilPreflight != nil && f.fresh(*p.CouncilPreflight) {
 		pf := *p.CouncilPreflight
 		f.preflight = &pf
 		if !f.seeded {
@@ -105,6 +112,20 @@ func (m Model) snapshotCouncil(p view.Pane) Model {
 		f.preflight = nil // never show a stale estimate; the ticks stay
 	}
 	return m
+}
+
+// fresh reports a preflight this popup may show: the answer to its own
+// request, or one computed after it. A preflight an earlier popup left in the
+// snapshot is not. An unstamped preflight (Seq 0, an engine without
+// sequence numbers) is taken as is.
+func (f *councilForm) fresh(pf council.Preflight) bool {
+	if pf.Seq == 0 {
+		return true
+	}
+	if f.ownSeq == 0 && f.request != "" && pf.Request == f.request {
+		f.ownSeq = pf.Seq
+	}
+	return f.ownSeq > 0 && pf.Seq >= f.ownSeq
 }
 
 func (m Model) updateCouncil(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -14,6 +14,7 @@ import (
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/council"
+	"herdr-dots/internal/delivery"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/herdr/herdrtest"
@@ -459,6 +460,26 @@ func TestCouncilPreflightRefusesWhenThePaneBudgetIsShort(t *testing.T) {
 	}
 }
 
+// Final review item 6: every preflight carries a growing sequence number and
+// the popup's request id, so a reopened popup can tell its own (or a newer)
+// preflight from an old one.
+func TestCouncilPreflightIsStampedWithSeqAndRequest(t *testing.T) {
+	r, _ := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	first, _ := r.e.CouncilPreflight(pane, nil)
+	raw, _ := json.Marshal(ipc.CouncilArgs{PaneID: pane, Request: "popup-2"})
+	if err := r.e.Handle(context.Background(), ipc.CmdCouncilPreflight, raw); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := r.e.Snapshot().Pane(pane)
+	if first.Seq == 0 || p.CouncilPreflight == nil || p.CouncilPreflight.Seq <= first.Seq || p.CouncilPreflight.Request != "popup-2" {
+		t.Fatalf("first %+v, published %+v", first, p.CouncilPreflight)
+	}
+	if b, _ := json.Marshal(council.Preflight{}); strings.Contains(string(b), "seq") || strings.Contains(string(b), "request") {
+		t.Fatalf("unstamped preflights keep the old JSON: %s", b)
+	}
+}
+
 func TestPreflightSkipsPausedAndOverBudgetMembers(t *testing.T) {
 	fe := member("Frontend", dots.ModeQueue)
 	fe.Budget.MaxCallsPerSession = 1
@@ -536,6 +557,40 @@ func TestCouncilDeliveryIsSkippedByEveryDot(t *testing.T) {
 				t.Fatalf("no dot may review the turn a council started: %d new calls", cb.total()-before)
 			}
 		})
+	}
+}
+
+// Final review item 8: "a" (send all) can deliver a dot card and a council
+// card in one prompt. That turn carries both prefixes and must count as from
+// every dot, plain or in Claude Code's <pasted_content> wrapper.
+func TestMixedDotAndCouncilDeliveryIsFromEveryDot(t *testing.T) {
+	text := delivery.Format([]queue.Card{
+		{Dot: "security", DotName: "Security", Glyph: "◆", Body: "JWT in localStorage."},
+		{Kind: queue.KindCouncil, Dot: "council", DotName: transcript.CouncilName, Glyph: transcript.CouncilGlyph, Body: goodDigest},
+	})
+	if !strings.HasPrefix(text, "[◆ Security dot] ") || !strings.Contains(text, "\n\n[⊕ Council dot] ## Must fix") {
+		t.Fatalf("delivered text %q", text)
+	}
+	for _, wrapped := range []bool{false, true} {
+		seen := text
+		if wrapped {
+			seen = claudeWrap(text)
+		}
+		tr := transcript.Turn{Index: 3, User: seen, FromDots: transcript.FromDots(seen)}
+		if len(tr.FromDots) != 2 {
+			t.Fatalf("wrapped=%v: FromDots = %v, want Security and Council", wrapped, tr.FromDots)
+		}
+		for _, name := range []string{"Security", "Frontend", "Copy"} {
+			d := dot(name, dots.ModeQueue)
+			if dec := Decide(FilterInput{Dot: d, NewTurns: []transcript.Turn{tr}, PaneBudget: 100}); dec.Run || dec.Reason != ReasonFromDot {
+				t.Errorf("wrapped=%v: %s must skip the turn, got %+v", wrapped, name, dec)
+			}
+			obs := dot(name, dots.ModeObserve)
+			obs.Memory.EveryTurns = 1
+			if DecideMemory(MemoryInput{Dot: obs, NewTurns: []transcript.Turn{tr}, MemoryEnabled: true, PaneBudget: 100}) {
+				t.Errorf("wrapped=%v: %s must not start a memory pass on it", wrapped, name)
+			}
+		}
 	}
 }
 
@@ -714,6 +769,64 @@ func TestEngineShutdownMidCouncilLeavesNoCard(t *testing.T) {
 	if len(cb.callsFor(council.ChairName)) != 0 || r.usage.Calls(pane, "council") != 0 {
 		t.Fatal("no chair call and no charge after shutdown")
 	}
+}
+
+func feedErrors(r *rig, slug string) []state.FeedEntry {
+	var out []state.FeedEntry
+	for _, f := range r.e.d.Feed.Recent(pane, 100) {
+		if f.Dot == slug && f.Outcome == state.OutcomeError {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// Final review item 7: a member run cancelled because its pane closed or the
+// engine stopped writes no feed error and bumps no failure streak; a real
+// timeout still does.
+func TestCancelledMemberRunsAreNotFailures(t *testing.T) {
+	t.Run("pane closed", func(t *testing.T) {
+		r, cb := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+		seat(t, r, "security", "frontend")
+		cb.on("Security", step{hang: true})
+		cb.on("Frontend", step{hang: true})
+		convene(t, r, "")
+		eventually(t, "both members running", func() bool { return cb.running() == 2 })
+		r.srv.RemovePane(pane)
+		eventually(t, "in-flight member runs cancelled", func() bool { return cb.running() == 0 })
+		time.Sleep(50 * time.Millisecond)
+		for _, slug := range []string{"security", "frontend"} {
+			if errs := feedErrors(r, slug); len(errs) != 0 {
+				t.Fatalf("%s: feed errors for a closed pane: %+v", slug, errs)
+			}
+		}
+	})
+	t.Run("engine stopped", func(t *testing.T) {
+		r, cb, cancel := councilRigCancel(t, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+		seat(t, r, "security", "frontend")
+		cb.on("Security", says("critical", "JWT in localStorage."))
+		cb.on("Frontend", step{hang: true})
+		convene(t, r, "")
+		eventually(t, "one member hangs", func() bool { return cb.total() == 2 && cb.running() == 1 })
+		cancel()
+		r.e.Wait()
+		if errs := feedErrors(r, "frontend"); len(errs) != 0 {
+			t.Fatalf("feed errors on shutdown: %+v", errs)
+		}
+		a, _ := r.atts.Get(pane)
+		if da := a.Find("frontend"); da == nil || da.Failures != 0 {
+			t.Fatalf("shutdown bumps no failure streak: %+v", da)
+		}
+	})
+	t.Run("real timeout", func(t *testing.T) {
+		r, cb := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+		r.e.councilWait = 100 * time.Millisecond
+		seat(t, r, "security", "frontend")
+		cb.on("Security", says("critical", "JWT in localStorage."))
+		cb.on("Frontend", step{hang: true})
+		convene(t, r, "")
+		eventually(t, "the timeout is a feed error", func() bool { return len(feedErrors(r, "frontend")) == 1 })
+	})
 }
 
 // Fix round: the pane closing while the chair runs gives no card.

@@ -55,14 +55,16 @@ type Model struct {
 	askSlug   string
 	question  textinput.Model
 	// M chooser: remember the selected card (f/r/c/g); r asks for a reason.
-	remembering bool
-	rememberID  string
-	reasoning   bool
-	reason      textinput.Model
-	width       int
-	height      int // 0 = unknown: render everything
-	status      string
-	seen        bool // a snapshot or disconnect has been received
+	// A council card offers c only (rememberCouncil).
+	remembering     bool
+	rememberID      string
+	rememberCouncil bool
+	reasoning       bool
+	reason          textinput.Model
+	width           int
+	height          int // 0 = unknown: render everything
+	status          string
+	seen            bool // a snapshot or disconnect has been received
 
 	// Council (council.go).
 	expandID string                    // council card whose member answers are shown
@@ -259,7 +261,11 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	var as string
-	switch k.String() {
+	key := k.String()
+	if m.rememberCouncil && key != "esc" && key != "c" {
+		return m, nil // a council card is remembered as a project convention only
+	}
+	switch key {
 	case "esc":
 		m.remembering = false
 		return m, nil
@@ -356,6 +362,7 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "M":
 		if c, ok := m.selectedCard(); ok {
 			m.remembering, m.reasoning, m.rememberID = true, false, c.ID
+			m.rememberCouncil = c.Kind == queue.KindCouncil
 		}
 	case "e":
 		if c, ok := m.selectedCard(); ok && sendable(c) {
@@ -545,9 +552,12 @@ func (m Model) View() string {
 		b.WriteString(rule("SUMMON "+m.askSlug, w) + m.question.View() + "\n")
 	}
 	if m.remembering {
-		if m.reasoning {
+		switch {
+		case m.reasoning:
 			b.WriteString(rule("REMEMBER AS A RULE", w) + m.reason.View() + "\n")
-		} else {
+		case m.rememberCouncil:
+			b.WriteString(rule("REMEMBER", w) + "c project convention · esc cancel\n")
+		default:
 			b.WriteString(rule("REMEMBER", w) + "f accepted finding · r rule: don't raise this again\nc project convention · g this dot everywhere · esc cancel\n")
 		}
 	}
