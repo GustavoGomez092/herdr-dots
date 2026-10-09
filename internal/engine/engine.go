@@ -136,14 +136,15 @@ type Engine struct {
 
 	// Proactive state (Phase 8), guarded by mu. Daily, inbox, memory and git
 	// I/O never happen under mu.
-	bgBusy   map[key]string    // the running background job (it holds bgSem) -> its kind
-	bgQueued map[key]int       // background jobs queued or running per key, for dedupe
-	bgSem    chan struct{}     // one background run at a time per engine
-	today    state.Day         // last daily.json read (snapshot and roster hints)
-	todayAt  time.Time         // when today was read
-	dailyErr string            // the local date a run's cost could not be recorded: no more background work that day
-	inboxAt  time.Time         // last inbox sweep
-	toasted  map[string]string // once-a-day toasts: key -> date
+	bgBusy   map[key]string        // the running background job (it holds bgSem) -> its kind
+	bgQueued map[key]int           // background jobs queued or running per key, for dedupe
+	bgSem    chan struct{}         // one background run at a time per engine
+	today    state.Day             // last daily.json read (snapshot and roster hints)
+	todayAt  time.Time             // when today was read
+	dailyErr string                // the local date a run's cost could not be recorded: no more background work that day
+	inboxAt  time.Time             // last inbox sweep
+	toasted  map[string]string     // once-a-day toasts: key -> date
+	idle     map[string]*idleState // pane -> idle research bookkeeping (idle.go)
 
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
@@ -210,6 +211,7 @@ func New(d Deps) *Engine {
 		bgQueued: map[key]int{},
 		bgSem:    make(chan struct{}, 1),
 		toasted:  map[string]string{},
+		idle:     map[string]*idleState{},
 		drafts:   map[string]*draftRun{},
 		applying: map[string]bool{},
 		gens:     map[string]uint64{},
@@ -390,6 +392,7 @@ func (e *Engine) Detach(paneID, slug string) error {
 		// sees the attachment gone, one before it is abandoned here.
 		e.abandonDraftsLocked(paneID, "")
 		e.gens[paneID]++
+		delete(e.idle, paneID) // a later attach starts a fresh idle period (idle.go)
 		_ = e.d.Attachments.Delete(paneID)
 	}
 	e.mu.Unlock()
@@ -1009,6 +1012,7 @@ func (e *Engine) Snapshot() view.Snapshot {
 			}
 			pv.Dots[i].Background = e.bgBusy[key{a.PaneID, pv.Dots[i].Slug}]
 		}
+		pv.Away = e.awayLocked(a.PaneID)
 		pv.Cards = e.d.Queue.Visible(a.PaneID)
 		pv.Drafts = e.draftViews(a.PaneID)
 		pv.Feed = e.d.Feed.Recent(a.PaneID, 20)
