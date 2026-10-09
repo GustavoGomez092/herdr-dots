@@ -1,0 +1,167 @@
+package worktree
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// Patch flags shown on a patch card.
+const (
+	FlagBinary           = "binary"            // a binary file changed
+	FlagMode             = "mode"              // a file mode changed (e.g. made executable)
+	FlagSymlink          = "symlink"           // a symlink was added or changed (target inside the repo)
+	FlagSymlinkKept      = "symlink-kept"      // the dot edited an escaping symlink's stand-in; the edit was dropped
+	FlagSubmoduleSkipped = "submodule-skipped" // the repo has submodules; they were not snapshotted
+)
+
+// Change is one file in a patch.
+type Change struct {
+	Path    string // slash-separated, relative to the repository root
+	Status  string // A, M, D or T (type change)
+	OldMode string // "000000" when added
+	NewMode string // "000000" when deleted
+	Added   int    // lines; -1 for a binary file
+	Deleted int
+}
+
+// Patch is what a draft changed, relative to its snapshot.
+type Patch struct {
+	Diff    []byte // `git diff --binary` output, ready for `git apply`
+	Stat    string // "3 files +42 −7"
+	Files   int
+	Bytes   int
+	Flags   []string
+	Changes []Change
+}
+
+// Paths returns the changed paths in diff order.
+func (p Patch) Paths() []string {
+	out := make([]string, len(p.Changes))
+	for i, c := range p.Changes {
+		out[i] = c.Path
+	}
+	return out
+}
+
+// Capture stages everything the dot changed in the worktree's own index
+// (never the user's) and returns the diff against the snapshot. Escaping
+// symlinks are restored first, so they never show up as changed.
+//
+// Every git command goes through co.Git/co.GitOutput: the repository is named
+// explicitly and every filter driver is off. No command here is `git status`
+// or a worktree-vs-index diff (both would consult the model-written
+// .gitattributes and .git file); every diff passes --no-ext-diff and
+// --no-textconv.
+func Capture(ctx context.Context, g Git, co Checkout, s Snapshot) (Patch, error) {
+	kept, err := restoreDefanged(co)
+	if err != nil {
+		return Patch{}, fmt.Errorf("restore symlinks: %w", err)
+	}
+	if _, err := co.GitOutput(ctx, "add", "-A", "--", "."); err != nil {
+		return Patch{}, err
+	}
+	base := []string{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color"}
+	with := func(extra ...string) []string {
+		return append(append(append([]string(nil), base...), extra...), s.Commit, "--")
+	}
+	raw, err := co.GitOutput(ctx, with("--raw", "-z")...)
+	if err != nil {
+		return Patch{}, err
+	}
+	num, err := co.GitOutput(ctx, with("--numstat", "-z")...)
+	if err != nil {
+		return Patch{}, err
+	}
+	diff, err := co.GitOutput(ctx, with("--binary")...)
+	if err != nil {
+		return Patch{}, err
+	}
+	changes, err := parseRaw(raw)
+	if err != nil {
+		return Patch{}, err
+	}
+	counts := parseNumstat(num)
+	p := Patch{Diff: diff, Files: len(changes), Bytes: len(diff)}
+	add, del := 0, 0
+	flags := map[string]bool{}
+	for i := range changes {
+		c := &changes[i]
+		n := counts[c.Path]
+		c.Added, c.Deleted = n[0], n[1]
+		if c.Added < 0 {
+			flags[FlagBinary] = true
+		} else {
+			add, del = add+c.Added, del+c.Deleted
+		}
+		if c.NewMode == "120000" {
+			flags[FlagSymlink] = true
+		}
+		if c.Status == "M" && c.OldMode != c.NewMode {
+			flags[FlagMode] = true
+		}
+	}
+	if len(kept) > 0 {
+		flags[FlagSymlinkKept] = true
+	}
+	if s.Submodules {
+		flags[FlagSubmoduleSkipped] = true
+	}
+	for f := range flags {
+		p.Flags = append(p.Flags, f)
+	}
+	sort.Strings(p.Flags)
+	p.Changes = changes
+	p.Stat = Stat(len(changes), add, del)
+	return p, nil
+}
+
+// Stat formats a diffstat: "1 file +3 −0", "12 files +42 −7".
+func Stat(files, added, deleted int) string {
+	noun := "files"
+	if files == 1 {
+		noun = "file"
+	}
+	return fmt.Sprintf("%d %s +%d −%d", files, noun, added, deleted)
+}
+
+// parseRaw reads `git diff --raw -z --no-renames`:
+// ":<old mode> <new mode> <old sha> <new sha> <status>\0<path>\0" per file.
+func parseRaw(out []byte) ([]Change, error) {
+	fields := bytes.Split(out, []byte{0})
+	var cs []Change
+	for i := 0; i+1 < len(fields); i += 2 {
+		head := string(fields[i])
+		if head == "" {
+			break
+		}
+		parts := strings.Fields(strings.TrimPrefix(head, ":"))
+		if len(parts) != 5 {
+			return nil, fmt.Errorf("unexpected git diff --raw record %q", head)
+		}
+		cs = append(cs, Change{Path: string(fields[i+1]), OldMode: parts[0], NewMode: parts[1], Status: parts[4][:1]})
+	}
+	return cs, nil
+}
+
+// parseNumstat reads `git diff --numstat -z --no-renames`:
+// "<added>\t<deleted>\t<path>\0" per file, "-" counts for binary files.
+func parseNumstat(out []byte) map[string][2]int {
+	m := map[string][2]int{}
+	for _, rec := range bytes.Split(out, []byte{0}) {
+		parts := strings.SplitN(string(rec), "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		a, aerr := strconv.Atoi(parts[0])
+		d, derr := strconv.Atoi(parts[1])
+		if aerr != nil || derr != nil {
+			a, d = -1, -1
+		}
+		m[parts[2]] = [2]int{a, d}
+	}
+	return m
+}
