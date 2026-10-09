@@ -72,7 +72,7 @@ func uiSetup() (paths.Paths, ipc.Client, error) {
 	if err := ensureEngine(p); err != nil {
 		return p, ipc.Client{}, err
 	}
-	return p, ipc.Client{Path: p.EngineSock()}, nil
+	return p, ipc.Client{Path: p.EngineEndpoint()}, nil
 }
 
 // pumpSnapshots forwards engine snapshots to a program, restarting the engine

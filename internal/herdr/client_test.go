@@ -159,7 +159,7 @@ func TestNewFromEnv(t *testing.T) {
 	}
 }
 
-// rawListener returns a unix socket path whose connections are handed to h.
+// rawListener returns a Herdr socket path whose connections are handed to h.
 func rawListener(t *testing.T, h func(net.Conn)) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "hdt")
@@ -167,7 +167,7 @@ func rawListener(t *testing.T, h func(net.Conn)) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "h.sock")
-	ln, err := net.Listen("unix", path)
+	ln, err := herdrtest.Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}

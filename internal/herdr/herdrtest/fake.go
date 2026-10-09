@@ -44,7 +44,7 @@ func New(t testing.TB) *Server {
 		reads: map[string]string{},
 		subs:  map[string][]*json.Encoder{},
 	}
-	s.ln, err = net.Listen("unix", s.Path)
+	s.ln, err = Listen(s.Path)
 	if err != nil {
 		t.Fatal(err)
 	}

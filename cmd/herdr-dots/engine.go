@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -21,6 +20,7 @@ import (
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/lockfile"
 	"herdr-dots/internal/paths"
+	"herdr-dots/internal/platform"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
@@ -48,10 +48,10 @@ func runEngine(args []string) error {
 }
 
 // ensureEngine starts a detached engine for this Herdr session unless one
-// already holds the lock, then waits until its socket accepts connections.
+// already holds the lock, then waits until its endpoint accepts connections.
 func ensureEngine(p paths.Paths) error {
 	if lockfile.Held(p.EngineLock()) {
-		return waitForSocket(p.EngineSock(), 3*time.Second)
+		return waitForEndpoint(p.EngineEndpoint(), 3*time.Second)
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -71,12 +71,14 @@ func ensureEngine(p paths.Paths) error {
 		cmd.Dir = "/"
 	}
 	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // survive the hook/pane that started us
-	if err := cmd.Start(); err != nil {
+	// Survive the hook/pane that started us: a new session on Unix; a hidden
+	// console and process group (out of any job that allows it) on Windows.
+	proc, err := platform.StartDetached(cmd)
+	if err != nil {
 		return fmt.Errorf("start engine: %w", err)
 	}
-	_ = cmd.Process.Release()
-	return waitForSocket(p.EngineSock(), 5*time.Second)
+	_ = proc.Release()
+	return waitForEndpoint(p.EngineEndpoint(), 5*time.Second)
 }
 
 // engineEnv is a detached engine's environment: the caller's, with the
@@ -94,10 +96,14 @@ func ensureEngine(p paths.Paths) error {
 // environment (only the variables Codex passes to MCP servers), so API keys
 // set only in the shell environment may be missing for that engine's whole
 // life; keys in credentials.toml are unaffected.
+//
+// Names compare in platform.EnvKey form, so a Windows variable spelled in
+// another case is dropped or replaced too.
 func engineEnv(env []string, p paths.Paths) []string {
 	out := make([]string, 0, len(env)+3)
 	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
+		name, _, _ := strings.Cut(kv, "=")
+		k := platform.EnvKey(name)
 		switch {
 		case k == "HERDR_PLUGIN_CONFIG_DIR", k == "HERDR_PLUGIN_STATE_DIR", k == "HERDR_SOCKET_PATH",
 			k == "HERDR_PANE_ID", k == "CLAUDECODE":
@@ -118,16 +124,19 @@ func claudeProviderSetting(k string) bool {
 		strings.HasPrefix(k, "CLAUDE_CODE_CLIENT_") || k == "CLAUDE_CODE_OAUTH_TOKEN"
 }
 
-func waitForSocket(path string, d time.Duration) error {
+// waitForEndpoint polls until the engine accepts connections at endpoint.
+func waitForEndpoint(endpoint string, d time.Duration) error {
 	deadline := time.Now().Add(d)
 	for {
-		conn, err := net.DialTimeout("unix", path, 200*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		conn, err := ipc.Dial(ctx, endpoint)
+		cancel()
 		if err == nil {
 			conn.Close()
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("engine socket %s not ready: %w", path, err)
+			return fmt.Errorf("engine endpoint %s not ready: %w", endpoint, err)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -216,18 +225,16 @@ func serveEngine(p paths.Paths) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	sock := p.EngineSock()
-	_ = os.Remove(sock) // stale socket from a dead engine; we hold the lock
-	ln, err := net.Listen("unix", sock)
+	endpoint := p.EngineEndpoint()
+	ln, err := ipc.Listen(endpoint) // replaces a stale socket: we hold the lock
 	if err != nil {
 		return err
 	}
-	_ = os.Chmod(sock, 0o600)
-	defer os.Remove(sock)
+	defer ln.Close() // also removes the unix socket file
 
 	e.Start(ctx)
 	go watchHerdr(ctx, cancel, hc, logger)
-	logger.Printf("engine started: session dir %s, socket %s", p.SessionDir, sock)
+	logger.Printf("engine started: session dir %s, endpoint %s", p.SessionDir, endpoint)
 	err = ipc.Serve(ctx, ln, e)
 	cancel()
 	e.Wait() // no goroutine may write state files after the lock is released

@@ -47,7 +47,7 @@ func runAction(args []string) error {
 	case "toggle-pane":
 		err = togglePane(ctx, p, hc, target)
 	case "pause-all":
-		err = ipc.Client{Path: p.EngineSock()}.Call(ctx, ipc.CmdPauseAll, nil)
+		err = ipc.Client{Path: p.EngineEndpoint()}.Call(ctx, ipc.CmdPauseAll, nil)
 	default:
 		err = fmt.Errorf("unknown action %q", args[0])
 	}

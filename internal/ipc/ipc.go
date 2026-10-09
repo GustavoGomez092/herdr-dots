@@ -1,5 +1,6 @@
 // Package ipc is the newline-delimited JSON protocol between the engine and
-// the Bubble Tea UIs over the engine's local unix socket.
+// the Bubble Tea UIs over the engine's local endpoint: a unix socket, or on
+// Windows a named pipe only the current user can open.
 package ipc
 
 import (
@@ -235,12 +236,11 @@ var callTimeout = 30 * time.Second
 // maxRequestBytes bounds one request line read by the server.
 const maxRequestBytes = 1 << 20
 
+// Client talks to the engine. Path is the engine endpoint
+// (paths.Paths.EngineEndpoint).
 type Client struct{ Path string }
 
-func (c Client) dial(ctx context.Context) (net.Conn, error) {
-	var d net.Dialer
-	return d.DialContext(ctx, "unix", c.Path)
-}
+func (c Client) dial(ctx context.Context) (net.Conn, error) { return Dial(ctx, c.Path) }
 
 func (c Client) Call(ctx context.Context, cmd string, args any) error {
 	conn, err := c.dial(ctx)

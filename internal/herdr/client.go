@@ -59,8 +59,7 @@ type response struct {
 }
 
 func (c *SocketClient) dial(ctx context.Context) (net.Conn, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", c.Path)
+	conn, err := dialSocket(ctx, c.Path)
 	if err != nil {
 		return nil, fmt.Errorf("connect herdr socket: %w", err)
 	}
