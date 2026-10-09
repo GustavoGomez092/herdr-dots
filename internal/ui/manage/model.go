@@ -31,10 +31,13 @@ type Deps struct {
 type SnapshotMsg view.Snapshot
 
 type (
-	doneMsg     struct{}
-	errMsg      struct{ err error }
-	formErrMsg  struct{ err error }
-	savedMsg    struct{ slug string }
+	doneMsg    struct{}
+	errMsg     struct{ err error }
+	formErrMsg struct{ err error }
+	savedMsg   struct {
+		slug  string
+		isNew bool
+	}
 	deletedMsg  struct{ name string }
 	reloadedMsg struct{}
 )
@@ -117,7 +120,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case savedMsg:
 		m.scr, m.form, m.saving = scrLibrary, nil, false
 		m.status = "saved " + msg.slug
-		if m.target != "" {
+		if m.target != "" && msg.isNew {
+			// Pre-check a dot just created here; an edited dot keeps its state,
+			// so ⏎ never attaches something the user only edited.
 			m.selected[msg.slug] = true
 		}
 		return m, m.reload()
@@ -286,7 +291,7 @@ func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
 		if slug == "" {
 			slug = dots.Slugify(d.Name)
 		}
-		return savedMsg{slug: slug}
+		return savedMsg{slug: slug, isNew: isNew}
 	}
 }
 
