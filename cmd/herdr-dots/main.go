@@ -28,7 +28,7 @@ var commands = map[string]handler{
 	"manage":     notYet("manage"),
 	"summon-ui":  notYet("summon-ui"),
 	"action":     notYet("action"),
-	"setup-keys": notYet("setup-keys"),
+	"setup-keys": runSetupKeys,
 }
 
 func usage() error {
