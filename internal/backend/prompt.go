@@ -62,7 +62,7 @@ func SystemPrompt(r Request) string {
 		b.WriteString(memoryPassContract + "\n")
 		return b.String()
 	}
-	if r.Pass == PassWrite {
+	if WriteMode(r) {
 		b.WriteString(draftContract + "\n")
 		return b.String()
 	}
@@ -90,7 +90,7 @@ func UserPrompt(r Request) string {
 	}
 	b.WriteString("CONVERSATION (most recent turns):\n\n")
 	b.WriteString(transcript.Format(r.Turns))
-	if q := strings.TrimSpace(r.Question); q != "" && r.Pass == PassWrite {
+	if q := strings.TrimSpace(r.Question); q != "" && WriteMode(r) {
 		fmt.Fprintf(&b, "\n\nFIX REQUESTED BY THE DEVELOPER:\n%s", q)
 	} else if q != "" {
 		fmt.Fprintf(&b, "\n\nQUESTION FROM THE DEVELOPER:\n%s", q)

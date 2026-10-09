@@ -16,6 +16,8 @@ func writeReq() Request {
 	return r
 }
 
+const writeSettingsWant = `{"disableAllHooks":true,"permissions":{"deny":["Edit(.git)","Write(.git)","Edit(.git/**)","Write(.git/**)","Edit(.claude/**)","Write(.claude/**)","Edit(**/.git)","Write(**/.git)","Edit(**/.claude/**)","Write(**/.claude/**)"]}}`
+
 func TestClaudeDraftGetsFileToolsAndNoShell(t *testing.T) {
 	cmd := ClaudeCLI{Environ: func() []string { return nil }}.BuildCmd(writeReq())
 	for flag, want := range map[string]string{
@@ -23,11 +25,14 @@ func TestClaudeDraftGetsFileToolsAndNoShell(t *testing.T) {
 		"--allowedTools":    "Read,Grep,Glob", // never Edit or Write: a bare allow rule approves any path
 		"--permission-mode": "acceptEdits",
 		"--disallowedTools": "Bash,WebFetch,WebSearch",
-		"--settings":        `{"disableAllHooks":true}`,
+		"--settings":        writeSettingsWant,
 	} {
 		if got, _ := argAfter(cmd.Args, flag); got != want {
 			t.Errorf("%s = %q, want %q", flag, got, want)
 		}
+	}
+	if !slices.Contains(cmd.Args, "--restricted") {
+		t.Errorf("a draft must run --restricted (ignores repo/user settings): %v", cmd.Args)
 	}
 	if cmd.Dir != "/state/worktrees/0123456789abcdef" {
 		t.Fatalf("a draft runs in its worktree, got %q", cmd.Dir)
@@ -54,6 +59,19 @@ func TestWriteToolsNeedBothWriteAndPassWrite(t *testing.T) {
 		cmd := ClaudeCLI{Environ: func() []string { return nil }}.BuildCmd(r)
 		if v, _ := argAfter(cmd.Args, "--tools"); v != "Read,Grep,Glob" || slices.Contains(cmd.Args, "--permission-mode") {
 			t.Errorf("case %d: %v must stay read-only", i, cmd.Args)
+		}
+		if slices.Contains(cmd.Args, "--restricted") {
+			t.Errorf("case %d: --restricted is for drafts only: %v", i, cmd.Args)
+		}
+		if v, _ := argAfter(cmd.Args, "--settings"); v != `{"disableAllHooks":true}` {
+			t.Errorf("case %d: read-only settings changed: %q", i, v)
+		}
+		sys, _ := argAfter(cmd.Args, "--append-system-prompt")
+		if strings.Contains(sys, "DRAFTING") {
+			t.Errorf("case %d: the draft contract needs both Write and PassWrite", i)
+		}
+		if u := UserPrompt(r); strings.Contains(u, "FIX REQUESTED") {
+			t.Errorf("case %d: fix heading without write mode", i)
 		}
 	}
 }
@@ -99,6 +117,13 @@ func TestCodexNeverDrafts(t *testing.T) {
 	if !errors.Is(err, ErrCodexCannotDraft) || run.got.Name != "" {
 		t.Fatalf("err %v, runner called with %+v", err, run.got)
 	}
+	for _, r := range []Request{func() Request { r := writeReq(); r.Pass = PassReview; return r }(),
+		func() Request { r := writeReq(); r.Write = false; return r }()} {
+		run := &fakeRunner{}
+		if _, err := (CodexCLI{Runner: run, Environ: func() []string { return nil }}).Run(context.Background(), r); !errors.Is(err, ErrCodexCannotDraft) || run.got.Name != "" {
+			t.Fatalf("half case %+v: err %v, ran %+v", r.Pass, err, run.got)
+		}
+	}
 	cmd := CodexCLI{Environ: func() []string { return nil }}.BuildCmd(writeReq())
 	if v, _ := argAfter(cmd.Args, "--sandbox"); v != "read-only" {
 		t.Fatalf("codex keeps its read-only sandbox, got %q", v)
@@ -117,5 +142,19 @@ func TestReviewAndMemoryPromptsAreUnchangedByPhase7(t *testing.T) {
 	r.Pass = PassMemory
 	if s := SystemPrompt(r); strings.Contains(s, "DRAFTING") {
 		t.Fatalf("memory prompt:\n%s", s)
+	}
+}
+
+func TestDraftSettingsSurviveTheShimSettingsFile(t *testing.T) {
+	// A long prompt moves the system prompt to a file; the write settings stay inline and exact.
+	r := writeReq()
+	r.Purpose = strings.Repeat("x", 100000)
+	cmd := ClaudeCLI{Environ: func() []string { return nil }}.BuildCmd(r)
+	defer cmd.Close()
+	if v, _ := argAfter(cmd.Args, "--settings"); v != writeSettingsWant {
+		t.Fatalf("settings %q", v)
+	}
+	if !slices.Contains(cmd.Args, "--restricted") {
+		t.Fatal("--restricted missing")
 	}
 }
