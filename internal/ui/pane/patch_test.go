@@ -1,6 +1,7 @@
 package pane
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -205,9 +206,61 @@ func TestThePaneNeverAppliesAPatchItself(t *testing.T) {
 	fc := &fakeCaller{}
 	var opened []viewerCall
 	press(patchReady(fc, patchSnap(), &opened), "j", "A", "y")
-	for _, c := range fc.calls {
-		if c.cmd == ipc.CmdApplyPatch {
-			t.Fatalf("the pane must never apply: %+v", fc.calls)
+	if len(fc.calls) != 0 {
+		t.Fatalf("the pane must make no IPC call (apply is the viewer's): %+v", fc.calls)
+	}
+	if len(opened) != 1 || !opened[0].apply || opened[0].card != "3" {
+		t.Fatalf("want exactly one armed viewer call, got %+v", opened)
+	}
+}
+
+func TestDraftConfirmKeepsItsHeaderOnScreenForALongInstruction(t *testing.T) {
+	s := patchSnap()
+	s.Panes[0].Cards[0].Body = strings.Repeat("word ", 800)
+	m := patchReady(&fakeCaller{}, s, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 15})
+	v := press(m, "w").View()
+	for _, want := range []string{"Draft a fix with Security?", "claude-cli · sonnet", "more lines (e to read all)", "y draft"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("lacks %q:\n%s", want, v)
+		}
+	}
+	lines := strings.Split(v, "\n")
+	if len(lines) > 15 {
+		t.Errorf("%d lines in a 15-line pane:\n%s", len(lines), v)
+	}
+	for _, l := range lines {
+		if n := lipgloss.Width(l); n > 40 {
+			t.Errorf("line of width %d: %q", n, l)
+		}
+	}
+}
+
+func TestDraftConfirmClosesWhenItsDotLeavesTheLibrary(t *testing.T) {
+	fc := &fakeCaller{}
+	m := press(patchReady(fc, patchSnap(), nil), "w")
+	gone := patchSnap()
+	gone.Library = gone.Library[1:]
+	m, _ = m.Update(SnapshotMsg(gone))
+	v := m.View()
+	if strings.Contains(v, "DRAFT A FIX") || !strings.Contains(v, "no longer available") {
+		t.Fatalf("confirm must close with a message:\n%s", v)
+	}
+	press(m, "y")
+	if len(fc.calls) != 0 {
+		t.Fatalf("nothing may be sent: %+v", fc.calls)
+	}
+}
+
+func TestStatusAndDeliveryErrorWrapToTheWidth(t *testing.T) {
+	s := patchSnap()
+	s.Panes[0].Cards[0].Error = strings.Repeat("boom ", 30)
+	m := patchReady(&fakeCaller{}, s, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 40})
+	m, _ = m.Update(errMsg{errors.New(strings.Repeat("status ", 20))})
+	for _, l := range strings.Split(m.View(), "\n") {
+		if n := lipgloss.Width(l); n > 40 {
+			t.Errorf("line of width %d: %q", n, l)
 		}
 	}
 }

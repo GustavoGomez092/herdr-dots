@@ -199,6 +199,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ""
 		}
 		m.reselect()
+		m = m.checkDraft()
 		return m.tickIfDrafting()
 	case tickMsg:
 		m.ticking = false
@@ -476,7 +477,7 @@ func (m Model) View() string {
 	}
 	// The project segment gives way first, so the budget and cost tail
 	// survives a narrow pane; one final cut keeps the header on one line.
-	if room := w - len([]rune(lead)) - len([]rune(tail)); room < len([]rune(project)) {
+	if room := w - lipgloss.Width(lead) - lipgloss.Width(tail); room < lipgloss.Width(project) {
 		if room <= 0 {
 			project = ""
 		} else {
@@ -541,7 +542,7 @@ func (m Model) View() string {
 			tags += " [suggestion]"
 		}
 		label := cardLabel(c)
-		room := max(10, w) - len([]rune(marker+c.Glyph+" "+label+"  "))
+		room := max(10, w) - lipgloss.Width(marker+c.Glyph+" "+label+"  ")
 		who := trunc(fmt.Sprintf("%s · turn %d%s", c.DotName, c.Turn, tags), max(1, room))
 		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", marker, c.Glyph, style.Severity(c.Severity).Render(label), who))
 		text := patchText(c)
@@ -550,7 +551,7 @@ func (m Model) View() string {
 		}
 		b.WriteString(body.Render("  "+text) + "\n")
 		if c.Error != "" {
-			b.WriteString(style.Err.Render("  delivery failed: "+c.Error) + "\n")
+			b.WriteString(wrapStyled(style.Err, "  delivery failed: "+c.Error, m.width) + "\n")
 		}
 		b.WriteString(councilDetail(c, m.expandID == c.ID, body))
 		b.WriteString(patchDetail(c, w))
@@ -588,7 +589,13 @@ func (m Model) View() string {
 	// Footer: open editors and the status line, always on screen.
 	b.Reset()
 	if m.draft != nil {
-		b.WriteString(m.draftView(w))
+		// The confirm has screen priority: its header always shows, so the
+		// roster and the cards give way (they are cut below).
+		avail := 0
+		if m.height > 0 {
+			avail = m.height - lineCount(top) - lineCount(queueRule) - 1 // -1: the status line
+		}
+		b.WriteString(m.draftView(w, avail))
 	}
 	if m.editing {
 		b.WriteString(rule("EDIT", w) + m.editor.View() + "\n" + style.Dim.Render("ctrl+s save · esc cancel") + "\n")
@@ -610,7 +617,7 @@ func (m Model) View() string {
 	if m.status != "" {
 		footer = m.status
 	}
-	b.WriteString(style.Dim.Render(footer))
+	b.WriteString(wrapStyled(style.Dim, footer, m.width))
 	foot := b.String()
 
 	if m.height > 0 {
@@ -626,6 +633,9 @@ func (m Model) View() string {
 	if m.height > 0 {
 		avail := max(1, m.height-lineCount(head)-lineCount(foot))
 		bodyText = window(bodyText, avail, selStart, selEnd)
+		if m.draft != nil {
+			bodyText = ""
+		}
 	}
 	return head + bodyText + foot
 }
@@ -730,4 +740,13 @@ func costPart(detail string) string {
 		return detail[i:]
 	}
 	return ""
+}
+
+// wrapStyled renders s in st wrapped to width w, so lineCount sees the real
+// number of lines. It never cuts text. An unknown width (0) leaves s alone.
+func wrapStyled(st lipgloss.Style, s string, w int) string {
+	if w > 0 {
+		st = st.Width(max(10, w))
+	}
+	return st.Render(s)
 }

@@ -168,11 +168,29 @@ func (m Model) updateDraft(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		slug := f.choices[f.idx]
+		if m = m.checkDraft(); m.draft == nil {
+			return m, nil
+		}
 		m.draft = nil
 		m.status = "drafting with " + slug + "…"
 		return m, m.call(ipc.CmdDraft, ipc.DraftArgs{PaneID: m.target, Slug: slug, Instruction: f.text, FromCardID: f.cardID})
 	}
 	return m, nil
+}
+
+// checkDraft closes the confirm when the dot it is bound to has left the
+// library or is no longer write-capable: it must never send for a dot the
+// user is not looking at any more.
+func (m Model) checkDraft() Model {
+	if m.draft == nil {
+		return m
+	}
+	slug := m.draft.choices[m.draft.idx]
+	if d, ok := m.libraryDot(slug); !ok || !d.Write || !m.snap.WriteEnabled {
+		m.draft = nil
+		m.status = slug + " is no longer available for drafts"
+	}
+	return m
 }
 
 // draftTools names the tools a draft run of this backend gets.
@@ -191,7 +209,10 @@ func timeoutText(s int) string {
 }
 
 // draftView is the confirm, rendered in the footer so it never scrolls away.
-func (m Model) draftView(w int) string {
+// avail (0 = unknown) is the number of lines the confirm may take: the fixed
+// header lines (dot, backend, tools, notice) always show, and a long
+// instruction is cut to what is left with a "… N more lines" line.
+func (m Model) draftView(w, avail int) string {
 	f := m.draft
 	d, _ := m.libraryDot(f.choices[f.idx])
 	body := lipgloss.NewStyle().Width(max(10, w-2))
@@ -217,7 +238,16 @@ func (m Model) draftView(w int) string {
 	if f.text == "" {
 		b.WriteString(style.Dim.Render("  (none yet: press e)") + "\n")
 	} else {
-		b.WriteString(body.Render("  "+f.text) + "\n")
+		lines := strings.Split(strings.TrimRight(body.Render("  "+f.text), "\n"), "\n")
+		if avail > 0 {
+			keep := max(1, avail-lineCount(b.String())-1) // -1: the key line
+			if len(lines) > keep {
+				keep = max(1, keep-1) // room for the "more" line
+				more := fmt.Sprintf("  … %d more lines (e to read all)", len(lines)-keep)
+				lines = append(lines[:keep:keep], style.Dim.Render(trunc(more, max(10, w))))
+			}
+		}
+		b.WriteString(strings.Join(lines, "\n") + "\n")
 	}
 	b.WriteString(style.Dim.Render(trunc("y draft · e edit · esc cancel", max(10, w))) + "\n")
 	return b.String()
