@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -175,6 +176,31 @@ func TestCouncilSkipsADotThatIsBeingAsked(t *testing.T) {
 	release()
 	if err := <-asked; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Final review M3: an ask whose run fails because the ask was cancelled ends
+// with the cancellation, never as the dot's failure ("X failed: context
+// canceled"), whichever of the two the ask notices first.
+func TestCancelledAskNeverReadsAsTheDotFailing(t *testing.T) {
+	d := member("Security", dots.ModeQueue)
+	d.Budget.MaxCallsPerSession = 10000
+	r, cb := councilRig(t, func(c *config.Config) { c.SessionBudgetCalls = 10000 }, d)
+	seat(t, r, "security")
+	cb.on("Security", step{hang: true}) // fails with the run's context error
+	for i := range 100 {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := r.e.Ask(ctx, pane, "security", "q", false)
+		if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "failed") {
+			t.Fatalf("try %d: %v", i+1, err)
+		}
+		eventually(t, "the ask's reservation ends", func() bool {
+			r.e.mu.Lock()
+			defer r.e.mu.Unlock()
+			return len(r.e.asking) == 0
+		})
+		r.e.limiter().forget(pane)
 	}
 }
 

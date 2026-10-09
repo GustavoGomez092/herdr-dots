@@ -382,11 +382,13 @@ func (e *Engine) Ask(ctx context.Context, paneID, slug, question string, include
 	case <-runCtx.Done():
 		return ipc.AskResult{}, e.askEnded(paneID, d, runCtx)
 	}
-	if out.err != nil {
-		return ipc.AskResult{}, fmt.Errorf("%s failed: %s", d.Name, errText(errors.New(credentials.Redact(out.err.Error()))))
-	}
+	// Cancellation first: a run it made fail can win the select above, and
+	// that is the ask ending (pane closed, hangup), not the dot failing.
 	if runCtx.Err() != nil {
 		return ipc.AskResult{}, e.askEnded(paneID, d, runCtx)
+	}
+	if out.err != nil {
+		return ipc.AskResult{}, fmt.Errorf("%s failed: %s", d.Name, errText(errors.New(credentials.Redact(out.err.Error()))))
 	}
 	if !e.markConsulted(paneID, slug) {
 		return ipc.AskResult{}, ErrPaneClosed
