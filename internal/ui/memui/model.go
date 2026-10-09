@@ -417,7 +417,10 @@ func wrap(s string, w int) []string {
 func (m Model) approveScreen(w int) []string {
 	e := m.approve
 	by := clean(e.Dot)
-	if by == "" {
+	switch {
+	case e.Source == memory.SourceAgent:
+		by = "the main agent"
+	case by == "":
 		by = "the developer"
 	}
 	paths := clean(strings.Join(e.Paths, ", "))
@@ -618,6 +621,8 @@ func (m Model) row(e memory.Entry) string {
 	switch {
 	case e.Source == memory.SourceUser:
 		who = "(you)"
+	case e.Source == memory.SourceAgent:
+		who = "(agent)"
 	case e.Status == memory.StatusProposed || (e.Scope == memory.ScopeProject && e.Dot != ""):
 		who = "(" + clean(e.Dot) + ")"
 	default:

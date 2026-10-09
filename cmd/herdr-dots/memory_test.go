@@ -433,6 +433,18 @@ func addProposal(t *testing.T, c *memCLI) memory.Ref {
 	return e.Ref()
 }
 
+func TestMemoryApproveNamesTheMainAgent(t *testing.T) {
+	c, out, _ := newMemCLI(t)
+	e, err := c.store.Propose(testPID, memory.Entry{Kind: memory.KindNote, Text: "Tests need docker running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, c, "approve", e.Ref().String(), "--yes")
+	if !strings.Contains(out.String(), "proposed by: the main agent") {
+		t.Fatalf("approve output:\n%s", out)
+	}
+}
+
 // Final review minor 7: approve shows the full text and confirms it.
 func TestMemoryApproveShowsTextAndNeedsYesWithoutATerminal(t *testing.T) {
 	c, out, _ := newMemCLI(t)
