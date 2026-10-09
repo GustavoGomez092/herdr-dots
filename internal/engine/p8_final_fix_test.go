@@ -114,6 +114,35 @@ func TestARunningTurnReviewCountsAsInFlight(t *testing.T) {
 	}
 }
 
+// A dot paused while its background job waits for the one background slot
+// (bgSem) does not run: the post-wait gate re-reads the pause from the
+// attachment instead of trusting the job's build-time copy.
+func TestDotPausedWhileQueuedDoesNotRun(t *testing.T) {
+	sec, fe := dot("Security", dots.ModeQueue), dot("Frontend", dots.ModeQueue)
+	r := newProRig(t, proOpts{}, sec, fe)
+	r.attach(t, "security", "frontend")
+	open := holdAll(t, r)
+	first := make(chan struct{})
+	j1 := paneJob(r, sec)
+	j1.done = func() { close(first) }
+	r.e.spawn(func() { r.e.runBackground(j1) })
+	eventually(t, "the first job holds the slot", func() bool { return r.be.n() == 1 })
+	second := make(chan struct{})
+	j2 := paneJob(r, fe) // built unpaused
+	j2.done = func() { close(second) }
+	r.e.spawn(func() { r.e.runBackground(j2) })
+	eventually(t, "the second job is queued", func() bool { return queuedJobs(r) == 2 })
+	if err := r.e.SetPaused(pane, "frontend", true); err != nil {
+		t.Fatal(err)
+	}
+	open()
+	<-first
+	<-second
+	if n := r.be.n(); n != 1 {
+		t.Fatalf("%d backend calls: the dot paused while queued still ran", n)
+	}
+}
+
 // The other way round: turn reviews use the same in-flight count, so an ask
 // of another dot in flight over a 1-call budget stops the turn review.
 func TestTurnReviewCountsAnAskInFlight(t *testing.T) {

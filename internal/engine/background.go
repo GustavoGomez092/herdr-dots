@@ -279,7 +279,11 @@ func (e *Engine) runBackground(j bgJob) {
 	}
 	defer func() { <-e.sem }()
 
-	// Checked again after the wait: another dot or session may have spent the budget.
+	// Checked again after the wait: another dot or session may have spent the
+	// budget, and the dot may have been paused (pause-all is read in the gate).
+	e.mu.Lock()
+	j.paused = e.bgPausedLocked(j)
+	e.mu.Unlock()
 	if r := e.backgroundGate(j.dot.Slug, j.kind, j.maxPerDay, j.paused); r != ReasonRun {
 		e.d.Logf("dot %s: %s skipped (%s)", j.dot.Slug, j.label, r)
 		return
@@ -418,6 +422,21 @@ func (e *Engine) bgPaneGoneLocked(j bgJob) bool {
 	}
 	_, ok := e.d.Attachments.Get(j.paneID)
 	return !ok || e.gens[j.paneID] != j.gen
+}
+
+// bgPausedLocked is whether j's dot is paused on j's pane now, read from the
+// attachment (the job's copy is from when it was built). A job whose pane or
+// dot is gone keeps its copy: keepPane decides those.
+// Caller holds e.mu (e.mu -> stores).
+func (e *Engine) bgPausedLocked(j bgJob) bool {
+	if j.paneID == "" || e.bgPaneGoneLocked(j) {
+		return j.paused
+	}
+	a, _ := e.d.Attachments.Get(j.paneID)
+	if da := a.Find(j.dot.Slug); da != nil {
+		return da.Paused
+	}
+	return j.paused
 }
 
 func (e *Engine) bgPaneGone(j bgJob) bool {
