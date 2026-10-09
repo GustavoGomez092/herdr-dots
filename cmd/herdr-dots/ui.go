@@ -13,6 +13,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/mcpinstall"
 	"herdr-dots/internal/paths"
 	"herdr-dots/internal/ui/manage"
 	"herdr-dots/internal/ui/pane"
@@ -134,6 +135,7 @@ func runManage([]string) error {
 	prices := set.Prices()
 	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
 		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject,
+		MCPStatus: func() string { return mcpinstall.StatusLine(p.ConfigDir) },
 		CheckDot:  set.CheckDot,
 		Models:    set.Models,
 		Estimate:  func(d dots.Dot) string { return estimateLine(prices, d) },
