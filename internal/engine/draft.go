@@ -46,7 +46,8 @@ type draftRun struct {
 	pane, slug, phase string
 	started           time.Time
 	cancel            context.CancelFunc // ends the run when its pane goes away
-	abandoned         bool               // the pane closed or lost its last dot: no card, no charge
+	abandoned         bool               // the pane closed or the dot was detached: no card
+	gen               uint64             // the pane's attachment generation when the draft was asked for
 }
 
 // Draft starts a write-capable dot on an isolated copy of the pane's
@@ -68,7 +69,10 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 	if e.d.Patches == nil || e.d.WorktreesDir == "" {
 		return "", errors.New("drafts are unavailable: the engine has no patch store")
 	}
+	e.mu.Lock()
 	att, ok := e.d.Attachments.Get(paneID)
+	gen := e.gens[paneID] // the attachment this draft is asked for
+	e.mu.Unlock()
 	if !ok {
 		return "", fmt.Errorf("%w: %s", state.ErrNoAttachment, paneID)
 	}
@@ -120,6 +124,14 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 	turns = tail(turns, d.Context.Turns)
 	id := worktree.NewID()
 	e.mu.Lock()
+	// Git and the transcript were read unlocked: the pane may have closed (and
+	// its id been reused) meanwhile. dropPane and Detach flag and bump the
+	// generation in the section that deletes the attachment, so this check
+	// and the registration below are atomic with them.
+	if cur, ok := e.d.Attachments.Get(paneID); !ok || cur.Find(slug) == nil || e.gens[paneID] != gen {
+		e.mu.Unlock()
+		return "", fmt.Errorf("%w: %s", ErrPaneClosed, paneID)
+	}
 	live := 0 // abandoned drafts are winding down and hold no slot
 	for _, dr := range e.drafts {
 		if dr.abandoned {
@@ -142,7 +154,7 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 		return "", err
 	}
 	dctx, cancel := context.WithCancel(e.ctx) // its own context: closing the pane cancels just this draft
-	e.drafts[id] = &draftRun{pane: paneID, slug: slug, phase: view.DraftSnapshot, started: time.Now(), cancel: cancel}
+	e.drafts[id] = &draftRun{pane: paneID, slug: slug, phase: view.DraftSnapshot, started: time.Now(), cancel: cancel, gen: gen}
 	e.mu.Unlock()
 	e.broadcast()
 	e.spawn(func() { e.runDraft(dctx, id, att, repo, d, instruction, turns) })
@@ -214,16 +226,17 @@ func (e *Engine) draftAbandoned(id string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	dr, ok := e.drafts[id]
-	return !ok || dr.abandoned
+	return !ok || dr.abandoned || e.gens[dr.pane] != dr.gen
 }
 
-// chargeDraft charges a draft's usage to its pane unless the draft was
-// abandoned: the check and the charge happen under one e.mu, so a pane id
-// reused by a new attachment never pays for the old pane's draft.
+// chargeDraft charges a draft's usage to its pane unless the pane itself was
+// dropped (or its id reused: the generation changed). Detaching one dot does
+// not skip it: the backend call happened. The check and the charge happen
+// under one e.mu, so a new attachment never pays for the old pane's draft.
 func (e *Engine) chargeDraft(id, paneID, slug string, d state.Delta) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if dr, ok := e.drafts[id]; !ok || dr.abandoned {
+	if dr, ok := e.drafts[id]; !ok || e.gens[dr.pane] != dr.gen {
 		return
 	}
 	if _, ok := e.d.Attachments.Get(paneID); !ok {
@@ -293,11 +306,8 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 			e.d.Logf("draft %s: delete record: %v", id, err)
 		}
 	}()
-	s, err := worktree.TakeSnapshot(ctx, g, repo, id, maxSnapshotIndex)
-	if err != nil {
-		fail(err)
-		return
-	}
+	// Registered before the snapshot: a cancellation landing mid-snapshot may
+	// leave a ref, and dropping one that was never made is harmless.
 	keepRef := false
 	defer func() {
 		if keepRef || e.stopBefore(&crashed, "ref") {
@@ -307,6 +317,11 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 			e.d.Logf("draft %s: drop snapshot ref: %v", id, err)
 		}
 	}()
+	s, err := worktree.TakeSnapshot(ctx, g, repo, id, maxSnapshotIndex)
+	if err != nil {
+		fail(err)
+		return
+	}
 	meta.Snapshot, meta.Ref, meta.BaseHead = s.Commit, s.Ref, s.BaseHead
 	if err := e.d.Patches.Put(meta); err != nil {
 		fail(err)
@@ -375,8 +390,9 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		e.notify(d, "patch rejected: "+reason)
 		return
 	}
-	// The record keeps the sanitized summary as the dot wrote it, so memory's
-	// secret scan still sees a key; the card shows it redacted.
+	// Meta.Summary and the card are redacted; SummaryRaw keeps the text as
+	// written (only the memory outcome paths read it, so ScanSecrets still
+	// sees a key).
 	raw := strings.TrimSpace(textutil.SanitizeModelText(res.Verdict.Message))
 	summary := strings.TrimSpace(credentials.Redact(raw))
 	if summary == "" {
@@ -390,7 +406,10 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		fail(ErrPaneClosed) // no card for a pane that is gone: nobody could apply it
 		return
 	}
-	meta.Summary, meta.Stat, meta.Files, meta.Paths, meta.Flags, meta.Status = raw, p.Stat, p.Files, p.Paths(), p.Flags, patchstore.StatusReady
+	meta.Summary, meta.Stat, meta.Files, meta.Paths, meta.Flags, meta.Status = summary, p.Stat, p.Files, p.Paths(), p.Flags, patchstore.StatusReady
+	if raw != summary {
+		meta.SummaryRaw = raw
+	}
 	// Only what passed Validate is stored, and the engine applies exactly
 	// those bytes (hash-verified by patchstore.Diff).
 	if err := e.d.Patches.PutPatch(meta, p.Diff); err != nil {
@@ -446,19 +465,28 @@ func (e *Engine) ApplyPatchChecked(cardID, wantSHA256 string) error {
 		return err
 	}
 	e.hook("apply-before-reserve")
+	// Reserve and re-read the status under dmu (no git here): a discard that
+	// finished meanwhile is seen, and a SendCards that started later is
+	// refused by the reservation, one that finished earlier left the card
+	// sent. dmu is released before any git runs.
+	e.dmu.Lock()
 	release, err := e.reserveCard(cardID)
+	var c queue.Card
+	if err == nil {
+		c, err = e.patchCard(cardID)
+		if err == nil && c.Status != queue.StatusPending {
+			err = fmt.Errorf("card %s is %s: only a pending patch can be applied", cardID, c.Status)
+		}
+		if err != nil {
+			release()
+		}
+	}
+	e.dmu.Unlock()
 	if err != nil {
 		return err
 	}
 	defer release()
-	// Re-read after reserving: a discard that finished meanwhile is seen here.
-	c, err := e.patchCard(cardID)
-	if err != nil {
-		return err
-	}
-	if c.Status != queue.StatusPending {
-		return fmt.Errorf("card %s is %s: only a pending patch can be applied", cardID, c.Status)
-	}
+	e.hook("apply-reserved")
 	// Read and verify the patch: these exact bytes are what gets applied.
 	diff, m, err := e.d.Patches.Diff(c.PatchID)
 	if err != nil {
@@ -507,8 +535,8 @@ func (e *Engine) ApplyPatchChecked(cardID, wantSHA256 string) error {
 		e.notify(dots.Dot{Name: c.DotName, Glyph: c.Glyph}, note)
 	}
 	oc := c // memory gets the summary as written, so its secret scan still sees a key
-	if m.Summary != "" {
-		oc.Body = m.Summary
+	if s := memorySummary(m); s != "" {
+		oc.Body = s
 	}
 	e.spawnOutcome(oc, memory.OutcomeApplied)
 	e.reportPending(c.PaneID)
@@ -543,8 +571,8 @@ func (e *Engine) DiscardPatch(cardID string) error {
 	}
 	oc := c
 	if m, err := e.d.Patches.Get(c.PatchID); err == nil {
-		if m.Summary != "" {
-			oc.Body = m.Summary
+		if s := memorySummary(m); s != "" {
+			oc.Body = s
 		}
 		if m.Repo != "" {
 			if err := worktree.DropSnapshot(e.ctx, e.d.Git, m.Repo, c.PatchID); err != nil {
@@ -559,6 +587,22 @@ func (e *Engine) DiscardPatch(cardID string) error {
 	e.reportPending(c.PaneID)
 	e.broadcast()
 	return nil
+}
+
+// memorySummary is the summary memory's outcome paths record: as written when
+// the record has it, else the stored (redacted) one.
+func memorySummary(m patchstore.Meta) string {
+	if m.SummaryRaw != "" {
+		return m.SummaryRaw
+	}
+	return m.Summary
+}
+
+// cardReserved reports whether a patch card is being applied or discarded.
+func (e *Engine) cardReserved(cardID string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.applying[cardID]
 }
 
 // reserveCard marks a patch card as being applied or discarded; the other
@@ -615,8 +659,8 @@ func (e *Engine) patchSent(c queue.Card) {
 		m, err := e.d.Patches.Update(c.PatchID, func(m *patchstore.Meta) { m.Status = patchstore.StatusSent })
 		if err != nil {
 			e.d.Logf("patch %s: %v", c.PatchID, err)
-		} else if m.Summary != "" {
-			oc.Body = m.Summary
+		} else if s := memorySummary(m); s != "" {
+			oc.Body = s
 		}
 		if e.memEnabled() {
 			e.recordOutcome(oc, memory.OutcomeSent, "", false)

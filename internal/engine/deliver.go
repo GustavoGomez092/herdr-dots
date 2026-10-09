@@ -73,6 +73,11 @@ func (e *Engine) SendCards(ids []string) error {
 	byPane := map[string][]queue.Card{}
 	var order []string
 	for _, id := range ids {
+		if c, ok := e.d.Queue.Get(id); ok && c.Kind == queue.KindPatch && e.cardReserved(id) {
+			return fmt.Errorf("card %s is being applied or discarded", id)
+		}
+	}
+	for _, id := range ids {
 		c, ok := e.d.Queue.Get(id)
 		if !ok {
 			return fmt.Errorf("card %s: %w", id, queue.ErrNotFound)
@@ -185,6 +190,8 @@ func (e *Engine) dropPane(paneID string) {
 	// attachment: a run ending now either lands before the reset or sees the
 	// pane gone, and a reused pane id inherits no spend or status.
 	e.mu.Lock()
+	e.abandonDraftsLocked(paneID, "") // same section as the delete (see Draft)
+	e.gens[paneID]++
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)
 	for k := range e.status {

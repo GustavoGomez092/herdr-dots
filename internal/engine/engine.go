@@ -121,7 +121,8 @@ type Engine struct {
 
 	// Drafts (draft.go), guarded by mu. Git and patch I/O never happen under mu.
 	drafts    map[string]*draftRun // running drafts by id
-	applying  map[string]bool      // patch cards being applied, by card id
+	applying  map[string]bool      // patch cards being applied or discarded, by card id
+	gens      map[string]uint64    // by pane id: bumped whenever the attachment is dropped, so a reused id is a new attachment
 	startedAt time.Time            // Start time: older "drafting" records were interrupted
 
 	cleanupStop func(step string) bool // tests only: true = the process "dies" before that cleanup step
@@ -190,6 +191,7 @@ func New(d Deps) *Engine {
 		origBody: map[string]string{},
 		drafts:   map[string]*draftRun{},
 		applying: map[string]bool{},
+		gens:     map[string]uint64{},
 	}
 	if e.d.ConfigCheck <= 0 {
 		e.d.ConfigCheck = 3 * time.Second
@@ -350,12 +352,17 @@ func (e *Engine) Detach(paneID, slug string) error {
 	e.mu.Lock()
 	delete(e.status, key{paneID, slug})
 	delete(e.warned, key{paneID, slug})
+	e.abandonDraftsLocked(paneID, slug) // a detached dot's draft would make a card for a dot that is gone
+	if empty {
+		// In the same e.mu section as the delete: a draft registering after it
+		// sees the attachment gone, one before it is abandoned here.
+		e.abandonDraftsLocked(paneID, "")
+		e.gens[paneID]++
+		_ = e.d.Attachments.Delete(paneID)
+	}
 	e.mu.Unlock()
-	e.abandonDrafts(paneID, slug) // a detached dot's draft would make a card for a dot that is gone
 	if empty {
 		e.unwatch(paneID)
-		e.abandonDrafts(paneID, "")
-		_ = e.d.Attachments.Delete(paneID)
 	}
 	e.broadcast()
 	return nil
