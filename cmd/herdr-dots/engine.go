@@ -162,7 +162,7 @@ func serveEngine(p paths.Paths) error {
 
 	cfg, err := config.Load(p.ConfigFile())
 	if err != nil {
-		logger.Printf("config: %v (using defaults with inject disabled)", err)
+		logger.Print(startupConfigNote(err))
 	}
 	hc, err := herdr.NewFromEnv()
 	if err != nil {
@@ -221,4 +221,11 @@ func watchHerdr(ctx context.Context, cancel context.CancelFunc, hc herdr.Client,
 			}
 		}
 	}
+}
+
+// startupConfigNote is the log line for a malformed config.toml at engine
+// start. Inject comes back when the file is fixed (config.toml reloads at
+// runtime), but no memory store is opened, so memory needs a restart.
+func startupConfigNote(err error) string {
+	return fmt.Sprintf("config: %v (using defaults with inject disabled until the file is fixed; memory stays off until the engine restarts)", err)
 }

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,5 +78,16 @@ func TestOpenEngineLogRotatesBeforeOpening(t *testing.T) {
 	got, _ := os.ReadFile(p)
 	if string(got) != "fresh" {
 		t.Fatalf("engine.log should be the fresh file, got %d bytes", len(got))
+	}
+}
+
+// A malformed config.toml at startup opens no memory store, so the log must
+// say memory stays off until the engine restarts.
+func TestStartupConfigErrorSaysMemoryNeedsARestart(t *testing.T) {
+	msg := startupConfigNote(errors.New("bad toml"))
+	for _, want := range []string{"bad toml", "inject", "memory", "restart"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("startup config note missing %q: %q", want, msg)
+		}
 	}
 }

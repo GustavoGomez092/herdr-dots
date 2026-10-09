@@ -375,6 +375,16 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 				x.Dot = ""
 			}
 		}
+		// A sent card that repeats the dot's own model-written entry makes it
+		// the card's (spec M10): only sent and user findings suppress
+		// repeats, so a model must not keep a sent finding from counting by
+		// writing it first. Never the reverse, and never over a user entry.
+		if e.Source == SourceOutcome && x.Source == SourceModel && x.Scope == ScopeDot && x.Dot == e.Dot {
+			x.Source = SourceOutcome
+			if e.Evidence != (Evidence{}) {
+				x.Evidence = e.Evidence
+			}
+		}
 		if x.Status == StatusProposed && e.Status == StatusActive {
 			x.Status = StatusActive
 		}

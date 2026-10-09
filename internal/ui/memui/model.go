@@ -49,6 +49,7 @@ const (
 	modeBrowse mode = iota
 	modeConfirmForget
 	modeConfirmForgetAll
+	modeConfirmApprove
 	modeEdit
 	modeFilter
 )
@@ -105,6 +106,7 @@ type Model struct {
 	gen      int        // bumped when the viewed scope changes
 	forget   memory.Ref // the entry the forget prompt is about
 	forgetP  string
+	approve  memory.Entry // the proposal the approve screen shows
 	mode     mode
 	filter   string
 	input    textinput.Model    // filter text, forget-all confirmation
@@ -256,6 +258,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.keysConfirmForget(msg)
 		case modeConfirmForgetAll:
 			return m.keysConfirmForgetAll(msg)
+		case modeConfirmApprove:
+			return m.keysConfirmApprove(msg)
 		case modeEdit:
 			return m.keysEdit(msg)
 		case modeFilter:
@@ -296,17 +300,9 @@ func (m Model) keysBrowse(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "only proposals need approval"
 			return m, nil
 		}
-		ref, pid, seen := e.Ref(), m.pidOf(e), e.Text
-		return m, m.mutate("approved "+ref.String(), func(st *memory.Store) error {
-			_, err := st.Update(pid, ref, func(x *memory.Entry) error {
-				if x.Text != seen {
-					return errChanged
-				}
-				x.Status = memory.StatusActive
-				return nil
-			})
-			return err
-		})
+		// Rows are cut to the screen width: show the whole proposal first.
+		m.mode, m.approve = modeConfirmApprove, e
+		return m, nil
 	case "p":
 		e, ok := m.selected()
 		if !ok {
@@ -366,6 +362,84 @@ func (m Model) keysConfirmForget(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.mutate("forgot "+ref.String(), func(st *memory.Store) error { return st.Forget(pid, ref, false) })
 }
 
+// keysConfirmApprove approves the proposal on the confirm screen on y; any
+// other key cancels. The text shown must still be the stored text.
+func (m Model) keysConfirmApprove(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeBrowse
+	if k.String() != "y" {
+		m.status = "not approved"
+		return m, nil
+	}
+	e := m.approve
+	ref, pid, seen := e.Ref(), m.pidOf(e), e.Text
+	return m, m.mutate("approved "+ref.String(), func(st *memory.Store) error {
+		_, err := st.Update(pid, ref, func(x *memory.Entry) error {
+			if x.Text != seen {
+				return errChanged
+			}
+			x.Status = memory.StatusActive
+			return nil
+		})
+		return err
+	})
+}
+
+// wrap breaks clean(s) into lines of at most w runes, on spaces where it can.
+func wrap(s string, w int) []string {
+	w = max(w, 10)
+	var lines []string
+	var cur []rune
+	for _, word := range strings.Fields(clean(s)) {
+		r := []rune(word)
+		for len(r) > w { // a word longer than a line is cut
+			if len(cur) > 0 {
+				lines, cur = append(lines, string(cur)), nil
+			}
+			lines, r = append(lines, string(r[:w])), r[w:]
+		}
+		switch {
+		case len(cur) == 0:
+			cur = r
+		case len(cur)+1+len(r) <= w:
+			cur = append(append(cur, ' '), r...)
+		default:
+			lines, cur = append(lines, string(cur)), r
+		}
+	}
+	if len(cur) > 0 {
+		lines = append(lines, string(cur))
+	}
+	return lines
+}
+
+// approveScreen is the full proposal: who proposed it, its kind, its paths
+// and every word of its text.
+func (m Model) approveScreen(w int) []string {
+	e := m.approve
+	by := clean(e.Dot)
+	if by == "" {
+		by = "the developer"
+	}
+	paths := clean(strings.Join(e.Paths, ", "))
+	if paths == "" {
+		paths = "(none)"
+	}
+	lines := []string{style.Title.Render("APPROVE " + clean(e.Ref().String()) + "?"),
+		"proposed by: " + by, "kind:        " + clean(string(e.Kind))}
+	for i, l := range wrap(paths, w-13) {
+		if i == 0 {
+			lines = append(lines, "paths:       "+l)
+		} else {
+			lines = append(lines, "             "+l)
+		}
+	}
+	lines = append(lines, "text:")
+	for _, l := range wrap(e.Text, w-2) {
+		lines = append(lines, "  "+l)
+	}
+	return lines
+}
+
 // forgetAllTarget is the scope "X" clears and the name the developer must type.
 func (m Model) forgetAllTarget() (memory.Scope, string, string, string) {
 	switch m.view() {
@@ -374,11 +448,12 @@ func (m Model) forgetAllTarget() (memory.Scope, string, string, string) {
 	case viewGlobal:
 		return memory.ScopeGlobal, m.d.Dot, "", clean(m.d.Dot)
 	}
-	name := m.d.Project.Name
+	// A name that cleans to nothing would make an empty answer confirm.
+	name := clean(m.d.Project.Name)
 	if name == "" {
-		name = m.d.Project.ID
+		name = clean(m.d.Project.ID)
 	}
-	return memory.ScopeProject, "", m.d.Project.ID, clean(name)
+	return memory.ScopeProject, "", m.d.Project.ID, name
 }
 
 func (m Model) keysConfirmForgetAll(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -613,6 +688,8 @@ func (m Model) View() string {
 	case modeConfirmForgetAll:
 		sc, _, _, want := m.forgetAllTarget()
 		tail.WriteString(fmt.Sprintf("\n%s Type %q and press enter:\n%s\n", style.Title.Render("Forget ALL "+string(sc)+" memory?"), want, m.input.View()))
+	case modeConfirmApprove:
+		tail.WriteString("\ny approve · any other key cancels\n")
 	case modeFilter:
 		tail.WriteString("\n/" + m.input.View() + "\n")
 	case modeEdit:
@@ -637,11 +714,14 @@ func (m Model) View() string {
 	tail.WriteString(style.Dim.Render(footer))
 
 	lines, cur := m.list(w)
-	if len(m.rows) == 0 && m.loadErr == "" {
+	if m.mode == modeConfirmApprove {
+		lines, cur = m.approveScreen(w), 0
+	} else if len(m.rows) == 0 && m.loadErr == "" {
 		lines = []string{style.Dim.Render("No memory here yet. Press n to add an entry.")}
 	}
 	// With a known height, scroll the list so the selected row stays visible.
-	if m.height > 0 {
+	// The approve screen is never cut: every word of a proposal must show.
+	if m.height > 0 && m.mode != modeConfirmApprove {
 		used := strings.Count(head.String(), "\n") + strings.Count(tail.String(), "\n") + 1
 		if avail := max(3, m.height-used); len(lines) > avail {
 			start := max(0, min(cur-avail/2, len(lines)-avail))

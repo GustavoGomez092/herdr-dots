@@ -791,6 +791,10 @@ func TestMalformedConfigKeepsLastGoodButDisablesInject(t *testing.T) {
 	if p, _ := r.e.Snapshot().Pane(pane); p.Budget != 7 {
 		t.Fatalf("last good settings must stay, budget %d", p.Budget)
 	}
+	// Final review minor 6: the memory kill switch fails closed too.
+	if r.e.config().MemoryEnabled {
+		t.Fatal("a malformed config must turn memory off")
+	}
 }
 
 // budgetRig runs one dot with a 1-call budget until it is out of budget.

@@ -41,9 +41,9 @@ func TestLoadBadTOMLReturnsDefaultsWithInjectOffAndError(t *testing.T) {
 	os.WriteFile(p, []byte("inject_enabled = false\nmax_parallel_runs = = 3"), 0o600)
 	c, err := Load(p)
 	want := Default()
-	want.InjectEnabled = false
+	want.InjectEnabled, want.MemoryEnabled = false, false
 	if err == nil || c != want {
-		t.Fatalf("want defaults with inject off + error, got %+v %v", c, err)
+		t.Fatalf("want defaults with inject and memory off + error, got %+v %v", c, err)
 	}
 }
 

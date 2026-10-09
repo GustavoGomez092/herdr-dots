@@ -61,8 +61,9 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *A
 	// Scan what is stored: prepare strips control characters, which could
 	// otherwise split a secret and hide it from the scan.
 	text := strings.TrimSpace(textutil.SanitizeModelText(op.Text))
+	paths := sanitizePaths(op.Paths)
 	if op.Op == "add" || op.Op == "update" {
-		if found, kind := ScanSecrets(text); found {
+		if found, kind := ScanSecrets(text + " " + strings.Join(paths, " ")); found {
 			return fmt.Errorf("%w (%s)", ErrSecret, kind)
 		}
 	}
@@ -82,7 +83,7 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *A
 		if !slices.Contains(ModelKinds, k) {
 			return fmt.Errorf("%w: models can't write that kind of entry", ErrDenied)
 		}
-		e := Entry{Scope: sc, Dot: dot, Kind: k, Text: text, Paths: op.Paths, Status: StatusActive, Source: SourceModel, Evidence: ev}
+		e := Entry{Scope: sc, Dot: dot, Kind: k, Text: text, Paths: paths, Status: StatusActive, Source: SourceModel, Evidence: ev}
 		if sc == ScopeProject && !s.Limits.AutoApproveProject {
 			e.Status = StatusProposed
 		}
@@ -123,8 +124,8 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *A
 				return nil
 			}
 			x.Text = text
-			if len(op.Paths) > 0 {
-				x.Paths = op.Paths
+			if len(paths) > 0 {
+				x.Paths = paths
 			}
 			x, err := s.prepare(x)
 			if err != nil {
@@ -145,4 +146,17 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *A
 		return nil
 	}
 	return fmt.Errorf("%w: unknown op", ErrInvalid)
+}
+
+// sanitizePaths strips control characters from model-written paths before
+// they are scanned and stored, like the text: a control character could
+// otherwise split a secret and hide it from the scan.
+func sanitizePaths(in []string) []string {
+	var out []string
+	for _, p := range in {
+		if p = strings.TrimSpace(textutil.SanitizeModelText(p)); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

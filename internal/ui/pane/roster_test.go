@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"herdr-dots/internal/view"
 )
@@ -44,6 +45,28 @@ func TestShortPaneTruncatesRosterAndKeepsHeader(t *testing.T) {
 	}
 	if strings.Contains(v, "Dot6") {
 		t.Errorf("the roster must be cut:\n%s", v)
+	}
+}
+
+// Final review minor 5: with room for one line, the selected dot wins over
+// "+N more"; "+N more" is cut to the width; no room shows nothing.
+func TestFitRosterOneLineShowsSelectedDot(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 6; i++ {
+		lines = append(lines, fmt.Sprintf("Dot%d\n", i))
+	}
+	if got := fitRoster(lines, 1, 4, 46); len(got) != 1 || got[0] != "Dot5\n" {
+		t.Fatalf("n=1 with a selection: %q", got)
+	}
+	got := fitRoster(lines, 1, -1, 6)
+	if len(got) != 1 || !strings.Contains(got[0], "+6") || lipgloss.Width(strings.TrimSuffix(got[0], "\n")) > 6 {
+		t.Fatalf("n=1 without a selection must be a \"+N more\" line cut to 6 columns: %q", got)
+	}
+	if got := fitRoster(lines, 0, 4, 46); len(got) != 0 {
+		t.Fatalf("n=0: %q", got)
+	}
+	if got := fitRoster(lines, 2, 5, 46); len(got) != 2 || got[0] != "Dot6\n" || !strings.Contains(got[1], "+5 more") {
+		t.Fatalf("n=2: %q", got)
 	}
 }
 

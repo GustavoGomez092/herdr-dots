@@ -13,6 +13,18 @@ func TestMemoryDefaults(t *testing.T) {
 	}
 }
 
+// Final review minor 6: memory_enabled fails closed like inject_enabled.
+func TestMemoryKillSwitchFailsClosed(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	os.WriteFile(p, []byte("memory_enabled = false\nmax_parallel_runs = = 3"), 0o600)
+	if c, err := Load(p); err == nil || c.MemoryEnabled || c.InjectEnabled {
+		t.Fatalf("malformed file: want memory and inject off + error, got %+v %v", c, err)
+	}
+	if c, err := Load(t.TempDir()); err == nil || c.MemoryEnabled || c.InjectEnabled { // a directory can't be read
+		t.Fatalf("unreadable file: want memory and inject off + error, got %+v %v", c, err)
+	}
+}
+
 func TestMemorySettingsOverrideAndClamp(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
 	os.WriteFile(p, []byte("memory_enabled = false\nmemory_auto_approve_project = true\nmemory_retention_days = 30\nmemory_max_entries = 50\n"), 0o600)

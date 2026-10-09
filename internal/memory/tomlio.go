@@ -139,13 +139,13 @@ func DiffTOML(before, after []Entry) (adds, updates []Entry, deletes []Ref) {
 }
 
 // SecretHits returns the refs (or, for entries without an id, a ref with an
-// empty ID) of entries whose text looks like a credential. Importing never
+// empty ID) of entries whose text or paths look like a credential. Importing never
 // refuses such text; callers run this on the adds and updates from DiffTOML
 // and ask the developer to confirm.
 func SecretHits(entries []Entry) []Ref {
 	var hits []Ref
 	for _, e := range entries {
-		if found, _ := ScanSecrets(e.Text); found {
+		if found, _ := ScanSecrets(e.Text + " " + strings.Join(e.Paths, " ")); found {
 			hits = append(hits, e.Ref())
 		}
 	}

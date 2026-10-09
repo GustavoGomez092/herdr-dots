@@ -135,3 +135,44 @@ func TestApplyScansWhatItStores(t *testing.T) {
 		}
 	}
 }
+
+// Final review minor 4: model op paths are sanitized and secret-scanned like
+// the text.
+func TestApplyScansAndSanitizesPaths(t *testing.T) {
+	s := testStore(t)
+	own := mustAdd(t, s, pid, Entry{Scope: ScopeDot, Dot: "security", Kind: KindNote, Text: "an own note", Source: SourceModel})
+	res, err := s.Apply(pid, "security", []backend.MemoryOp{
+		{Op: "add", Text: "deploy notes", Paths: []string{"deploy/AKIAIOSFODNN7EXAMPLE/**"}},
+		{Op: "add", Text: "split key notes", Paths: []string{"keys/AKIA\u0007IOSFODNN7EXAMPLE/*"}},
+		{Op: "update", ID: own.Ref().String(), Text: "an own note, reworded", Paths: []string{"AKIAIOSFODNN7EXAMPLE"}},
+	}, ev)
+	if err != nil || res.Applied() != 0 || len(res.Rejected) != 3 {
+		t.Fatalf("secret paths must be refused: %+v %v", res, err)
+	}
+	for _, why := range res.Rejected {
+		if strings.Contains(why, "AKIA") || !strings.Contains(why, ErrSecret.Error()) {
+			t.Fatalf("rejection %q", why)
+		}
+	}
+	res, err = s.Apply(pid, "security", []backend.MemoryOp{
+		{Op: "add", Text: "ui components note", Paths: []string{"src/\u0007ui/**"}},
+	}, ev)
+	if err != nil || res.Added != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	for _, e := range list(t, s, pid, Filter{Scope: ScopeDot, Dot: "security"}) {
+		if e.Text == "ui components note" && (len(e.Paths) != 1 || e.Paths[0] != "src/ui/**") {
+			t.Fatalf("path not sanitized: %q", e.Paths)
+		}
+	}
+}
+
+func TestSecretHitsConsidersPaths(t *testing.T) {
+	hits := SecretHits([]Entry{
+		{ID: "m1", Scope: ScopeProject, Kind: KindNote, Text: "plain note", Paths: []string{"deploy/AKIAIOSFODNN7EXAMPLE/**"}},
+		{ID: "m2", Scope: ScopeProject, Kind: KindNote, Text: "plain note two", Paths: []string{"src/**"}},
+	})
+	if len(hits) != 1 || hits[0].String() != "p:m1" {
+		t.Fatalf("hits %+v", hits)
+	}
+}

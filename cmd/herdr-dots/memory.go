@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/paths"
+	"herdr-dots/internal/textutil"
 )
 
 const memUsage = `usage: herdr-dots memory <command> [flags]
@@ -26,7 +28,8 @@ const memUsage = `usage: herdr-dots memory <command> [flags]
   edit   [--project P] [--dot SLUG] [--scope S] [--yes]  edit as TOML in $EDITOR
   forget REF [--dot SLUG] [--project P] [--scrub]
   forget-all --scope S [--dot SLUG] [--project P] [--yes]
-  pin|unpin|approve REF [--dot SLUG] [--project P]
+  pin|unpin REF [--dot SLUG] [--project P]
+  approve REF [--dot SLUG] [--project P] [--yes]    show the full text, then confirm
   export [--project P] [--dot SLUG] [--scope S]     TOML on stdout
   import FILE [--project P] [--yes]
   purge  --project P [--yes]                        delete a project's whole memory
@@ -87,8 +90,10 @@ func (c *memCLI) run(args []string) error {
 		return c.forget(rest)
 	case "forget-all":
 		return c.forgetAll(rest)
-	case "pin", "unpin", "approve":
+	case "pin", "unpin":
 		return c.mark(cmd, rest)
+	case "approve":
+		return c.approve(rest)
 	case "export":
 		return c.export(rest)
 	case "import":
@@ -332,9 +337,10 @@ func (c *memCLI) add(args []string) error {
 	if kind == "" {
 		kind = defaultKindFor(sc)
 	}
-	if found, what := memory.ScanSecrets(text); found {
+	globs := splitCSV(f.globs)
+	if found, what := memory.ScanSecrets(text + " " + strings.Join(globs, " ")); found {
 		if !f.force {
-			return fmt.Errorf("refusing: the text looks like a secret (%s); rerun with --force to store it anyway", what)
+			return fmt.Errorf("refusing: the text or paths look like a secret (%s); rerun with --force to store it anyway", what)
 		}
 		fmt.Fprintf(c.errOut, "warning: storing text that looks like a secret (%s)\n", what)
 	}
@@ -349,7 +355,7 @@ func (c *memCLI) add(args []string) error {
 			_ = c.store.SeeProject(pr)
 		}
 	}
-	e := memory.Entry{Scope: sc, Kind: kind, Text: text, Paths: splitCSV(f.globs), Source: memory.SourceUser, Status: memory.StatusActive, Pinned: f.pin}
+	e := memory.Entry{Scope: sc, Kind: kind, Text: text, Paths: globs, Source: memory.SourceUser, Status: memory.StatusActive, Pinned: f.pin}
 	if sc != memory.ScopeProject {
 		e.Dot = f.dot
 	}
@@ -409,17 +415,23 @@ func (c *memCLI) forgetAll(args []string) error {
 		}
 	}
 	if !f.yes {
-		name := f.dot
-		if sc == memory.ScopeProject {
-			name = pr.Name
-			if name == "" {
-				name = pr.ID
-			}
+		// The prompt names the project (name and id); the developer types
+		// the project's name for project scope, the dot for dot and global.
+		pname := strings.TrimSpace(textutil.SanitizeModelText(pr.Name))
+		if pname == "" {
+			pname = pr.ID
+		}
+		name, what := f.dot, fmt.Sprintf("dot %s on every project", f.dot)
+		switch sc {
+		case memory.ScopeProject:
+			name, what = pname, fmt.Sprintf("project %s (%s)", pname, pr.ID)
+		case memory.ScopeDot:
+			what = fmt.Sprintf("dot %s on project %s (%s)", f.dot, pname, pr.ID)
 		}
 		if !c.interactive {
 			return errors.New("forget-all: refusing without --yes (not a terminal)")
 		}
-		if !c.confirm(fmt.Sprintf("Forget ALL %s memory for %s?", sc, name), name) {
+		if !c.confirm(fmt.Sprintf("Forget ALL %s memory for %s?", sc, what), name) {
 			return errors.New("forget-all: not confirmed")
 		}
 	}
@@ -447,19 +459,75 @@ func (c *memCLI) mark(verb string, args []string) error {
 			e.Pinned = true
 		case "unpin":
 			e.Pinned = false
-		case "approve":
-			if e.Status != memory.StatusProposed {
-				return fmt.Errorf("%s is not a proposal", ref)
-			}
-			e.Status = memory.StatusActive
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	past := map[string]string{"pin": "pinned", "unpin": "unpinned", "approve": "approved"}[verb]
+	past := map[string]string{"pin": "pinned", "unpin": "unpinned"}[verb]
 	fmt.Fprintf(c.out, "%s %s\n", past, ref)
+	return nil
+}
+
+// errApproveChanged refuses an approve when the stored text is no longer the
+// text that was shown.
+var errApproveChanged = errors.New("this proposal changed since it was shown; nothing approved, review it again")
+
+// approve shows the proposal's full text, kind, paths and proposing dot, asks
+// to confirm (--yes without a terminal), and approves only the text it showed.
+func (c *memCLI) approve(args []string) error {
+	f := c.flags("approve")
+	pos, err := f.parse(args)
+	if err != nil {
+		return err
+	}
+	ref, pid, err := c.ref(f, pos, "approve")
+	if err != nil {
+		return err
+	}
+	e, err := c.store.Get(pid, ref)
+	if err != nil {
+		return err
+	}
+	if e.Status != memory.StatusProposed {
+		return fmt.Errorf("%s is not a proposal", ref)
+	}
+	by := e.Dot
+	if by == "" {
+		by = "the developer"
+	}
+	paths := strings.Join(e.Paths, ", ")
+	if paths == "" {
+		paths = "(none)"
+	}
+	fmt.Fprintf(c.out, "Proposal %s\n  proposed by: %s\n  kind:        %s\n  paths:       %s\n  text:\n%s\n",
+		ref, textutil.SanitizeModelText(by), e.Kind, textutil.SanitizeModelText(paths), textutil.SanitizeModelText(e.Text))
+	if !f.yes {
+		if !c.interactive {
+			return errors.New("approve: refusing without --yes (not a terminal)")
+		}
+		fmt.Fprint(c.out, "Approve this proposal? [y/N]: ")
+		line, _ := bufio.NewReader(c.in).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+			return errors.New("approve: not confirmed (nothing changed)")
+		}
+	}
+	seen := e.Text
+	_, err = c.store.Update(pid, ref, func(x *memory.Entry) error {
+		if x.Text != seen {
+			return errApproveChanged
+		}
+		if x.Status != memory.StatusProposed {
+			return fmt.Errorf("%s is not a proposal", ref)
+		}
+		x.Status = memory.StatusActive
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "approved %s\n", ref)
 	return nil
 }
 
@@ -505,23 +573,31 @@ func (c *memCLI) importFile(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Resolve the project before anything is written, so an unknown
+	// project never leaves a partial import; an all-global import needs none.
+	var pr memory.Project
+	for _, e := range es {
+		if e.Scope != memory.ScopeGlobal {
+			if pr, err = c.project(f.project); err != nil {
+				return fmt.Errorf("import: %w (nothing imported)", err)
+			}
+			break
+		}
+	}
 	// Every entry is added (the store dedupes), so every entry is checked.
 	if err := c.secretGate("import", es, f); err != nil {
 		return err
 	}
-	pr, perr := c.project(f.project)
 	n := 0
-	for _, e := range es {
+	for i, e := range es {
 		pid := ""
 		if e.Scope != memory.ScopeGlobal {
-			if perr != nil {
-				return perr
-			}
 			pid = pr.ID
 		}
 		e.ID, e.Source = "", memory.SourceImport
 		if _, err := c.store.Add(pid, e); err != nil {
-			fmt.Fprintf(c.errOut, "skipped %q: %v\n", e.Text, err)
+			// The entry number only: the text may be a secret.
+			fmt.Fprintf(c.errOut, "skipped entry %d: %v\n", i+1, err)
 			continue
 		}
 		n++
@@ -556,22 +632,23 @@ func (c *memCLI) edit(args []string) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp("", "herdr-dots-memory-*.toml") // 0600
+	// A private 0700 directory, removed with everything the editor leaves
+	// in it (swap and backup files hold the same memory text).
+	dir, err := os.MkdirTemp("", "herdr-dots-memory-*") // 0700
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+	defer os.RemoveAll(dir)
+	file := filepath.Join(dir, "memory.toml")
+	if err := os.WriteFile(file, data, 0o600); err != nil {
 		return err
 	}
-	tmp.Close()
-	cmd := exec.Command("sh", "-c", c.editor+` "$1"`, "sh", tmp.Name())
+	cmd := exec.Command("sh", "-c", c.editor+` "$1"`, "sh", file)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = c.in, c.out, c.errOut
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("edit: the editor failed: %w (nothing changed)", err)
 	}
-	edited, err := os.ReadFile(tmp.Name())
+	edited, err := os.ReadFile(file)
 	if err != nil {
 		return err
 	}
