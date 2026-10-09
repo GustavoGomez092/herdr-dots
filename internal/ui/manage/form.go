@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -39,15 +40,20 @@ type field struct {
 // Form edits every setting of one dot. orig keeps fields the form doesn't
 // show (backend args), so saving never drops them.
 type Form struct {
-	orig     dots.Dot
-	isNew    bool
-	fields   []field
-	focus    int
-	err      string
-	estimate func(dots.Dot) string // editor cost line; nil = none
-	models   []string              // ctrl+space choices for the current kind
-	modelsOf string                // kind the choices belong to
-	modelIdx int
+	orig      dots.Dot
+	isNew     bool
+	fields    []field
+	focus     int
+	err       string
+	estimate  func(dots.Dot) string // editor cost line; nil = none
+	models    []string              // ctrl+space choices for the current kind
+	modelsOf  string                // kind the choices belong to
+	modelIdx  int
+	now       func() time.Time  // the cron preview's clock; nil = time.Now
+	height    int               // screen height for scrolling (SetHeight); 0 = unknown
+	problems  map[string]string // field label -> validation message, set by View
+	unseen    bool              // the focused field's line was not drawn by the last View
+	lastWidth int               // the last real width View rendered at (0 = none yet)
 }
 
 func textField(label, v string) field {
@@ -107,6 +113,7 @@ func NewForm(d dots.Dot, isNew bool) *Form {
 		withKinds(choiceField("Refusal fallbacks", dots.FallbackModes, fallbackLabel(d.Backend.Fallbacks)), dots.KindAnthropicAPI),
 		textField("Budget ($/session, 0 = off)", strconv.FormatFloat(d.Budget.MaxUSDPerSession, 'f', -1, 64)),
 	}}
+	f.fields = append(f.fields, proactiveFields(d)...) // Phase 8 (form_proactive.go)
 	f.setFocus(0)
 	return f
 }
@@ -210,6 +217,26 @@ func (f *Form) setFocus(i int) {
 
 func (f *Form) Update(k tea.KeyMsg) tea.Cmd {
 	cur := &f.fields[f.focus]
+	nav := false
+	switch k.String() {
+	case "tab", "shift+tab":
+		nav = true
+	case "up", "down":
+		nav = cur.kind != kArea
+	}
+	if !nav {
+		// Never act on an unseen selection: lay the form out as it will be
+		// drawn, and ignore edit keys while the focused line is off screen.
+		if f.height > 0 {
+			if f.lastWidth <= 0 {
+				return nil // never rendered at a real width: the line may be off screen
+			}
+			f.View(f.lastWidth)
+		}
+		if f.unseen {
+			return nil
+		}
+	}
 	switch k.String() {
 	case "tab":
 		f.setFocus(f.focus + 1)
@@ -366,6 +393,9 @@ func (f *Form) Dot() (dots.Dot, error) {
 	if d.Budget.MaxUSDPerSession, err = strconv.ParseFloat(usd, 64); err != nil {
 		return d, fmt.Errorf("%s must be a number like 0.50", f.fields[iBudgetUSD].label)
 	}
+	if err := f.applyProactive(&d); err != nil {
+		return d, err
+	}
 	if f.isNew {
 		d.Slug = dots.Slugify(d.Name)
 	}
@@ -379,9 +409,17 @@ func (f *Form) View(width int) string {
 		title = "NEW DOT"
 	}
 	b.WriteString(style.Title.Render(title) + "\n\n")
+	if width > 0 {
+		f.lastWidth = width
+	}
+	f.refreshProblems()
+	fieldsStart, focusStart, focusEnd := strings.Count(b.String(), "\n"), -1, -1
 	for i, fl := range f.fields {
 		if !f.visible(i) {
 			continue
+		}
+		if i == f.focus {
+			focusStart = strings.Count(b.String(), "\n")
 		}
 		label := fmt.Sprintf("%-24s", fl.label)
 		if i == f.focus {
@@ -402,22 +440,34 @@ func (f *Form) View(width int) string {
 			v = fl.input.View()
 		}
 		b.WriteString(label + " " + v + "\n")
+		if n := f.proactiveNote(fl.label); n != "" {
+			for _, line := range strings.Split(n, "\n") {
+				if strings.HasPrefix(line, "  ! ") {
+					b.WriteString(style.Err.Render(line) + "\n")
+				} else {
+					b.WriteString(style.Dim.Render(line) + "\n")
+				}
+			}
+		}
+		if i == f.focus {
+			focusEnd = strings.Count(b.String(), "\n") - 1
+		}
 	}
+	fieldsEnd := strings.Count(b.String(), "\n")
 	if f.estimate != nil {
 		if d, err := f.Dot(); err == nil {
 			if line := f.estimate(d); line != "" {
-				b.WriteString("\n" + style.Dim.Render(line) + "\n")
+				b.WriteString("\n" + style.Dim.Render(wrapTo(line, width)) + "\n")
 			}
 		}
 	}
 	if f.err != "" {
-		b.WriteString("\n" + style.Err.Render(f.err) + "\n")
+		b.WriteString("\n" + style.Err.Render(wrapTo(f.err, width)) + "\n")
 	}
 	help := "tab/shift+tab move · ←/→ change · space toggle · ctrl+s save · esc cancel"
 	if f.OnModel() {
 		help = "ctrl+space pick a model · " + help
 	}
-	b.WriteString("\n" + style.Dim.Render(help))
-	_ = width
-	return b.String()
+	b.WriteString("\n" + style.Dim.Render(wrapHelp(help, width)))
+	return f.fit(clipLines(b.String(), width), fieldsStart, fieldsEnd, focusStart, focusEnd)
 }
