@@ -166,7 +166,7 @@ The manage library's `i` → `profile.New(slug)` → `history.Stats(slug, now, 7
 Profile screen (`i` from the library):
 
 ```
-┌ ◆ SECURITY · claude-cli/sonnet · queue ───────────────────────── project: user ┐
+┌ ◆ SECURITY · claude-cli/sonnet · queue ─────────────────────────  origin: user ┐
 │ Purpose: You are a senior application security reviewer…                      │
 ├─ LAST 30 DAYS ────────────────────────────────────────────────────────────────┤
 │ runs 214 (review 180 · council 12 · ask 9 · research 13)   flagged 11%         │
