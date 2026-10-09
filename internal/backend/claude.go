@@ -72,14 +72,17 @@ func (c ClaudeCLI) Run(ctx context.Context, r Request) (Result, error) {
 	if ctx.Err() != nil {
 		return Result{}, fmt.Errorf("claude timed out: %w", ctx.Err())
 	}
-	res, perr := ParseClaudeOutput(out)
+	res, perr := parseClaude(out, r.Pass)
 	if err != nil && perr != nil {
 		return Result{}, fmt.Errorf("claude failed: %s", Hint(c.Kind(), string(stderr)+"\n"+string(out)))
 	}
 	return res, perr
 }
 
-func ParseClaudeOutput(out []byte) (Result, error) {
+// ParseClaudeOutput parses a review run's `claude -p --output-format json` output.
+func ParseClaudeOutput(out []byte) (Result, error) { return parseClaude(out, PassReview) }
+
+func parseClaude(out []byte, pass string) (Result, error) {
 	var o struct {
 		IsError bool    `json:"is_error"`
 		Result  string  `json:"result"`
@@ -96,7 +99,5 @@ func ParseClaudeOutput(out []byte) (Result, error) {
 		return Result{}, fmt.Errorf("claude error: %s", o.Result)
 	}
 	res := Result{InputTokens: o.Usage.In, OutputTokens: o.Usage.Out, CostUSD: o.Cost, Raw: o.Result}
-	v, err := ParseVerdict(o.Result)
-	res.Verdict = v
-	return res, err
+	return finishResult(res, o.Result, pass)
 }
