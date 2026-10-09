@@ -1,0 +1,191 @@
+package manage
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"herdr-dots/internal/dots"
+	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/view"
+)
+
+type fakeCaller struct{ calls []string }
+
+func (f *fakeCaller) Call(_ context.Context, cmd string, args any) error {
+	b, _ := json.Marshal(args)
+	f.calls = append(f.calls, cmd+" "+string(b))
+	return nil
+}
+
+func key(s string) tea.KeyMsg {
+	switch s {
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace}
+	case "ctrl+s":
+		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+// press runs returned commands (and the messages they produce) like the runtime.
+func press(m tea.Model, keys ...string) tea.Model {
+	for _, s := range keys {
+		var cmd tea.Cmd
+		m, cmd = m.Update(key(s))
+		for cmd != nil {
+			msg := cmd()
+			if msg == nil {
+				break
+			}
+			if _, quit := msg.(tea.QuitMsg); quit {
+				break
+			}
+			m, cmd = m.Update(msg)
+		}
+	}
+	return m
+}
+
+func lib() view.Snapshot {
+	return view.Snapshot{
+		Library: []view.LibraryDot{
+			{Slug: "backend", Name: "Backend", Glyph: "▼", Backend: "claude-cli", Model: "sonnet", Mode: "queue"},
+			{Slug: "security", Name: "Security", Glyph: "◆", Backend: "claude-cli", Model: "sonnet", Mode: "queue"},
+		},
+		Panes:   []view.Pane{{PaneID: "w1:p1", Dots: []view.DotState{{Slug: "security"}}}},
+		Invalid: []view.Invalid{{File: "broken.toml", Line: 2, Error: "bad"}},
+	}
+}
+
+func setup(t *testing.T, target string) (tea.Model, *fakeCaller, string) {
+	dir := t.TempDir()
+	fc := &fakeCaller{}
+	m, _ := New(target, Deps{Caller: fc, DotsDir: dir, Check: func(context.Context, string) error { return nil }}).Update(SnapshotMsg(lib()))
+	return m, fc, dir
+}
+
+func TestLibraryShowsAttachmentAndInvalid(t *testing.T) {
+	m, _, _ := setup(t, "w1:p1")
+	v := m.View()
+	for _, want := range []string{"target: w1:p1", "[ ] ▼ Backend", "[x] ◆ Security", "broken.toml:2"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("missing %q\n%s", want, v)
+		}
+	}
+}
+
+func TestApplyAttachesAndDetaches(t *testing.T) {
+	m, fc, _ := setup(t, "w1:p1")
+	press(m, "space", "j", "space", "enter") // check Backend, uncheck Security
+	want := []string{
+		ipc.CmdAttach + ` {"pane_id":"w1:p1","slugs":["backend"]}`,
+		ipc.CmdDetach + ` {"pane_id":"w1:p1","slug":"security"}`,
+	}
+	if strings.Join(fc.calls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("calls:\n%s", strings.Join(fc.calls, "\n"))
+	}
+}
+
+func TestNoTargetIsLibraryOnly(t *testing.T) {
+	m, fc, _ := setup(t, "")
+	m = press(m, "space")
+	if len(fc.calls) != 0 || !strings.Contains(m.View(), "focus an agent pane") {
+		t.Fatal("space without a target must explain, not attach")
+	}
+}
+
+func TestCreateFromTemplateSavesAndReloads(t *testing.T) {
+	m, fc, dir := setup(t, "w1:p1")
+	m = press(m, "t")
+	if !strings.Contains(m.View(), "Copywriter") {
+		t.Fatalf("templates screen:\n%s", m.View())
+	}
+	// Templates are sorted by name: Backend, Copywriter, ... — pick Copywriter.
+	m = press(m, "j", "enter", "ctrl+s")
+	if _, err := os.Stat(filepath.Join(dir, "copywriter.toml")); err != nil {
+		t.Fatalf("dot file not written: %v\n%s", err, m.View())
+	}
+	if last := fc.calls[len(fc.calls)-1]; !strings.HasPrefix(last, ipc.CmdReloadDots) {
+		t.Fatalf("want reload after save, got %v", fc.calls)
+	}
+	if !strings.Contains(m.View(), "saved copywriter") {
+		t.Fatalf("status:\n%s", m.View())
+	}
+}
+
+func TestDuplicateNameShowsError(t *testing.T) {
+	m, _, dir := setup(t, "w1:p1")
+	d, _ := dots.FromTemplate("security")
+	_ = dots.Save(dir, d, true)
+	m = press(m, "t")
+	for i := 0; i < len(dots.Templates()); i++ {
+		if strings.Contains(m.View(), "▸ ◆ Security") {
+			break
+		}
+		m = press(m, "j")
+	}
+	m = press(m, "enter", "ctrl+s")
+	if !strings.Contains(m.View(), "already exists") {
+		t.Fatalf("want duplicate error:\n%s", m.View())
+	}
+}
+
+func TestNewDotUsesConfigDefaults(t *testing.T) {
+	fc := &fakeCaller{}
+	newDot := func() dots.Dot { d := dots.New(""); d.Backend.Kind, d.Backend.Model = "codex-cli", "gpt-5"; return d }
+	var m tea.Model = New("w1:p1", Deps{Caller: fc, DotsDir: t.TempDir(), Check: func(context.Context, string) error { return nil }, NewDot: newDot})
+	m, _ = m.Update(SnapshotMsg(lib()))
+	m = press(m, "n")
+	if v := m.View(); !strings.Contains(v, "codex-cli") || !strings.Contains(v, "gpt-5") {
+		t.Fatalf("editor should start from config defaults:\n%s", v)
+	}
+}
+
+func TestDeleteNeedsConfirmation(t *testing.T) {
+	m, fc, dir := setup(t, "w1:p1")
+	d, _ := dots.FromTemplate("backend")
+	_ = dots.Save(dir, d, true)
+	m = press(m, "D")
+	if !strings.Contains(m.View(), "Delete Backend?") {
+		t.Fatalf("confirm:\n%s", m.View())
+	}
+	press(m, "y")
+	if _, err := os.Stat(filepath.Join(dir, "backend.toml")); !os.IsNotExist(err) {
+		t.Fatal("file should be deleted")
+	}
+	if !strings.HasPrefix(fc.calls[len(fc.calls)-1], ipc.CmdReloadDots) {
+		t.Fatal("reload after delete")
+	}
+}
+
+func TestDeleteTargetsTheDotShownInTheConfirm(t *testing.T) {
+	m, _, dir := setup(t, "w1:p1")
+	for _, n := range []string{"backend", "security"} {
+		d, _ := dots.FromTemplate(n)
+		_ = dots.Save(dir, d, true)
+	}
+	m = press(m, "D") // confirm for Backend
+	// a fresh snapshot reorders the library under the open confirm
+	s := lib()
+	s.Library[0], s.Library[1] = s.Library[1], s.Library[0]
+	m, _ = m.Update(SnapshotMsg(s))
+	press(m, "y")
+	if _, err := os.Stat(filepath.Join(dir, "backend.toml")); !os.IsNotExist(err) {
+		t.Fatal("Backend (the dot shown in the prompt) should be deleted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "security.toml")); err != nil {
+		t.Fatal("Security must survive")
+	}
+}
