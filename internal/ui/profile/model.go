@@ -1,6 +1,9 @@
 // Package profile is the dot profile screen in the manage popup: 7- and
 // 30-day stats from the dot's history, a memory summary, deterministic tuning
 // hints and the recent history, with the full message of any row.
+//
+// Nothing in View or Update reads history or memory: the loads run in the
+// tea.Cmds from Init, and the cost share is cached (see cachedShare).
 package profile
 
 import (
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/history"
@@ -53,10 +57,12 @@ type (
 	}
 )
 
-// MemSummary counts a dot's live memory across every project.
+// MemSummary counts a dot's live memory across every project. Partial is set
+// when some memory files could not be read, so the counts may be low.
 type MemSummary struct {
 	Projects, Entries, Pinned int
 	ByKind                    map[memory.Kind]int
+	Partial                   bool
 }
 
 type Model struct {
@@ -68,9 +74,12 @@ type Model struct {
 	shareReady bool
 	mem        MemSummary
 	memErr     error
-	week       bool // false: last 30 days (default); tab toggles
-	cursor     int
+	week       bool   // false: last 30 days (default); tab toggles
+	cursor     int    // index into prof.Rows, always re-derived from curKey on a refresh
+	curKey     string // rowKey of the selected row
 	detail     bool
+	off        int  // first body line shown in the detail
+	endSeen    bool // the end of the detail body has been on screen
 	status     string
 	width      int
 	height     int
@@ -123,39 +132,55 @@ type shareKey struct {
 
 type shareEntry struct {
 	share float64
-	at    time.Time // wall clock of the computation
+	at    time.Time // shareClock at the computation
 }
 
 var (
 	shareMu    sync.Mutex
 	shareCache = map[shareKey]shareEntry{}
+	shareClock = time.Now
+	// computeShare is the slow call; tests replace it.
+	computeShare = func(hs *history.Store, slug string, now time.Time) (float64, error) {
+		share, _, err := hs.CostShare(slug, now, 30*24*time.Hour)
+		return share, err
+	}
 )
 
-// cachedShare runs only inside a tea.Cmd, never from View or Update.
+// cachedShare runs only inside a tea.Cmd, never from View or Update. Errors
+// are not cached.
 func cachedShare(hs *history.Store, slug string, now time.Time) (float64, error) {
 	k := shareKey{hs, slug}
 	shareMu.Lock()
 	e, ok := shareCache[k]
 	shareMu.Unlock()
-	if ok && time.Since(e.at) < shareTTL {
+	if ok && shareClock().Sub(e.at) < shareTTL {
 		return e.share, nil
 	}
-	share, _, err := hs.CostShare(slug, now, 30*24*time.Hour)
+	share, err := computeShare(hs, slug, now)
 	if err == nil {
 		shareMu.Lock()
-		shareCache[k] = shareEntry{share, time.Now()}
+		shareCache[k] = shareEntry{share, shareClock()}
 		shareMu.Unlock()
 	}
 	return share, err
 }
 
 // Summarize counts slug's live dot and global memory over every project.
+// Unreadable memory files do not fail the summary: the counts that could be
+// read are returned with Partial set. An error comes back only when nothing
+// could be listed.
 func Summarize(st *memory.Store, slug string) (MemSummary, error) {
 	sum := MemSummary{ByKind: map[memory.Kind]int{}}
 	if !memory.ValidSlug(slug) {
 		return sum, nil
 	}
 	ps, err := st.Projects()
+	if err != nil {
+		if len(ps) == 0 {
+			return sum, err
+		}
+		sum.Partial = true
+	}
 	add := func(es []memory.Entry) {
 		for _, e := range es {
 			sum.Entries++
@@ -166,19 +191,26 @@ func Summarize(st *memory.Store, slug string) (MemSummary, error) {
 		}
 	}
 	for _, p := range ps {
-		es, _ := st.List(p.ID, memory.Filter{Scope: memory.ScopeDot, Dot: slug})
+		es, lerr := st.List(p.ID, memory.Filter{Scope: memory.ScopeDot, Dot: slug})
+		if lerr != nil {
+			sum.Partial = true
+		}
 		if len(es) > 0 {
 			sum.Projects++
 		}
 		add(es)
 	}
-	g, _ := st.List("", memory.Filter{Scope: memory.ScopeGlobal, Dot: slug})
+	g, lerr := st.List("", memory.Filter{Scope: memory.ScopeGlobal, Dot: slug})
+	if lerr != nil {
+		sum.Partial = true
+	}
 	add(g)
-	return sum, err
+	return sum, nil
 }
 
 // Hints are the deterministic tuning hints (spec §6.2) for a 30-day window.
-// share is this dot's part of every dot's cost in the same window.
+// share is this dot's part of every dot's cost in the same window. They are
+// suggestions; nothing is changed automatically.
 func Hints(s history.Stats, share float64) []string {
 	var out []string
 	if s.Resolved >= 10 && s.AcceptanceRate() < 0.20 {
@@ -194,18 +226,39 @@ func Hints(s history.Stats, share float64) []string {
 		out = append(out, "Keeps repeating dismissed advice. Review its dismissed memories.")
 	}
 	if s.TotalRuns() >= 10 && s.ErrorRate() >= 0.20 {
-		out = append(out, "Fails often. Check the backend (press r to reset).")
+		out = append(out, "Fails often. Check the backend and its recent errors.")
 	}
 	return out
 }
+
+// rowKey identifies a history row across refreshes.
+func rowKey(r history.Record) string {
+	return fmt.Sprintf("%s|%d|%s", r.Card, r.At.UnixNano(), r.Kind)
+}
+
+// CanAct reports whether a follow-up action may be accepted: never while a
+// detail is open and its end has not been on screen. (The profile has no such
+// action today; later screens built on it must check this.)
+func (m Model) CanAct() bool { return !m.detail || m.endSeen }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m = m.settle()
 	case profileMsg:
 		m.prof, m.err, m.loaded = msg.p, msg.err, true
 		m.cursor = min(m.cursor, max(0, len(m.prof.Rows)-1))
+		for i, r := range m.prof.Rows {
+			if m.curKey != "" && rowKey(r) == m.curKey {
+				m.cursor = i
+				break
+			}
+		}
+		if m.cursor < len(m.prof.Rows) {
+			m.curKey = rowKey(m.prof.Rows[m.cursor])
+		}
+		m = m.settle()
 	case shareMsg:
 		m.share, m.shareReady = msg.share, msg.err == nil
 	case memMsg:
@@ -216,14 +269,36 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) moveTo(i int) Model {
+	m.cursor = max(0, min(i, len(m.prof.Rows)-1))
+	if m.cursor < len(m.prof.Rows) {
+		m.curKey = rowKey(m.prof.Rows[m.cursor])
+	}
+	return m
+}
+
 func (m Model) keys(k tea.KeyMsg) (Model, tea.Cmd) {
 	m.status = ""
 	if m.detail {
+		_, body, _, page := m.detailLayout()
 		switch k.String() {
 		case "esc", "q", "enter":
-			m.detail = false
+			m.detail, m.off, m.endSeen = false, 0, false
+			return m, nil
+		case "j", "down":
+			m.off++
+		case "k", "up":
+			m.off--
+		case "pgdown", "ctrl+d", " ":
+			m.off += page
+		case "pgup", "ctrl+u":
+			m.off -= page
+		case "g", "home":
+			m.off = 0
+		case "G", "end":
+			m.off = len(body)
 		}
-		return m, nil
+		return m.settle(), nil
 	}
 	switch k.String() {
 	case "esc", "q":
@@ -231,12 +306,13 @@ func (m Model) keys(k tea.KeyMsg) (Model, tea.Cmd) {
 	case "tab":
 		m.week = !m.week
 	case "j", "down":
-		m.cursor = min(m.cursor+1, max(0, len(m.prof.Rows)-1))
+		m = m.moveTo(m.cursor + 1)
 	case "k", "up":
-		m.cursor = max(m.cursor-1, 0)
+		m = m.moveTo(m.cursor - 1)
 	case "enter":
 		if m.cursor < len(m.prof.Rows) {
-			m.detail = true
+			m.detail, m.off = true, 0
+			m = m.settle()
 		}
 	case "x":
 		if m.d.Dot.Origin == dots.OriginProject {
@@ -256,22 +332,45 @@ func (m Model) keys(k tea.KeyMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+// settle clamps the detail scroll offset and records whether the end of the
+// body has been on screen.
+func (m Model) settle() Model {
+	if !m.detail {
+		return m
+	}
+	_, body, avail, _ := m.detailLayout()
+	maxOff := max(0, len(body)-avail)
+	m.off = max(0, min(m.off, maxOff))
+	if m.off >= maxOff {
+		m.endSeen = true
+	}
+	return m
+}
+
 func (m Model) w() int {
 	if m.width > 0 {
-		return m.width
+		return max(m.width, 20)
 	}
 	return 80
 }
 
-// cut shortens s to at most n runes.
-func cut(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:max(1, n-1)]) + style.Sym("…")
+func (m Model) h() int {
+	if m.height > 0 {
+		return m.height
 	}
-	return s
+	return 0
 }
 
+func sep() string { return " " + style.Sym("·") + " " }
+
 func pct(r float64) string { return fmt.Sprintf("%.0f%%", r*100) }
+
+func plural(word string, n int) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
+}
 
 func runsLine(st history.Stats) string {
 	type kv struct {
@@ -290,13 +389,13 @@ func runsLine(st history.Stats) string {
 	})
 	parts := make([]string, len(kinds))
 	for i, x := range kinds {
-		parts[i] = fmt.Sprintf("%s %d", x.k, x.n)
+		parts[i] = fmt.Sprintf("%s %d", style.Clean(x.k), x.n)
 	}
 	line := fmt.Sprintf("runs %d", st.TotalRuns())
 	if len(parts) > 0 {
-		line += " (" + strings.Join(parts, " · ") + ")"
+		line += " (" + strings.Join(parts, sep()) + ")"
 	}
-	return line + "   flagged " + pct(st.FlaggedRate())
+	return line + sep() + "flagged " + pct(st.FlaggedRate())
 }
 
 func (m Model) memLine() string {
@@ -313,22 +412,34 @@ func (m Model) memLine() string {
 			kinds = append(kinds, fmt.Sprintf("%d %s", n, plural(string(k), n)))
 		}
 	}
-	line := fmt.Sprintf("%d %s · %d entries", s.Projects, plural("project", s.Projects), s.Entries)
+	line := fmt.Sprintf("%d %s%s%d entries", s.Projects, plural("project", s.Projects), sep(), s.Entries)
 	if len(kinds) > 0 {
-		line += " (" + strings.Join(kinds, " · ") + ")"
+		line += " (" + strings.Join(kinds, sep()) + ")"
 	}
-	return line + fmt.Sprintf(" · %d pinned", s.Pinned)
+	line += fmt.Sprintf("%s%d pinned", sep(), s.Pinned)
+	if s.Partial {
+		line += " (partial)"
+	}
+	return line
 }
 
-func plural(word string, n int) string {
-	if n == 1 {
-		return word
-	}
-	return word + "s"
-}
-
+// section is a dim rule with a title, exactly w cells wide at most.
 func section(title string, w int) string {
-	return style.Dim.Render("── " + title + " " + strings.Repeat("─", max(0, w-len(title)-5)))
+	dash := style.Sym("─")
+	lead := dash + dash + " " + title + " "
+	return style.Dim.Render(ansi.Truncate(lead+strings.Repeat(dash, max(0, w-ansi.StringWidth(lead))), w, ""))
+}
+
+// wrapped returns the lines of s wrapped to w cells, each rendered with f
+// (nil: as is).
+func wrapped(s string, w int, f func(string) string) []string {
+	ls := style.Wrap(s, w)
+	if f != nil {
+		for i, l := range ls {
+			ls[i] = f(l)
+		}
+	}
+	return ls
 }
 
 func (m Model) row(r history.Record) string {
@@ -341,91 +452,167 @@ func (m Model) row(r history.Record) string {
 		sev = r.Outcome
 	}
 	line := fmt.Sprintf("%s  %-9s %-9s %-10s %s", r.At.Local().Format("01-02 15:04"), style.Clean(string(r.Kind)), style.Clean(string(sev)), style.Clean(string(res)), style.Clean(r.Excerpt))
-	if rs := []rune(line); len(rs) > m.w()-2 {
-		line = string(rs[:max(10, m.w()-3)]) + style.Sym("…") // Phase 6: ASCII stand-in with HERDR_DOTS_ASCII=1
-	}
-	return line
+	return style.Cut(line, m.w()-2)
 }
 
-func (m Model) View() string {
+// fit cuts every line of out to the width, by display cells.
+func (m Model) fit(lines []string) string {
 	w := m.w()
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, w, style.Sym("…"))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) heading() []string {
 	d := m.d.Dot
-	var b strings.Builder
-	origin := d.Origin
+	w := m.w()
+	origin := style.Clean(d.Origin)
 	if origin == "" {
 		origin = dots.OriginUser
 	}
-	title := fmt.Sprintf("%s %s · %s/%s · %s", style.Glyph(style.Clean(d.Glyph), style.Clean(d.Color)), strings.ToUpper(cut(style.Clean(d.Name), 40)), style.Clean(d.Backend), style.Clean(d.Model), style.Clean(d.Mode))
-	b.WriteString(style.Title.Render(title))
-	b.WriteString(style.Dim.Render("   origin: "+style.Clean(origin)+"   "+style.Clean(dots.DisplaySlug(d.Slug))) + "\n")
-	if m.detail && m.cursor < len(m.prof.Rows) {
-		r := m.prof.Rows[m.cursor]
-		text, full := r.Excerpt, false
-		if m.d.CardBody != nil && r.Card != "" {
-			if body, ok := m.d.CardBody(r.Card); ok {
-				text, full = body, true
-			}
-		}
-		b.WriteString(section("RUN "+r.At.Local().Format("2006-01-02 15:04:05"), w) + "\n")
-		b.WriteString(fmt.Sprintf("kind %s · outcome %s · severity %s · resolution %s · turn %d\n", style.Clean(string(r.Kind)), style.Clean(string(r.Outcome)), style.Clean(r.Severity), style.Clean(string(r.Resolution)), r.Turn))
-		for _, l := range style.Wrap(text, w-2) {
-			b.WriteString(l + "\n")
-		}
-		if !full && r.Excerpt != "" {
-			b.WriteString(style.Dim.Render("(history keeps the first 300 characters; the card is no longer in the queue)") + "\n")
-		}
-		b.WriteString("\n" + style.Dim.Render("esc back"))
-		return b.String()
+	title := fmt.Sprintf("%s %s%s%s/%s%s%s", style.Glyph(style.Clean(d.Glyph), style.Clean(d.Color)), strings.ToUpper(style.Cut(style.Clean(d.Name), 40)), sep(),
+		style.Clean(d.Backend), style.Clean(d.Model), sep(), style.Clean(d.Mode))
+	return []string{
+		style.Title.Render(ansi.Truncate(title, w, style.Sym("…"))),
+		style.Dim.Render(style.Cut("origin: "+origin+sep()+style.Clean(dots.DisplaySlug(d.Slug)), w)),
 	}
-	if p := style.Wrap(m.d.Purpose, w-11); len(p) > 0 {
+}
+
+// bodyOf is the text of the selected row and whether it is the whole card.
+func (m Model) bodyOf(r history.Record) (string, bool) {
+	if m.d.CardBody != nil && r.Card != "" {
+		if body, ok := m.d.CardBody(r.Card); ok {
+			return body, true
+		}
+	}
+	return r.Excerpt, false
+}
+
+// detailLayout lays out the open detail: the fixed top lines, the whole
+// scrollable body, how many body lines fit, and the page size.
+func (m Model) detailLayout() (top, body []string, avail, page int) {
+	if m.cursor >= len(m.prof.Rows) {
+		return nil, nil, 1, 1
+	}
+	w := m.w()
+	r := m.prof.Rows[m.cursor]
+	text, full := m.bodyOf(r)
+	top = append(top, m.heading()...)
+	top = append(top, section("RUN "+r.At.Local().Format("2006-01-02 15:04:05"), w))
+	top = append(top, wrapped(fmt.Sprintf("kind %s%soutcome %s%sseverity %s%sresolution %s%sturn %d",
+		style.Clean(string(r.Kind)), sep(), style.Clean(string(r.Outcome)), sep(), style.Clean(r.Severity), sep(), style.Clean(string(r.Resolution)), sep(), r.Turn), w-2, nil)...)
+	body = style.Wrap(text, w-2)
+	if !full && r.Excerpt != "" {
+		body = append(body, wrapped("(history keeps the first 300 characters; the card is no longer in the queue)", w-2, dim)...)
+	}
+	h := m.h()
+	if h == 0 {
+		h = 24
+	}
+	foot := 2
+	avail = max(3, h-len(top)-foot)
+	if len(body) > avail {
+		avail-- // the "more below" marker takes a line
+	}
+	return top, body, avail, max(1, avail-1)
+}
+
+func (m Model) detailView() string {
+	top, body, avail, _ := m.detailLayout()
+	off := max(0, min(m.off, max(0, len(body)-avail)))
+	lines := append([]string{}, top...)
+	end := min(len(body), off+avail)
+	lines = append(lines, body[off:end]...)
+	if end < len(body) {
+		lines = append(lines, style.Dim.Render(fmt.Sprintf("%s more below (%d lines)", style.Sym("▼"), len(body)-end)))
+	}
+	lines = append(lines, "", style.Dim.Render("j/k pgup/pgdn scroll"+sep()+"esc back"))
+	return m.fit(lines)
+}
+
+// parts builds the lines above and below the history rows. compact drops the
+// purpose, memory, hints and spacing when the popup is short.
+func (m Model) parts(compact bool) (head, tail []string) {
+	w := m.w()
+	head = m.heading()
+	if p := style.Wrap(m.d.Purpose, w-10); strings.TrimSpace(m.d.Purpose) != "" && !compact {
 		line := "Purpose: " + p[0]
 		if len(p) > 1 {
 			line += style.Sym("…")
 		}
-		b.WriteString(line + "\n")
+		head = append(head, line)
 	}
 	title, st := "LAST 30 DAYS", m.prof.Month
 	if m.week {
 		title, st = "LAST 7 DAYS", m.prof.Week
 	}
-	b.WriteString(section(title, w) + "\n")
+	head = append(head, section(title, w))
 	switch {
 	case !m.loaded:
-		b.WriteString(style.Dim.Render("loading"+style.Sym("…")) + "\n")
+		head = append(head, style.Dim.Render("loading"+style.Sym("…")))
 	case m.err != nil:
-		b.WriteString(style.Err.Render("history unavailable: "+style.Clean(m.err.Error())) + "\n")
+		head = append(head, wrapped("history unavailable: "+style.Clean(m.err.Error()), w-2, errStyle)...)
 	default:
-		b.WriteString(runsLine(st) + "\n")
+		head = append(head, wrapped(runsLine(st), w-2, nil)...)
 		cost := fmt.Sprintf("cost $%.2f", st.CostUSD)
 		if st.CostUnknown > 0 {
 			cost += fmt.Sprintf(" (+%d unpriced %s)", st.CostUnknown, plural("run", st.CostUnknown))
 		}
-		b.WriteString(fmt.Sprintf("accepted %s (%d / %d)   suppressed %d   %s   median %.1f s\n",
-			pct(st.AcceptanceRate()), st.Accepted, st.Resolved, st.Suppressed, cost, float64(st.MedianMs)/1000))
+		head = append(head, wrapped(fmt.Sprintf("accepted %s (%d / %d)%ssuppressed %d%s%s%smedian %.1f s",
+			pct(st.AcceptanceRate()), st.Accepted, st.Resolved, sep(), st.Suppressed, sep(), cost, sep(), float64(st.MedianMs)/1000), w-2, nil)...)
 	}
-	b.WriteString(section("MEMORY", w) + "\n" + strings.Join(style.Wrap(m.memLine(), w-2), "\n") + "\n")
-	if m.loaded && m.err == nil {
-		share := 0.0
-		if m.shareReady {
-			share = m.share
-		}
-		if hs := Hints(m.prof.Month, share); len(hs) > 0 {
-			b.WriteString(section("HINTS", w) + "\n")
-			for _, h := range hs {
-				b.WriteString(strings.Join(style.Wrap(h, w-2), "\n") + "\n")
+	if !compact {
+		head = append(head, section("MEMORY", w))
+		head = append(head, wrapped(m.memLine(), w-2, nil)...)
+		if m.loaded && m.err == nil {
+			share := 0.0
+			if m.shareReady {
+				share = m.share
+			}
+			if hs := Hints(m.prof.Month, share); len(hs) > 0 {
+				head = append(head, section("HINTS", w))
+				for _, h := range hs {
+					head = append(head, wrapped(h, w-2, nil)...)
+				}
 			}
 		}
 	}
-	b.WriteString(section("HISTORY", w) + "\n")
-	if m.loaded && len(m.prof.Rows) == 0 {
-		b.WriteString(style.Dim.Render("no runs yet") + "\n")
+	head = append(head, section("HISTORY", w))
+	if m.loaded && m.err == nil && len(m.prof.Rows) == 0 {
+		head = append(head, style.Dim.Render("no runs yet"))
 	}
-	n := max(5, m.height-14)
-	if m.height == 0 {
-		n = 10
+	if m.loaded && m.prof.Month.Skipped > 0 {
+		tail = append(tail, style.Dim.Render(fmt.Sprintf("(%d unreadable history lines skipped)", m.prof.Month.Skipped)))
 	}
-	start := max(0, min(m.cursor-n/2, len(m.prof.Rows)-n))
-	for i := start; i < min(len(m.prof.Rows), start+n); i++ {
+	if m.status != "" {
+		tail = append(tail, wrapped(m.status, w-2, nil)...)
+	}
+	if !compact {
+		tail = append(tail, "")
+	}
+	tail = append(tail, wrapped("enter details"+sep()+"M memory"+sep()+"x export"+sep()+"tab 7d/30d"+sep()+"esc back", w-2, dim)...)
+	return head, tail
+}
+
+func (m Model) View() string {
+	if m.detail && m.cursor < len(m.prof.Rows) {
+		return m.detailView()
+	}
+	head, tail := m.parts(false)
+	avail := 10
+	if h := m.h(); h > 0 {
+		avail = h - len(head) - len(tail)
+		if avail < 3 {
+			head, tail = m.parts(true)
+			avail = h - len(head) - len(tail)
+		}
+	}
+	avail = max(1, avail)
+	n := len(m.prof.Rows)
+	start := max(0, min(m.cursor-avail/2, n-avail))
+	lines := head
+	for i := start; i < min(n, start+avail); i++ {
 		marker := "  "
 		if i == m.cursor {
 			marker = style.Sym("▸") + " "
@@ -434,14 +621,11 @@ func (m Model) View() string {
 		if i == m.cursor {
 			line = style.Selected.Render(line)
 		}
-		b.WriteString(line + "\n")
+		lines = append(lines, line)
 	}
-	if m.loaded && m.prof.Month.Skipped > 0 {
-		b.WriteString(style.Dim.Render(fmt.Sprintf("(%d unreadable history lines skipped)", m.prof.Month.Skipped)) + "\n")
-	}
-	if m.status != "" {
-		b.WriteString(m.status + "\n")
-	}
-	b.WriteString("\n" + style.Dim.Render("enter details · M memory · x export · tab 7d/30d · esc back"))
-	return b.String()
+	lines = append(lines, tail...)
+	return m.fit(lines)
 }
+
+func dim(s string) string      { return style.Dim.Render(s) }
+func errStyle(s string) string { return style.Err.Render(s) }

@@ -3,6 +3,8 @@ package style
 import (
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"herdr-dots/internal/textutil"
 )
 
@@ -13,8 +15,8 @@ func Clean(s string) string {
 }
 
 // Wrap breaks each paragraph of s (split on newlines, each Cleaned) into
-// lines of at most w runes, on spaces where it can. Blank paragraphs stay as
-// empty lines, so a purpose keeps its shape. Nothing is ever cut off.
+// lines of at most w display cells, on spaces where it can. Blank paragraphs
+// stay as empty lines, so a purpose keeps its shape. Nothing is ever cut off.
 func Wrap(s string, w int) []string {
 	w = max(w, 10)
 	var lines []string
@@ -24,27 +26,36 @@ func Wrap(s string, w int) []string {
 			lines = append(lines, "")
 			continue
 		}
-		var cur []rune
+		cur, curW := "", 0
 		for _, word := range words {
-			r := []rune(word)
-			for len(r) > w {
-				if len(cur) > 0 {
-					lines, cur = append(lines, string(cur)), nil
+			ww := ansi.StringWidth(word)
+			if ww > w {
+				if cur != "" {
+					lines, cur, curW = append(lines, cur), "", 0
 				}
-				lines, r = append(lines, string(r[:w])), r[w:]
+				pieces := strings.Split(ansi.Hardwrap(word, w, true), "\n")
+				lines = append(lines, pieces[:len(pieces)-1]...)
+				word = pieces[len(pieces)-1]
+				ww = ansi.StringWidth(word)
 			}
 			switch {
-			case len(cur) == 0:
-				cur = r
-			case len(cur)+1+len(r) <= w:
-				cur = append(append(cur, ' '), r...)
+			case cur == "":
+				cur, curW = word, ww
+			case curW+1+ww <= w:
+				cur, curW = cur+" "+word, curW+1+ww
 			default:
-				lines, cur = append(lines, string(cur)), r
+				lines = append(lines, cur)
+				cur, curW = word, ww
 			}
 		}
-		if len(cur) > 0 {
-			lines = append(lines, string(cur))
+		if cur != "" {
+			lines = append(lines, cur)
 		}
 	}
 	return lines
+}
+
+// Cut shortens s to at most w display cells, ending in Sym("…") when it cuts.
+func Cut(s string, w int) string {
+	return ansi.Truncate(s, w, Sym("…"))
 }
