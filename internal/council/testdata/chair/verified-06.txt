@@ -1,0 +1,1 @@
+{"relevant": true, "severity": "warn", "message": "## Should fix\n- Headline 'THE BEST PLATFORM FOR EVERYONE!!!' is shouting: all caps and triple exclamation marks (Copy)\n\n## Not heard from\n- Brand (error: claude failed: not logged in)"}

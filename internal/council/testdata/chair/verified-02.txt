@@ -1,0 +1,1 @@
+{"relevant": true, "severity": "critical", "message": "## Must fix\n- JWT is stored in localStorage (`localStorage.setItem('jwt', token)` in src/auth.ts), so any XSS can steal it (Security)\n\n## Should fix\n- The submit button in LoginForm.tsx has no disabled state, so users can submit twice (Frontend)\n\n## Not heard from\n- Backend (timed out)"}

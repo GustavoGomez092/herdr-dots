@@ -1,0 +1,1 @@
+{"relevant": true, "severity": "critical", "message": "## Must fix\n- JWT is stored in localStorage (`auth.ts`), so any XSS payload can read it. Use an httpOnly, Secure, SameSite cookie instead. (Security, Frontend)\n\n## Should fix\n- `LoginForm.tsx` has no loading or error state. (Frontend)\n\nNot ready to merge until the token storage is changed."}
