@@ -292,10 +292,15 @@ func (e *Engine) scanRoot(pr memory.Project) bool {
 	}
 	e.projects[pr.Root] = ps
 	var revoked []dots.Dot
+	var narrowed []string // same bytes, inject no longer granted
 	if old != nil {
 		for _, slug := range slices.Sorted(maps.Keys(old.runnable)) {
-			if sum, ok := ps.sums[slug]; !ok || sum != old.sums[slug] {
+			sum, ok := ps.sums[slug]
+			switch {
+			case !ok || sum != old.sums[slug]:
 				revoked = append(revoked, old.runnable[slug])
+			case old.runnable[slug].Delivery.Mode == dots.ModeInject && ps.runnable[slug].Delivery.Mode != dots.ModeInject:
+				narrowed = append(narrowed, slug)
 			}
 		}
 		if old.scan.Stamp != s.Stamp {
@@ -310,6 +315,9 @@ func (e *Engine) scanRoot(pr memory.Project) bool {
 	for _, d := range revoked {
 		e.pauseRevoked(pr.Root, d)
 	}
+	for _, slug := range narrowed {
+		e.requeueAuto(e.panesIn(pr.Root), slug)
+	}
 	return old == nil || old.scan.Stamp != s.Stamp
 }
 
@@ -318,14 +326,7 @@ func (e *Engine) scanRoot(pr memory.Project) bool {
 // queue (under e.dmu, so no flush delivers them meanwhile), and says why
 // once. d is the copy that ran until now (glyph and name for the toast).
 func (e *Engine) pauseRevoked(root string, d dots.Dot) {
-	e.mu.Lock()
-	var panes []string
-	for p, r := range e.paneRoots {
-		if r == root {
-			panes = append(panes, p)
-		}
-	}
-	e.mu.Unlock()
+	panes := e.panesIn(root)
 	attached := false
 	for _, p := range panes {
 		a, ok := e.d.Attachments.Get(p)
@@ -339,33 +340,56 @@ func (e *Engine) pauseRevoked(root string, d dots.Dot) {
 			}
 		})
 	}
+	e.requeueAuto(panes, d.Slug)
+	if attached {
+		e.notify(d, fmt.Sprintf("project dot %s changed or lost its trust and is paused: review it in the library (T) to trust it again", dots.DisplaySlug(d.Slug)))
+	}
+}
+
+// panesIn lists the panes in checkout root.
+func (e *Engine) panesIn(root string) []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var panes []string
+	for p, r := range e.paneRoots {
+		if r == root {
+			panes = append(panes, p)
+		}
+	}
+	return panes
+}
+
+// requeueAuto puts slug's unapproved inject cards still waiting for the
+// agent on panes back in the queue, under e.dmu so no flush delivers them
+// meanwhile (the dot lost its trust, changed, or lost the inject grant).
+// Callers hold no lock.
+func (e *Engine) requeueAuto(panes []string, slug string) {
 	e.dmu.Lock()
+	defer e.dmu.Unlock()
 	for _, p := range panes {
 		for _, c := range e.d.Queue.Pending(p) {
-			if c.Dot == d.Slug && c.Status == queue.StatusAuto && !c.Approved {
+			if c.Dot == slug && c.Status == queue.StatusAuto && !c.Approved {
 				if err := e.d.Queue.SetStatus(c.ID, queue.StatusPending); err != nil {
 					e.d.Logf("card %s: back to the queue: %v", c.ID, err)
 				}
 			}
 		}
 	}
-	e.dmu.Unlock()
-	if attached {
-		e.notify(d, fmt.Sprintf("project dot %s changed or lost its trust and is paused: review it in the library (T) to trust it again", dots.DisplaySlug(d.Slug)))
-	}
 }
 
-// projectCardStale reports whether a card's dot is a project dot its pane
-// no longer loads (untrusted, changed, or project dots off). flushAuto keeps
-// such an inject card for the developer. In memory only: it runs under dmu.
+// projectCardStale reports whether an unapproved inject card's dot is a
+// project dot its pane no longer loads (untrusted, changed, or project dots
+// off) or that no longer injects (re-trusted without the inject grant).
+// flushAuto keeps such a card for the developer. In memory only: it runs
+// under dmu.
 func (e *Engine) projectCardStale(paneID, slug string) bool {
 	if !dots.IsProjectSlug(slug) {
 		return false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_, ok := e.paneDotLocked(paneID, slug)
-	return !ok
+	d, ok := e.paneDotLocked(paneID, slug)
+	return !ok || d.Delivery.Mode != dots.ModeInject
 }
 
 // pruneLocked forgets panes only looked at (no attachment) longer than

@@ -79,6 +79,57 @@ func TestAWaitingInjectCardIsNotInjectedAfterUntrust(t *testing.T) {
 	}
 }
 
+// Re-review M1: re-trusting the same bytes without the inject grant recalls
+// inject cards already waiting.
+func TestNarrowingTheInjectGrantRequeuesWaitingCards(t *testing.T) {
+	r := newProjRig(t)
+	_ = r.e.ScanPane(context.Background(), pane)
+	r.trustAs(t, dots.CapInject)
+	gate := make(chan struct{})
+	r.be.mu.Lock()
+	r.be.gate = gate
+	r.be.mu.Unlock()
+	r.readers["s1"].add(transcript.Turn{User: "add login"})
+	r.be.set(critical)
+	r.attach(t, helperSlug)
+	eventually(t, "the review is running", func() bool { return r.be.n() == 1 })
+	busy := herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusWorking, Cwd: "/repo",
+		AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}}
+	r.srv.SetPane(busy)
+	close(gate)
+	eventually(t, "an auto card waits", func() bool {
+		p := r.q.Pending(pane)
+		return len(p) == 1 && p[0].Status == queue.StatusAuto
+	})
+	r.trustAs(t) // the same sum, no inject
+	if p := r.q.Pending(pane); len(p) != 1 || p[0].Status != queue.StatusPending {
+		t.Fatalf("the waiting card goes back to the queue: %+v", p)
+	}
+	busy.AgentStatus = herdr.StatusIdle
+	r.srv.SetPane(busy)
+	r.srv.Push(pane, herdr.StatusIdle)
+	time.Sleep(150 * time.Millisecond) // a poll or two
+	if n := len(r.srv.Calls("agent.prompt")); n != 0 {
+		t.Fatalf("a card was injected after the inject grant was dropped (%d prompts)", n)
+	}
+}
+
+// A card that is somehow still auto when its dot no longer injects is kept
+// at flush time too.
+func TestProjectCardStaleWhenTheDotNoLongerInjects(t *testing.T) {
+	r := newProjRig(t)
+	_ = r.e.ScanPane(context.Background(), pane)
+	r.trustAs(t, dots.CapInject)
+	r.attach(t, helperSlug)
+	if r.e.projectCardStale(pane, helperSlug) {
+		t.Fatal("an inject-granted dot's card is not stale")
+	}
+	r.trustAs(t)
+	if !r.e.projectCardStale(pane, helperSlug) {
+		t.Fatal("a dot without the inject grant can't have an unapproved inject card")
+	}
+}
+
 // twoCheckouts is one repository (one project id) checked out twice, A and
 // B, each with its own helper.toml; pane is in A and pane2 in B.
 type twoCheckouts struct {
