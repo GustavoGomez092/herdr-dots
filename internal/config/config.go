@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -151,7 +153,41 @@ func Load(path string) (Config, error) {
 		}
 	}
 	c.ToolDenyGlobs = globs
+	for name, p := range c.Providers {
+		c.Providers[name] = p.sanitized()
+	}
 	return c, nil
+}
+
+var envVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// secretHeaders can never be set from config.toml (keys don't live there).
+var secretHeaders = map[string]bool{
+	"authorization": true, "x-api-key": true, "api-key": true, "proxy-authorization": true,
+}
+
+// sanitized drops what must not live in config.toml: a literal key in
+// api_key_env, an unusable base_url, and credential headers.
+func (p ProviderConfig) sanitized() ProviderConfig {
+	if !envVarName.MatchString(p.APIKeyEnv) {
+		p.APIKeyEnv = ""
+	}
+	if p.BaseURL != "" {
+		u, err := url.Parse(p.BaseURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Hostname() == "" {
+			p.BaseURL = ""
+		}
+	}
+	if len(p.ExtraHeaders) > 0 {
+		kept := make(map[string]string, len(p.ExtraHeaders))
+		for k, v := range p.ExtraHeaders {
+			if !secretHeaders[strings.ToLower(strings.TrimSpace(k))] {
+				kept[k] = v
+			}
+		}
+		p.ExtraHeaders = kept
+	}
+	return p
 }
 
 func (c Config) RunTimeout() time.Duration { return time.Duration(c.RunTimeoutSeconds) * time.Second }
