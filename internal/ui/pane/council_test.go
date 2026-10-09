@@ -148,6 +148,30 @@ func TestCouncilNoteWrapsToTheBodyWidth(t *testing.T) {
 	}
 }
 
+// Final review item 5: a council card can only be remembered as a project
+// convention, so the chooser offers c only and ignores f, r and g.
+func TestRememberChooserOnACouncilCardOffersConventionOnly(t *testing.T) {
+	fc := &fakeCaller{}
+	m := press(councilReady(fc, nil), "M")
+	v := m.View()
+	if !strings.Contains(v, "c project convention · esc cancel") || strings.Contains(v, "f accepted finding") || strings.Contains(v, "r rule") {
+		t.Fatalf("council chooser:\n%s", v)
+	}
+	for _, k := range []string{"f", "r", "g"} {
+		m = press(m, k)
+		if v := m.View(); len(fc.calls) != 0 || strings.Contains(v, "remembered as") || strings.Contains(v, "REMEMBER AS A RULE") {
+			t.Fatalf("%s on a council card: calls %+v\n%s", k, fc.calls, v)
+		}
+	}
+	m = press(m, "c")
+	if len(fc.calls) != 1 || fc.calls[0].cmd != ipc.CmdRemember || fc.calls[0].args != `{"card_id":"9","as":"convention"}` {
+		t.Fatalf("calls %+v", fc.calls)
+	}
+	if !strings.Contains(m.View(), "remembered as convention") {
+		t.Fatalf("status:\n%s", m.View())
+	}
+}
+
 func TestHelpMentionsCouncil(t *testing.T) {
 	if v := press(ready(&fakeCaller{}), "?").View(); !strings.Contains(v, "C council") {
 		t.Fatal(v)
