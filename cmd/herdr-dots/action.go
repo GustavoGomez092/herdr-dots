@@ -17,7 +17,7 @@ import (
 
 func runAction(args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: herdr-dots action <manage|toggle-pane|summon|pause-all>")
+		return errors.New("usage: herdr-dots action <manage|toggle-pane|summon|council|pause-all>")
 	}
 	p, err := paths.FromEnv()
 	if err != nil {
@@ -42,6 +42,8 @@ func runAction(args []string) error {
 		_, err = hc.OpenPluginPane(ctx, herdr.OpenPane{Entrypoint: "manage", Placement: "popup", Width: "80%", Height: "80%", Env: env, Focus: true})
 	case "summon":
 		_, err = hc.OpenPluginPane(ctx, herdr.OpenPane{Entrypoint: "summon", Placement: "popup", Width: "60%", Height: 14, Env: env, Focus: true})
+	case "council":
+		err = openCouncil(ctx, hc, target)
 	case "toggle-pane":
 		err = togglePane(ctx, p, hc, target)
 	case "pause-all":

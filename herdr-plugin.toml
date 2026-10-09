@@ -28,6 +28,11 @@ title = "Dots: summon"
 command = ["./bin/herdr-dots", "action", "summon"]
 
 [[actions]]
+id = "council"
+title = "Dots: council (ask every dot)"
+command = ["./bin/herdr-dots", "action", "council"]
+
+[[actions]]
 id = "pause-all"
 title = "Dots: pause/resume all"
 command = ["./bin/herdr-dots", "action", "pause-all"]
@@ -53,3 +58,11 @@ placement = "popup"
 width = "60%"
 height = 14
 command = ["./bin/herdr-dots", "summon-ui"]
+
+[[panes]]
+id = "council"
+title = "Dots: council"
+placement = "popup"
+width = "70%"
+height = 16
+command = ["./bin/herdr-dots", "summon-ui", "--council"]

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"time"
 
@@ -101,7 +102,7 @@ func runPane([]string) error {
 	if err != nil {
 		return err
 	}
-	prog := tea.NewProgram(pane.New(resolveTarget(p.DotsPanesFile()), cl), tea.WithAltScreen())
+	prog := tea.NewProgram(pane.New(resolveTarget(p.DotsPanesFile()), cl).WithOpener(paneOpener), tea.WithAltScreen())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return pane.SnapshotMsg(s) }, pane.DisconnectedMsg{})
@@ -138,12 +139,22 @@ func runManage([]string) error {
 	return err
 }
 
-func runSummonUI([]string) error {
+func runSummonUI(args []string) error {
+	fs := flag.NewFlagSet("summon-ui", flag.ContinueOnError)
+	councilMode := fs.Bool("council", false, "open the council popup instead of the summon list")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	p, cl, err := uiSetup()
 	if err != nil {
 		return err
 	}
-	prog := tea.NewProgram(summon.New(resolveTarget(p.DotsPanesFile()), cl))
+	target := resolveTarget(p.DotsPanesFile())
+	m := summon.New(target, cl)
+	if *councilMode {
+		m = summon.NewCouncil(target, cl)
+	}
+	prog := tea.NewProgram(m)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return summon.SnapshotMsg(s) }, nil)
