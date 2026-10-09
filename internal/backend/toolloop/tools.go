@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -78,15 +79,46 @@ func Unavailable(root string) bool {
 	if rr == string(filepath.Separator) {
 		return true
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	rootInfo, err := os.Stat(rr)
+	if err != nil {
 		return false
 	}
-	if h, err := filepath.EvalSymlinks(home); err == nil {
-		home = h
+	home := homeDir()
+	if home == "" {
+		return false
 	}
-	_, inside := within(rr, home) // home is rr or below rr
-	return inside
+	// Compare by file identity against home and every ancestor of it, so
+	// firmlink paths (/System/Volumes/Data/Users/u) and case variants of the
+	// path (/users/U) are caught as well.
+	for _, h := range []string{home, evalOr(home)} {
+		for dir := h; ; dir = filepath.Dir(dir) {
+			if fi, err := os.Stat(dir); err == nil && os.SameFile(rootInfo, fi) {
+				return true
+			}
+			if filepath.Dir(dir) == dir {
+				break
+			}
+		}
+	}
+	return false
+}
+
+func evalOr(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+// homeDir is $HOME, or the user database's entry when HOME is unset.
+func homeDir() string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return h
+	}
+	if u, err := user.Current(); err == nil {
+		return u.HomeDir
+	}
+	return ""
 }
 
 const truncMarker = "\n[truncated: result cap reached]"
@@ -141,7 +173,7 @@ func RepoTools(root string, lim Limits) []Tool {
 		},
 		{
 			Name:        "list_files",
-			Description: fmt.Sprintf("List project files matching a doublestar glob (default **). Honors .gitignore. At most %d paths.", lim.MaxListPaths),
+			Description: fmt.Sprintf("List project files matching a doublestar glob (default **). Honors .gitignore only when the pane directory is itself a git repository root (otherwise it walks the tree). At most %d paths.", lim.MaxListPaths),
 			Schema: obj(map[string]any{
 				"glob": map[string]any{"type": "string", "description": "glob, e.g. src/**/*.ts"},
 			}),
@@ -247,7 +279,8 @@ func (r repo) grep(ctx context.Context, raw json.RawMessage) (string, error) {
 	if a.Glob != "" && !doublestar.ValidatePattern(a.Glob) {
 		return "", fmt.Errorf("bad glob %q", a.Glob)
 	}
-	files, err := r.files(ctx)
+	rs := newResolver()
+	files, err := r.files(ctx, rs)
 	if err != nil {
 		return "", err
 	}
@@ -262,7 +295,7 @@ func (r repo) grep(ctx context.Context, raw json.RawMessage) (string, error) {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		abs, rrel, err := ResolveInRoot(r.root, rel, r.lim.Deny)
+		abs, rrel, err := rs.resolve(r.root, rel, r.lim.Deny)
 		if err != nil {
 			continue
 		}
@@ -368,7 +401,7 @@ func (r repo) listFiles(ctx context.Context, raw json.RawMessage) (string, error
 	if !doublestar.ValidatePattern(a.Glob) {
 		return "", fmt.Errorf("bad glob %q", a.Glob)
 	}
-	files, err := r.files(ctx)
+	files, err := r.files(ctx, newResolver())
 	if err != nil {
 		return "", err
 	}
@@ -394,7 +427,7 @@ func (r repo) listFiles(ctx context.Context, raw json.RawMessage) (string, error
 // files lists project files (slash paths relative to root, sorted, deny-list
 // applied): `git ls-files` when root is in a git work tree (honors
 // .gitignore), else a walk that skips .git and never follows symlinked dirs.
-func (r repo) files(ctx context.Context) ([]string, error) {
+func (r repo) files(ctx context.Context, rs *resolver) ([]string, error) {
 	rr, err := filepath.EvalSymlinks(r.root)
 	if err != nil {
 		return nil, fmt.Errorf("project root: %w", err)
@@ -408,19 +441,16 @@ func (r repo) files(ctx context.Context) ([]string, error) {
 	}
 	out := list[:0]
 	for _, f := range list {
-		// git's answer is not trusted: every entry must exist under the root.
+		// git's answer is not trusted: every entry must resolve inside the
+		// root, with exact on-disk names (this also applies the deny-list and
+		// stops a stale index entry acting as an existence oracle).
 		if filepath.IsAbs(f) {
 			continue
 		}
-		if _, ok := within(rr, filepath.Join(rr, f)); !ok {
+		if _, _, err := rs.resolve(rr, f, r.lim.Deny); err != nil {
 			continue
 		}
-		if _, err := os.Lstat(filepath.Join(rr, f)); err != nil {
-			continue
-		}
-		if !Denied(f, r.lim.Deny) {
-			out = append(out, f)
-		}
+		out = append(out, f)
 	}
 	sort.Strings(out)
 	return out, nil

@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"golang.org/x/text/cases"
 )
 
 var (
@@ -33,12 +34,13 @@ var DefaultDeny = []string{
 
 // Denied reports whether rel (slash-separated, relative to the root) matches a
 // deny glob, at the root or in any subdirectory. Unmatchable globs are skipped.
-// Matching ignores case (macOS volumes are case-insensitive, so ".ENV" opens
-// ".env"); over-denying is the safe side.
+// Matching uses full Unicode case folding on both sides (APFS folds ſ to s and
+// ß to ss, so ".ENV" and "id_rſa" open the real files); over-denying is the
+// safe side. ResolveInRoot adds a second layer: exact on-disk spellings only.
 func Denied(rel string, globs []string) bool {
-	rel = strings.ToLower(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
+	rel = fold(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
 	for _, g := range globs {
-		g = strings.ToLower(g)
+		g = fold(g)
 		if ok, _ := doublestar.Match(g, rel); ok {
 			return true
 		}
@@ -61,6 +63,9 @@ func Denied(rel string, globs []string) bool {
 	return false
 }
 
+// fold applies Unicode case folding. A fresh folder per call: they are stateful.
+func fold(s string) string { return cases.Fold().String(s) }
+
 func within(root, p string) (string, bool) {
 	rel, err := filepath.Rel(root, p)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
@@ -75,6 +80,90 @@ func within(root, p string) (string, bool) {
 // path relative to the root. Both the requested and the real path are checked
 // against deny, so a symlink can't launder a secret file's name.
 func ResolveInRoot(root, p string, deny []string) (abs, rel string, err error) {
+	return newResolver().resolve(root, p, deny)
+}
+
+// resolver memoizes directory listings and the home lookup across the many
+// resolutions one grep or listing makes.
+type resolver struct {
+	dirs     map[string]map[string]struct{}
+	home     string
+	homeInfo os.FileInfo
+	under    map[string]homeHit
+}
+
+type homeHit struct {
+	rel string
+	ok  bool
+}
+
+func newResolver() *resolver {
+	r := &resolver{dirs: map[string]map[string]struct{}{}, under: map[string]homeHit{}}
+	if h := homeDir(); h != "" {
+		if real, err := filepath.EvalSymlinks(h); err == nil {
+			h = real
+		}
+		if fi, err := os.Stat(h); err == nil {
+			r.home, r.homeInfo = h, fi
+		}
+	}
+	return r
+}
+
+// exact reports whether every component of rel appears byte for byte in its
+// parent's directory listing. Case-insensitive and normalizing filesystems
+// otherwise open ".ENV" or "id_rſa" for ".env" / "id_rsa", and the deny check
+// must run against the real name. Callers have already established that rel
+// stays inside the root.
+func (r *resolver) exact(rr, rel string) bool {
+	cur := rr
+	for _, comp := range strings.Split(rel, "/") {
+		if comp == "" || comp == "." {
+			continue
+		}
+		names, ok := r.dirs[cur]
+		if !ok {
+			ents, err := os.ReadDir(cur)
+			if err != nil {
+				return false
+			}
+			names = make(map[string]struct{}, len(ents))
+			for _, e := range ents {
+				names[e.Name()] = struct{}{}
+			}
+			r.dirs[cur] = names
+		}
+		if _, ok := names[comp]; !ok {
+			return false
+		}
+		cur = filepath.Join(cur, comp)
+	}
+	return true
+}
+
+// homeRel returns dir's path relative to the user's home directory when dir is
+// the home directory or below it (compared by file identity, so case variants
+// and firmlink paths count).
+func (r *resolver) homeRel(dir string) (string, bool) {
+	if r.homeInfo == nil {
+		return "", false
+	}
+	if h, ok := r.under[dir]; ok {
+		return h.rel, h.ok
+	}
+	var hit homeHit
+	if fi, err := os.Stat(dir); err == nil && os.SameFile(fi, r.homeInfo) {
+		hit = homeHit{".", true}
+	} else if parent := filepath.Dir(dir); parent != dir {
+		if pr, ok := r.homeRel(parent); ok {
+			hit = homeHit{filepath.ToSlash(filepath.Join(pr, filepath.Base(dir))), true}
+		}
+	}
+	r.under[dir] = hit
+	return hit.rel, hit.ok
+}
+
+func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err error) {
 	if strings.ContainsRune(p, 0) {
 		return "", "", errors.New("invalid path")
 	}
@@ -121,35 +210,22 @@ func ResolveInRoot(root, p string, deny []string) (abs, rel string, err error) {
 	if !ok {
 		return "", "", ErrOutsideRoot
 	}
+	// Everything now stays inside the root, so listing directories is safe.
+	// The requested spelling and the resolved one must both be exact.
+	if !r.exact(rr, lexRel) || !r.exact(rr, rel) {
+		return "", "", fmt.Errorf("no such file: %s", lexRel)
+	}
 	if Denied(rel, deny) {
 		return "", "", ErrDenied
 	}
+	// Home-anchored globs (.config/gh/**, .kube/config) also apply when the
+	// root sits below the home directory.
+	if hr, ok := r.homeRel(filepath.Dir(real)); ok {
+		if Denied(filepath.ToSlash(filepath.Join(hr, filepath.Base(real))), deny) {
+			return "", "", ErrDenied
+		}
+	}
 	return real, rel, nil
-}
-
-// openVerified opens abs (a path ResolveInRoot returned) for reading and closes
-// the check-to-open race: O_NOFOLLOW stops a symlink swapped in for the last
-// component, and after the open the path must still be its own fully resolved
-// form (so no parent was swapped for a symlink) and name the very file opened.
-// O_NONBLOCK keeps a FIFO swapped in from hanging the run; callers must still
-// require a regular file or directory.
-func openVerified(abs string) (*os.File, error) {
-	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil || real != abs {
-		f.Close()
-		return nil, ErrOutsideRoot
-	}
-	fst, err1 := f.Stat()
-	pst, err2 := os.Lstat(abs)
-	if err1 != nil || err2 != nil || !os.SameFile(fst, pst) {
-		f.Close()
-		return nil, ErrOutsideRoot
-	}
-	return f, nil
 }
 
 // walkInside resolves rel under the real root one component at a time, without
@@ -198,4 +274,29 @@ func walkInside(rr, rel string) error {
 		cur = rr
 	}
 	return nil
+}
+
+// openVerified opens abs (a path ResolveInRoot returned) for reading and closes
+// the check-to-open race: O_NOFOLLOW stops a symlink swapped in for the last
+// component, and after the open the path must still be its own fully resolved
+// form (so no parent was swapped for a symlink) and name the very file opened.
+// O_NONBLOCK keeps a FIFO swapped in from hanging the run; callers must still
+// require a regular file or directory.
+func openVerified(abs string) (*os.File, error) {
+	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil || real != abs {
+		f.Close()
+		return nil, ErrOutsideRoot
+	}
+	fst, err1 := f.Stat()
+	pst, err2 := os.Lstat(abs)
+	if err1 != nil || err2 != nil || !os.SameFile(fst, pst) {
+		f.Close()
+		return nil, ErrOutsideRoot
+	}
+	return f, nil
 }
