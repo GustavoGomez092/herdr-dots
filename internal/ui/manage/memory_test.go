@@ -130,6 +130,26 @@ func TestDeleteDotWithMemoryRemovesItEverywhere(t *testing.T) {
 	}
 }
 
+func TestDeleteDotWithMemoryAlsoForgetsItsLedgerAndProposals(t *testing.T) {
+	m, _, dir, st := memSetup(t)
+	d, _ := dots.FromTemplate("backend")
+	_ = dots.Save(dir, d, true)
+	if err := st.RecordOutcome(memPID, memory.Outcome{Dot: "backend", Card: "7", Kind: memory.OutcomeDismissed, Body: "Use a connection pool."}); err != nil {
+		t.Fatal(err)
+	}
+	addMem(t, st, memPID, memory.Entry{Scope: memory.ScopeProject, Dot: "backend", Kind: memory.KindConvention, Text: "Handlers return problem+json.", Status: memory.StatusProposed, Source: memory.SourceModel})
+	m = press(m, "D", "y", "y")
+	if !strings.Contains(m.View(), "deleted Backend and its memory (1 file, 1 ledger line, 1 proposal)") {
+		t.Fatalf("status:\n%s", m.View())
+	}
+	if l, _ := st.Ledger(memPID); len(l) != 0 {
+		t.Fatalf("ledger left: %+v", l)
+	}
+	if es, _ := st.List(memPID, memory.Filter{Scope: memory.ScopeProject}); len(es) != 0 {
+		t.Fatalf("proposal left: %+v", es)
+	}
+}
+
 func memSetupWith(t *testing.T, project func(string) (memory.Project, error)) (tea.Model, *memory.Store, string) {
 	t.Helper()
 	root := t.TempDir()

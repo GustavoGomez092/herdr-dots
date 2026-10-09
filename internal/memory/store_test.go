@@ -330,8 +330,8 @@ func TestForgetAllDeleteDotAndPurge(t *testing.T) {
 		t.Fatalf("ForgetAll: %d %v", n, err)
 	}
 	mustAdd(t, s, pid, dotNote("security", "back again"))
-	if n, err := s.DeleteDot("security"); err != nil || n != 3 {
-		t.Fatalf("DeleteDot: %d %v", n, err)
+	if del, err := s.DeleteDot("security"); err != nil || del.Files != 3 {
+		t.Fatalf("DeleteDot: %+v %v", del, err)
 	}
 	if es, _ := s.List("", Filter{Scope: ScopeGlobal, Dot: "security"}); len(es) != 0 {
 		t.Fatal("global memory survived DeleteDot")

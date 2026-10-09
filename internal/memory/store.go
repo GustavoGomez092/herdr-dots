@@ -1131,39 +1131,118 @@ func removeAllBut(dir, keep string) error {
 	return errors.Join(errs...)
 }
 
-// DeleteDot removes a dot's memory in every project and its global memory,
-// returning how many files were removed.
-func (s *Store) DeleteDot(slug string) (int, error) {
+// DotDeletion counts what DeleteDot removed.
+type DotDeletion struct {
+	Files       int // dot-scope files: one per project, plus the global one
+	LedgerLines int // ledger lines left by the dot's cards
+	Proposals   int // project entries the dot wrote that nobody approved
+}
+
+// String is the status line form: "3 files", "3 files, 2 ledger lines, 1 proposal".
+func (d DotDeletion) String() string {
+	plural := func(n int, one, many string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return strconv.Itoa(n) + " " + many
+	}
+	parts := []string{plural(d.Files, "file", "files")}
+	if d.LedgerLines > 0 {
+		parts = append(parts, plural(d.LedgerLines, "ledger line", "ledger lines"))
+	}
+	if d.Proposals > 0 {
+		parts = append(parts, plural(d.Proposals, "proposal", "proposals"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// DeleteDot forgets a dot everywhere, so forgetting is real: its dot-scope
+// memory in every project, its global memory, every ledger line its cards
+// left, and the project entries it wrote that were never approved (proposed
+// or archived; nobody can approve them once the dot is gone, and they would
+// keep its words on disk). Approved project memory stays: the developer made
+// it shared truth. Each project is handled under its own lock, ledger first
+// (like Forget), and a failure in one project doesn't stop the others.
+func (s *Store) DeleteDot(slug string) (DotDeletion, error) {
+	var out DotDeletion
 	if !ValidSlug(slug) {
-		return 0, fmt.Errorf("%w: dot %q", ErrInvalid, slug)
+		return out, fmt.Errorf("%w: dot %q", ErrInvalid, slug)
 	}
 	ents, err := os.ReadDir(s.Dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, nil
+		return out, nil
 	}
+	if err != nil {
+		return out, err
+	}
+	var errs []error
+	for _, e := range ents {
+		name := e.Name()
+		if !e.IsDir() || (name != GlobalID && !ValidProjectID(name)) {
+			continue
+		}
+		dir := filepath.Join(s.Dir, name)
+		errs = append(errs, s.withLock(dir, func() error {
+			var perrs []error
+			if name != GlobalID {
+				n, err := s.scrubDotLedgerLocked(name, slug)
+				out.LedgerLines += n
+				perrs = append(perrs, err)
+				n, err = s.dropDotProposalsLocked(name, slug)
+				out.Proposals += n
+				perrs = append(perrs, err)
+			}
+			err := os.Remove(filepath.Join(dir, "dots", slug+".json"))
+			switch {
+			case err == nil:
+				out.Files++
+			case !errors.Is(err, fs.ErrNotExist):
+				perrs = append(perrs, err)
+			}
+			return errors.Join(perrs...)
+		}))
+	}
+	return out, errors.Join(errs...)
+}
+
+// scrubDotLedgerLocked deletes every ledger line of dot in project p and
+// returns how many. The caller holds the project lock.
+func (s *Store) scrubDotLedgerLocked(p, dot string) (int, error) {
+	all, err := s.readLedgerLocked(p)
 	if err != nil {
 		return 0, err
 	}
-	n := 0
-	var errs []error
-	for _, e := range ents {
-		if !e.IsDir() || (e.Name() != GlobalID && !ValidProjectID(e.Name())) {
-			continue
-		}
-		dir := filepath.Join(s.Dir, e.Name())
-		path := filepath.Join(dir, "dots", slug+".json")
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
-		errs = append(errs, s.withLock(dir, func() error {
-			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
-			n++
-			return nil
-		}))
+	kept := slices.DeleteFunc(slices.Clone(all), func(o Outcome) bool { return o.Dot == dot })
+	n := len(all) - len(kept)
+	if n == 0 {
+		return 0, nil
 	}
-	return n, errors.Join(errs...)
+	return n, s.writeLedgerLocked(p, kept)
+}
+
+// dropDotProposalsLocked deletes the project entries dot wrote that were
+// never approved (proposed or archived, not developer-written) and returns
+// how many. A missing project file is left missing. The caller holds the
+// project lock.
+func (s *Store) dropDotProposalsLocked(p, dot string) (int, error) {
+	orphan := func(e Entry) bool {
+		return e.Dot == dot && e.Source != SourceUser && (e.Status == StatusProposed || e.Status == StatusArchived)
+	}
+	f, err := readScope(s.scopePath(p, ScopeProject, ""), ScopeProject, "")
+	if err != nil {
+		return 0, err
+	}
+	if !slices.ContainsFunc(f.Entries, orphan) {
+		return 0, nil
+	}
+	n := 0
+	err = s.mutateLocked(p, ScopeProject, "", func(f *scopeFile) error {
+		before := len(f.Entries)
+		f.Entries = slices.DeleteFunc(f.Entries, orphan)
+		n = before - len(f.Entries)
+		return nil
+	})
+	return n, err
 }
 
 // ---- ledger

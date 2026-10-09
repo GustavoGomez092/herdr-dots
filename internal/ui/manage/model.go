@@ -62,8 +62,8 @@ type (
 		err  error
 	}
 	memDeletedMsg struct {
-		name  string
-		files int
+		name string
+		del  memory.DotDeletion
 	}
 	modelsMsg struct {
 		kind string
@@ -168,7 +168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, mm.Init()
 	case memDeletedMsg:
-		m.status = fmt.Sprintf("deleted %s and its memory (%d files)", msg.name, msg.files)
+		m.status = fmt.Sprintf("deleted %s and its memory (%s)", msg.name, msg.del)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case SnapshotMsg:
@@ -501,14 +501,14 @@ func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y", "enter":
 		m.scr = scrLibrary
 		return m, func() tea.Msg {
-			n, err := st.DeleteDot(slug)
+			del, err := st.DeleteDot(slug)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil) // part of it may be gone even on an error
 			if err != nil {
 				return errMsg{err}
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil)
-			return memDeletedMsg{name: name, files: n}
+			return memDeletedMsg{name: name, del: del}
 		}
 	}
 	return m, nil
