@@ -151,14 +151,17 @@ type appliedMsg struct{ err error }
 // Model is the viewer.
 type Model struct {
 	files   []File
-	cov     [][]bool // per file, per line: has been on screen
+	cov     [][]bool // per file, per source line: every row of it has been on screen
+	part    [][]bool // per file, per row at width partW: has been on screen
+	partW   int
+	wc      *wrapped // the selected file wrapped to the content width
 	sized   bool     // a WindowSizeMsg arrived
 	meta    patchstore.Meta
 	cardID  string
 	sum     string // SHA-256 of the exact patch bytes shown
 	caller  Caller
 	file    int // selected file
-	top     int // first diff line shown
+	top     int // first diff row shown (rows are wrapped source lines)
 	width   int
 	height  int
 	confirm bool // the apply question is open
@@ -196,26 +199,50 @@ func (m Model) Arm() Model {
 
 func (m Model) Init() tea.Cmd { return nil }
 
-// markSeen records the lines of the selected file that are on screen now.
-// Nothing is recorded before the window size is known. It copies what it
-// changes: models are values and may be forked.
+// markSeen records the rows of the selected file that are on screen now. A
+// source line counts as seen once every one of its wrapped rows has been on
+// screen at the current width (a resize starts partial lines over). Nothing
+// is recorded before the window size is known or in a too-narrow column. It
+// copies what it changes: models are values and may be forked.
 func (m Model) markSeen() Model {
-	if !m.sized || m.file < 0 || m.file >= len(m.files) {
+	m.reflow()
+	if !m.sized || m.file < 0 || m.file >= len(m.files) || m.contentWidth() < minContent {
 		return m
 	}
-	n := len(m.files[m.file].Lines)
-	from, to := m.top, min(n, m.top+m.pageLines())
-	if from >= to {
+	wr := m.wc
+	from, to := m.top, min(len(wr.rows), m.top+m.pageLines())
+	if from < 0 || from >= to {
 		return m
 	}
+	part := make([][]bool, len(m.files))
+	if m.partW == wr.width {
+		copy(part, m.part)
+	}
+	pr := make([]bool, len(wr.rows))
+	copy(pr, part[m.file])
+	for i := from; i < to; i++ {
+		pr[i] = true
+	}
+	part[m.file] = pr
+	m.part, m.partW = part, wr.width
+
 	cov := make([][]bool, len(m.files))
 	copy(cov, m.cov)
-	row := make([]bool, n)
-	copy(row, cov[m.file])
-	for i := from; i < to; i++ {
-		row[i] = true
+	seen := make([]bool, len(m.files[m.file].Lines))
+	copy(seen, cov[m.file])
+	for src := wr.rows[from].src; src <= wr.rows[to-1].src; src++ {
+		all := true
+		for r := wr.start[src]; r < wr.start[src+1]; r++ {
+			if !pr[r] {
+				all = false
+				break
+			}
+		}
+		if all {
+			seen[src] = true
+		}
 	}
-	cov[m.file] = row
+	cov[m.file] = seen
 	m.cov = cov
 	return m
 }
@@ -346,10 +373,11 @@ const tooSmall = "window too small — enlarge to review"
 const minDiffLines = 3
 
 // fits reports whether the header, the file line, the whole apply question
-// and at least minDiffLines of diff fit the window. The question is only
-// ever open (and y only ever acts) when they do.
+// and at least minDiffLines of diff fit the window, in a diff column wide
+// enough to wrap into. The question is only ever open (and y only ever
+// acts) when they do.
 func (m Model) fits() bool {
-	if !m.sized {
+	if !m.sized || m.contentWidth() < minContent {
 		return false
 	}
 	narrow := 0
@@ -388,7 +416,7 @@ func (m Model) layout() (summary bool, page int) {
 		used++
 		summary = true
 	}
-	return summary, max(1, m.height-used)
+	return summary, max(0, m.height-used)
 }
 
 func (m Model) pageLines() int {
@@ -403,8 +431,10 @@ func (m Model) cur() File {
 	return File{}
 }
 
+// scroll moves by d rows.
 func (m *Model) scroll(d int) {
-	m.top = max(0, min(m.top+d, len(m.cur().Lines)-1))
+	m.reflow()
+	m.top = max(0, min(m.top+d, len(m.wc.rows)-1))
 }
 
 func (m *Model) selectFile(i int) {
@@ -413,36 +443,38 @@ func (m *Model) selectFile(i int) {
 	}
 	m.file = max(0, min(i, len(m.files)-1))
 	m.top = 0
+	m.reflow()
 }
 
 // hunk moves to the next (d=1) or previous (d=-1) hunk, crossing files.
 func (m *Model) hunk(d int) {
+	m.reflow()
 	f := m.cur()
 	if d > 0 {
 		for _, h := range f.Hunks {
-			if h > m.top {
-				m.top = h
+			if r := m.wc.start[h]; r > m.top {
+				m.top = r
 				return
 			}
 		}
 		if m.file+1 < len(m.files) {
 			m.selectFile(m.file + 1)
 			if hs := m.cur().Hunks; len(hs) > 0 {
-				m.top = hs[0]
+				m.top = m.wc.start[hs[0]]
 			}
 		}
 		return
 	}
 	for i := len(f.Hunks) - 1; i >= 0; i-- {
-		if f.Hunks[i] < m.top {
-			m.top = f.Hunks[i]
+		if r := m.wc.start[f.Hunks[i]]; r < m.top {
+			m.top = r
 			return
 		}
 	}
 	if m.file > 0 {
 		m.selectFile(m.file - 1)
 		if hs := m.cur().Hunks; len(hs) > 0 {
-			m.top = hs[len(hs)-1]
+			m.top = m.wc.start[hs[len(hs)-1]]
 		}
 	}
 }
@@ -459,7 +491,12 @@ func (m Model) apply() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		src := m.topLine() // keep the same source line at the top
 		m.width, m.height, m.sized = msg.Width, msg.Height, true
+		m.reflow()
+		if src < len(m.wc.start)-1 {
+			m.top = m.wc.start[src]
+		}
 		if m.confirm && !m.fits() {
 			m.confirm, m.status = false, tooSmall
 		}
@@ -545,18 +582,20 @@ var (
 	hunkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 )
 
-func colorLine(l string) string {
+// colorRow colours one row (text) by its source line (src), so continuation
+// rows keep the +/- colour.
+func colorRow(src, text string) string {
 	switch {
-	case strings.HasPrefix(l, "@@"):
-		return hunkStyle.Render(l)
-	case strings.HasPrefix(l, "+++ "), strings.HasPrefix(l, "--- "), strings.HasPrefix(l, "diff --git "):
-		return style.Title.Render(l)
-	case strings.HasPrefix(l, "+"):
-		return addStyle.Render(l)
-	case strings.HasPrefix(l, "-"):
-		return delStyle.Render(l)
+	case strings.HasPrefix(src, "@@"):
+		return hunkStyle.Render(text)
+	case strings.HasPrefix(src, "+++ "), strings.HasPrefix(src, "--- "), strings.HasPrefix(src, "diff --git "):
+		return style.Title.Render(text)
+	case strings.HasPrefix(src, "+"):
+		return addStyle.Render(text)
+	case strings.HasPrefix(src, "-"):
+		return delStyle.Render(text)
 	}
-	return l
+	return text
 }
 
 // fit cuts s to w terminal cells, marking the cut with an ellipsis.
@@ -615,7 +654,7 @@ func (m Model) View() string {
 	if summary {
 		b.WriteString(m.summaryLine() + "\n")
 	}
-	left := min(44, max(14, w/3))
+	left := m.leftWidth()
 	var list []string
 	for i, f := range m.files {
 		stat := "+" + strconv.Itoa(f.Added) + " −" + strconv.Itoa(f.Deleted)
@@ -635,22 +674,29 @@ func (m Model) View() string {
 		off := max(0, min(m.file-page+1, len(list)-page))
 		list = list[off : off+page]
 	}
-	lines := m.cur().Lines
-	end := min(len(lines), m.top+page)
+	// diff rows are wrapped to the column, never cut (wrap.go)
+	wr := m.wrap()
+	src := m.cur().Lines
+	end := min(len(wr.rows), m.top+page)
 	var shown []string
+	for _, r := range wr.rows[min(max(0, m.top), end):end] {
+		shown = append(shown, colorRow(src[r.src], r.text))
+	}
 	if w < 60 { // too narrow for two columns: the selected file's name, then its diff
-		for _, l := range lines[min(m.top, end):end] {
-			shown = append(shown, colorLine(fit(l, w)))
-		}
 		b.WriteString(style.Dim.Render(fit(fmt.Sprintf("file %d/%d: %s%s", m.file+1, len(m.files), m.cur().Path, flagTags(m.cur())), w)) + "\n")
-		b.WriteString(strings.Join(shown, "\n") + "\n")
-	} else {
-		for _, l := range lines[min(m.top, end):end] {
-			shown = append(shown, colorLine(fit(l, max(1, w-left-3))))
+		if len(shown) > 0 {
+			b.WriteString(strings.Join(shown, "\n") + "\n")
 		}
+	} else if page > 0 {
 		lw := lipgloss.NewStyle().Width(left).Render(strings.Join(list, "\n"))
 		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, lw, " │ ", strings.Join(shown, "\n")) + "\n")
 	}
 	b.WriteString(strings.Join(m.footer(), "\n"))
-	return b.String()
+	out := b.String()
+	if m.sized && m.height > 0 { // a status longer than a tiny window: keep the top
+		if ls := strings.Split(out, "\n"); len(ls) > m.height {
+			out = strings.Join(ls[:m.height], "\n")
+		}
+	}
+	return out
 }
