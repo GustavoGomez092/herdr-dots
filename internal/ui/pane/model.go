@@ -418,7 +418,8 @@ s summon dot   m cycle mode   p pause   d detach
 r reset dot+budget    f feed   ? help   q close`
 
 // feedOutcome shows memory outcomes with their detail: "learned 2",
-// "suppressed (d:m17)".
+// "suppressed (d:m17)", and agent asks as "◆ asked by agent · <severity>"
+// (the cost tail of an ask is never shown).
 func feedOutcome(e state.FeedEntry) string {
 	switch e.Outcome {
 	case state.OutcomeLearned:
@@ -548,7 +549,7 @@ func (m Model) View() string {
 			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
 			if e.Detail != "" && e.Outcome == "error" {
 				line += "  " + trunc(e.Detail, max(10, w-24))
-			} else if c := costPart(e.Detail); c != "" {
+			} else if c := costPart(e.Detail); c != "" && e.Outcome != state.OutcomeAsked {
 				line += "  " + c
 			}
 			b.WriteString(trunc(line, max(10, w)) + "\n")

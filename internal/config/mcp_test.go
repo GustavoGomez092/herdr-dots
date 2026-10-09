@@ -55,6 +55,17 @@ func TestMCPMissingTableKeepsDefaults(t *testing.T) {
 	}
 }
 
+func TestMCPNormalizedNegativeAndOversizedLimits(t *testing.T) {
+	m := MCPConfig{MaxAsksPerTurn: -4, MaxAsksPerMinute: -1}.Normalized()
+	if m.MaxAsksPerTurn != 3 || m.MaxAsksPerMinute != 6 {
+		t.Fatalf("negative limits mean the defaults: %+v", m)
+	}
+	m = MCPConfig{MaxAsksPerTurn: 51, MaxAsksPerMinute: 121}.Normalized()
+	if m.MaxAsksPerTurn != 50 || m.MaxAsksPerMinute != 120 {
+		t.Fatalf("limits clamp: %+v", m)
+	}
+}
+
 func TestMCPNormalizedNilToolsMeansAll(t *testing.T) {
 	m := MCPConfig{MaxAsksPerTurn: 2}.Normalized()
 	if !slices.Equal(m.Tools, MCPTools) || m.MaxAsksPerTurn != 2 || m.MaxAsksPerMinute != 6 {

@@ -23,6 +23,11 @@ const (
 // OutcomeCouncil: a council card was created (the entry's Dot is "council").
 const OutcomeCouncil = "council"
 
+// OutcomeAsked: the main agent asked this dot (or a council, Dot "council")
+// through the Dots MCP server (Phase 5). Detail starts with the severity, or
+// "pass", followed by " · " and the run's cost detail when there is one.
+const OutcomeAsked = "asked"
+
 // feedKeep is how many recent entries per pane stay in memory.
 const feedKeep = 50
 
@@ -104,8 +109,3 @@ func (f *Feed) Recent(paneID string, n int) []FeedEntry {
 	}
 	return append([]FeedEntry(nil), list...)
 }
-
-// OutcomeAsked: the main agent asked this dot (or a council, Dot "council")
-// through the Dots MCP server (Phase 5). Detail starts with the severity, or
-// "pass", followed by " · " and the run's cost detail when there is one.
-const OutcomeAsked = "asked"
