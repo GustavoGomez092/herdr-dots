@@ -53,6 +53,8 @@ Native support for the Herdr Windows beta, before the remaining feature phases s
 
 ### Phase 7: Write-capable dots in sandboxed worktrees
 
+**Status (0.7.0):** implemented (plan: `docs/superpowers/plans/2026-10-08-herdr-dots-phase-7-write-capable-dots.md`). Unit-tested with real git on macOS; codex-cli can't draft (no shell, ruling 5); a real draft inside Herdr and the Linux/Windows git versions are user gates. The product is not done.
+
 Opted-in dots can draft a fix in an isolated git worktree built from a side-effect-free snapshot of your working tree (temporary index, private ref; your index, stash, branches and `HEAD` are untouched). Two explicit approval gates: start the draft, then apply the patch. Patches are validated (no `.git/`, no escapes, size caps), shown in a diff viewer, and applied with `git apply --3way` only when the main agent is idle, or handed to the agent, or discarded. No shell access for any backend; hooks are disabled for every git command; never `bypassPermissions`.
 
 ### Phase 8: Proactive dots (proposed by drafter)

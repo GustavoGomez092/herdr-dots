@@ -70,3 +70,10 @@ Under the live-step safety rules (`herdr --session dots-test` only; never `herdr
 - [ ] An API dot (`anthropic-api`) with `write = true` drafts through `write_file`/`edit_file`.
 - [ ] A partial clone (`git clone --filter=blob:none`) drafts without network access, or fails with a clear error.
 - [ ] On Windows: a draft runs git found on `PATH` (Phase 6 `platform.CommandContext`), the session's `worktrees` folder and the `herdr-dots-index-*`/`herdr-dots-apply-*` temp folders are owner-only (`icacls`), and a patch path such as `con.txt` or `a.txt:stream` is rejected.
+
+## Phase 7 result
+
+- Version 0.7.0. `go test -race ./...` (darwin), `GOOS=linux`/`GOOS=windows go build ./...` and `GOOS=windows go vet ./...` pass.
+- Phase 2 debt paid: `DeleteDot` scrubs ledger lines and orphaned proposals (Task 0).
+- A live Claude draft has not been run on this machine. On Windows, drafts are compile-checked and unit-tested only, never run.
+- Open user gates: every box in "User gates" above.
