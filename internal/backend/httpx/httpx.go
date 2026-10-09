@@ -13,8 +13,10 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"herdr-dots/internal/credentials"
@@ -227,8 +229,29 @@ func (c Client) scrub(err error) error {
 	if errors.As(err, &se) {
 		return err
 	}
-	return errors.New(credentials.Redact(err.Error(), c.Secret))
+	s := &scrubbed{msg: credentials.Redact(err.Error(), c.Secret)}
+	for _, sentinel := range keptSentinels {
+		if errors.Is(err, sentinel) {
+			s.causes = append(s.causes, sentinel)
+		}
+	}
+	return s
 }
+
+// keptSentinels are what a scrubbed error still matches with errors.Is: the
+// deadline and cancellation (callers report timeouts), and connection
+// refused (the editor's save check treats it as "unreachable").
+var keptSentinels = []error{context.DeadlineExceeded, context.Canceled, os.ErrDeadlineExceeded, syscall.ECONNREFUSED}
+
+// scrubbed is a redacted error. It unwraps only to sentinels, never to the
+// original error, whose text may carry the secret.
+type scrubbed struct {
+	msg    string
+	causes []error
+}
+
+func (e *scrubbed) Error() string   { return e.msg }
+func (e *scrubbed) Unwrap() []error { return e.causes }
 
 func clip(s string, n int) string {
 	s = strings.TrimSpace(s)
