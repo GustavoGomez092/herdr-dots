@@ -45,6 +45,8 @@ Results:
 - Secrets/personal-path grep (credential prefixes, e-mail addresses, home-directory paths): the only hits are case-insensitive matches of the home-path pattern on the scenario's own `internal/users/search.go` in review-03 and review-13 (false positives). No credentials, e-mail addresses or real home-directory paths in any reply file.
 - `usage.input_tokens` is 2 on these calls because the prompt is served almost entirely from the prompt cache (see V4).
 
+Apply results (Task 7, `TestRecordedRepliesParseAndApply`): all 24 replies parse (`ParseReply` for review-*, `ParseMemoryOps` for pass-*) and their ops apply to a fresh store as dot `security`: 10 ops in total (pass-01: 1, pass-02: 1, pass-03: 2, pass-04: 3, review-03, 04, 09, 13, 14, 20: 1 each), 10 applied, 0 rejected.
+
 Assumption holds: yes (0/20 genuinely malformed; the snippet over-counts 2 because of `echo` escape handling; replies average 696 characters).
 
 ## V4: cost of a 6,000-character memory block
@@ -80,8 +82,8 @@ The path is under `~/.local/state`, not Desktop/Documents, iCloud, Dropbox or On
 Assumption holds: yes (inferred, not read from a live engine process).
 
 ## V6: labeled pairs for the 0.7 suppression threshold
-`internal/memory/testdata/similar_pairs.tsv`: header `label<TAB>message<TAB>remembered`, 40 rows (20 `same`, 20 `different`): the brief's 30 verbatim plus 5 `same` and 5 `different` rows built from real V3 replies (review-01, 06, 07, 10, 03). `awk -F'\t'` confirms 3 fields on every row. Task 7's `TestSuppressionThresholdOnLabeledPairs` is the actual check; it does not exist yet, so the threshold itself is untested here. If more than 10% of `different` rows reach 0.7 there, stop and report.
-Assumption holds: pending Task 7 (data is in place).
+`internal/memory/testdata/similar_pairs.tsv`: header `label<TAB>message<TAB>remembered`, 40 rows (20 `same`, 20 `different`): the brief's 30 verbatim plus 5 `same` and 5 `different` rows built from real V3 replies (review-01, 06, 07, 10, 03). `awk -F'\t'` confirms 3 fields on every row. Task 7's `TestSuppressionThresholdOnLabeledPairs` is the actual check (fails if more than 10% of `different` rows reach 0.7). Result at threshold 0.7: recall 17/20, false positives 0/20.
+Assumption holds: yes (0/20 false positives, under the 10% limit).
 
 ## Safety
 `~/.claude/settings.json` was snapshotted to `/tmp/claude-settings-before.json` before the first live step; `diff` after the last live step printed nothing.
