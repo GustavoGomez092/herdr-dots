@@ -1,7 +1,7 @@
 # Herdr Dots
 
-> **Status: scaffold (v0.2.0).** Phases 1 (core loop) and 2 (dot memory, VITAL) are in. The project is
-> not done and not ready for general use; see the [Roadmap](#roadmap) for what's missing.
+> **Status: scaffold (v0.3.0).** Phases 1 (core loop), 2 (dot memory, VITAL) and 3 (council mode) are
+> in. The project is not done and not ready for general use; see the [Roadmap](#roadmap) for what's missing.
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**: specialist agents (security,
 frontend, backend, copywriter, ...) that join a Claude Code or Codex session running in a Herdr
@@ -48,6 +48,12 @@ key = "prefix+shift+s"
 type = "plugin_action"
 command = "herdr-dots.summon"
 description = "herdr-dots: summon a dot"
+
+[[keys.command]]
+key = "prefix+shift+c"
+type = "plugin_action"
+command = "herdr-dots.council"
+description = "herdr-dots: council (ask every dot)"
 ```
 
 All actions also work from Herdr's action menu without any binding.
@@ -60,7 +66,7 @@ All actions also work from Herdr's action menu without any binding.
 4. Press `prefix+a` to open the Dots pane next to the agent.
 
 Dots pane keys: `⏎` send card · `a` send all · `e` edit · `x` dismiss · `s` summon · `m` cycle mode ·
-`p` pause · `d` detach · `r` reset an errored dot · `t` next agent · `f` feed · `?` help.
+`p` pause · `d` detach · `r` reset an errored dot · `t` next agent · `f` feed · `C` council · `space` expand a council card · `?` help.
 
 ### Delivery modes
 
@@ -120,6 +126,41 @@ Per-dot settings (`[memory]` in the dot's TOML file): `enabled`, `learn`, `read_
 `memory_auto_approve_project` (false). `memory_enabled = false` takes effect within a few seconds;
 turning memory back on and changing the other `memory_*` settings need an engine restart.
 
+### Council mode
+
+Ask every attached dot the same question at once and get **one** card back. Press `C` in the Dots
+pane, run the `herdr-dots.council` action (`prefix+shift+c` after `setup-keys`), or pick
+"⊕ Council (all attached)" at the top of the summon popup.
+
+The popup has an optional question (empty means "review the recent turns") and a checklist of
+members: every attached dot that isn't paused or out of budget, observe-mode dots included. It shows
+the cost before anything runs (members × rounds, plus one call for the chair). If the pane's session
+budget can't cover it, Enter stays disabled and the popup says why.
+
+Members answer in parallel (within `max_parallel_runs`) and may pass. A **chair** run merges the
+answers into a digest with `## Must fix`, `## Should fix`, `## Consider`, `## Disagreements` and
+`## Not heard from`, each point attributed to the dots that raised it. If the chair fails or returns
+something malformed, a deterministic plain merge is used and the card says so. Press `space` on the
+council card to see each member's own answer; a member that failed shows `✗ timed out`.
+
+The council card is always a queue card: nothing is sent until you press `⏎`. It arrives in the
+agent as `[⊕ Council dot] …`, and no dot reviews the turn it starts. Sending it records an accepted
+finding for each dot that contributed; dismissing it records a dismissal for each (see Dot memory).
+
+Settings in `config.toml`:
+
+```toml
+[council]
+chair_backend = ""      # empty = default_backend
+chair_model   = ""      # empty = default_model
+rounds        = 1       # 2 = dot-to-dot cross-review: each dot sees the others' answers and replies AGREE/OBJECT/ADD
+max_members   = 8       # 2-16
+merge         = "chair" # chair | plain
+```
+
+`rounds = 2` roughly doubles the cost. One council runs per pane at a time. A council in progress is
+lost if the engine restarts (calls already made still count against the budgets).
+
 ## Files
 
 - Dots: `$(herdr plugin config-dir herdr-dots)/dots/<slug>.toml` (hand-editable)
@@ -138,6 +179,10 @@ turning memory back on and changing the other `memory_*` settings need an engine
 - Changes to `config.toml` apply within a few seconds, without a restart (except `max_parallel_runs`, the `memory_*` limits and turning `memory_enabled` back on);
   if the file can't be parsed, the last good settings stay and inject is turned off until it is fixed.
 - Per-dot and per-session call budgets cap cost.
+- Council members in round 2 see the other dots' answers, framed as opinions, never as instructions.
+  The council chair sees the members' answers, the recent turns and the project's approved
+  conventions and decisions; it has no repo access and writes no memory.
+- Council cards are never sent without your approval, whatever the members' delivery modes are.
 - Memory stays on this machine. It leaves it only inside the prompts a dot sends to **its own**
   provider, and a dot on a remote provider receives project memory written by other dots and by you.
 - Dots can't plant shared conventions: model-written project memory waits for your approval, and
@@ -160,7 +205,9 @@ turning memory back on and changing the other `memory_*` settings need an engine
 - The Codex backend's `remember` support follows Codex's documented output format and has not been
   verified live.
 - Draft specs for later phases live in `docs/superpowers/specs/` (roadmap: `2026-10-08-herdr-dots-roadmap.md`), all pending review.
-- No council mode, no API/Ollama backends, no MCP server, no Windows support.
+- No API/Ollama backends, no MCP server, no Windows support.
+- A council in progress doesn't survive an engine restart.
+- Long council deliveries were verified live with Claude Code only; Codex is untested.
 
 ## Roadmap
 
@@ -168,7 +215,7 @@ turning memory back on and changing the other `memory_*` settings need an engine
 |---|---|
 | 1 | Core loop (in this scaffold) |
 | **2** | **Dot memory — VITAL.** Per-project, per-dot memory of conventions, decisions and past findings (in this scaffold since 0.2.0; still being hardened). Without it, dots repeat themselves and can't learn a project. |
-| 3 | Council mode: ask all dots at once, get one merged digest |
+| 3 | Council mode: ask all dots at once, get one merged digest, with optional dot-to-dot cross-review (in this scaffold since 0.3.0) |
 | 4 | API and Ollama backends behind the same backend interface |
 | 5 | Dots MCP server so the main agent can consult dots itself |
 | 6–10 | Windows, write-capable dots, proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
