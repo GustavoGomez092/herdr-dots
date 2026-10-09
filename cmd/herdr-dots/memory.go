@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -18,6 +17,7 @@ import (
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/paths"
+	"herdr-dots/internal/platform"
 	"herdr-dots/internal/textutil"
 )
 
@@ -642,11 +642,14 @@ func (c *memCLI) edit(args []string) error {
 		return err
 	}
 	defer os.RemoveAll(dir)
+	if err := platform.SecureDir(dir); err != nil {
+		return err
+	}
 	file := filepath.Join(dir, "memory.toml")
 	if err := os.WriteFile(file, data, 0o600); err != nil {
 		return err
 	}
-	cmd := exec.Command("sh", "-c", c.editor+` "$1"`, "sh", file)
+	cmd := platform.EditorCommand(c.editor, file) // sh -c on Unix, cmd.exe on Windows
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = c.in, c.out, c.errOut
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("edit: the editor failed: %w (nothing changed)", err)

@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +15,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/memory"
+	"herdr-dots/internal/platform/platformtest"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
@@ -338,24 +336,20 @@ func TestListDotsAndListQueue(t *testing.T) {
 	}
 }
 
-// The engine answers queries over its real socket (ipc.Querier).
+// The engine answers queries over its real endpoint (ipc.Querier).
 func TestQueriesOverTheEngineSocket(t *testing.T) {
 	r := newRig(t, dot("Security", dots.ModeQueue))
 	r.attach(t, "security")
 	r.be.set(critical)
-	dir, err := os.MkdirTemp("", "engq")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	ln, err := net.Listen("unix", filepath.Join(dir, "d.sock"))
+	endpoint := platformtest.Endpoint(t)
+	ln, err := ipc.Listen(endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go ipc.Serve(ctx, ln, r.e)
-	c := ipc.Client{Path: filepath.Join(dir, "d.sock")}
+	c := ipc.Client{Path: endpoint}
 	qctx, qcancel := context.WithTimeout(ctx, 5*time.Second)
 	defer qcancel()
 	var res ipc.AskResult

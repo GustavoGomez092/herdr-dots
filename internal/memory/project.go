@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -34,7 +33,10 @@ var gitTimeout = 5 * time.Second
 // on Windows, no console window.
 func ExecGit(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir, "-c", "core.hooksPath=" + platform.DevNull}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd, err := platform.CommandContext(ctx, "git", full)
+	if err != nil {
+		return "", err
+	}
 	cmd.Env = gitEnv(os.Environ())
 	cmd.WaitDelay = 500 * time.Millisecond
 	platform.HideWindow(cmd)

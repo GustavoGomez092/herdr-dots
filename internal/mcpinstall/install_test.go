@@ -4,16 +4,24 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"herdr-dots/internal/platform/platformtest"
 )
 
-const (
-	tBin   = "/opt/herdr dots/bin/herdr-dots"
-	tCfg   = "/home/u/.config/herdr/plugins/herdr-dots"
-	tState = "/home/u/.local/state/herdr/plugins/herdr-dots"
+// tRoot is "" on Unix and the temp dir's drive ("C:") on Windows, so the
+// paths below are absolute everywhere (checkInputs) and hold no backslash,
+// which keeps the expected TOML and JSON byte-exact on every OS.
+var tRoot = filepath.VolumeName(os.TempDir())
+
+var (
+	tBin   = tRoot + "/opt/herdr dots/bin/herdr-dots"
+	tCfg   = tRoot + "/home/u/.config/herdr/plugins/herdr-dots"
+	tState = tRoot + "/home/u/.local/state/herdr/plugins/herdr-dots"
 )
 
 var tNow = time.Date(2026, 10, 8, 14, 30, 0, 0, time.UTC)
@@ -43,6 +51,18 @@ func readFile(t *testing.T, path string) string {
 	return string(b)
 }
 
+// symlinkOrSkip creates a symlink, skipping the test where the OS refuses
+// (Windows without Developer Mode or admin rights).
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+}
+
 func noRun(t *testing.T) func(Command) error {
 	return func(c Command) error { t.Fatalf("unexpected command %v", c.Args); return nil }
 }
@@ -58,10 +78,10 @@ args = ["--port", "0"]
 model = "gpt-6-luna"
 `
 
-const wantBlock = "# >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)\n" +
+var wantBlock = "# >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)\n" +
 	"[mcp_servers.herdr-dots]\n" +
-	"command = \"/opt/herdr dots/bin/herdr-dots\"\n" +
-	"args = [\"mcp\", \"--config-dir\", \"/home/u/.config/herdr/plugins/herdr-dots\", \"--state-dir\", \"/home/u/.local/state/herdr/plugins/herdr-dots\"]\n" +
+	"command = \"" + tBin + "\"\n" +
+	"args = [\"mcp\", \"--config-dir\", \"" + tCfg + "\", \"--state-dir\", \"" + tState + "\"]\n" +
 	"env_vars = [\"HERDR_PANE_ID\", \"HERDR_SOCKET_PATH\"]\n" +
 	"startup_timeout_sec = 20\n" +
 	"tool_timeout_sec = 180\n" +
@@ -108,6 +128,7 @@ func TestCodexInstallPreservesOtherTablesAndRemoveRestores(t *testing.T) {
 	env := tempEnv(t)
 	path := env.CodexConfigPath()
 	writeFile(t, path, userCodex)
+	before, _ := os.Stat(path) // 0640 on Unix; Windows reports 0666
 	p, err := PlanInstall(ClientCodex, env, tBin, tCfg, tState)
 	if err != nil {
 		t.Fatal(err)
@@ -125,12 +146,10 @@ func TestCodexInstallPreservesOtherTablesAndRemoveRestores(t *testing.T) {
 	if len(backups) != 1 || backups[0] != path+".bak-herdr-dots-20261008-143000" || readFile(t, backups[0]) != userCodex {
 		t.Fatalf("backups %v", backups)
 	}
-	if st, _ := os.Stat(path); st.Mode().Perm() != 0o640 {
-		t.Fatalf("mode %v: the file keeps its mode", st.Mode().Perm())
+	if st, _ := os.Stat(path); st.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("mode %v -> %v: the file keeps its mode", before.Mode().Perm(), st.Mode().Perm())
 	}
-	if st, _ := os.Stat(backups[0]); st.Mode().Perm() != 0o600 {
-		t.Fatalf("backup mode %v", st.Mode().Perm())
-	}
+	platformtest.AssertPrivateFile(t, backups[0])
 
 	again, err := PlanInstall(ClientCodex, env, tBin, tCfg, tState)
 	if err != nil || !again.Nothing {
@@ -167,9 +186,7 @@ func TestCodexInstallIntoAMissingFile(t *testing.T) {
 	if got := readFile(t, env.CodexConfigPath()); got != wantBlock {
 		t.Fatalf("got:\n%s", got)
 	}
-	if st, _ := os.Stat(env.CodexConfigPath()); st.Mode().Perm() != 0o600 {
-		t.Fatalf("a new config is private: %v", st.Mode().Perm())
-	}
+	platformtest.AssertPrivateFile(t, env.CodexConfigPath()) // a new config is private
 }
 
 func TestCodexUnmarkedTableIsReplacedInPlace(t *testing.T) {
@@ -246,7 +263,7 @@ func TestApplyRunsCommandsAndIgnoresOnlyMayFail(t *testing.T) {
 
 func TestPlanRefusesRelativeOrControlPaths(t *testing.T) {
 	env := tempEnv(t)
-	for _, bin := range []string{"bin/herdr-dots", "/bin/herdr\n-dots"} {
+	for _, bin := range []string{"bin/herdr-dots", tRoot + "/bin/herdr\n-dots"} {
 		if _, err := PlanInstall(ClientCodex, env, bin, tCfg, tState); err == nil {
 			t.Errorf("bin %q accepted", bin)
 		}
@@ -271,9 +288,7 @@ func TestRecordsAndStatusLine(t *testing.T) {
 	if err != nil || len(loaded) != 2 {
 		t.Fatalf("loaded %+v %v", loaded, err)
 	}
-	if st, _ := os.Stat(RecordPath(dir)); st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", st.Mode().Perm())
-	}
+	platformtest.AssertPrivateFile(t, RecordPath(dir))
 	if err := SaveRecords(RecordPath(dir), WithoutClient(loaded, ClientClaude)); err != nil {
 		t.Fatal(err)
 	}
@@ -400,9 +415,7 @@ func TestDanglingSymlinkConfigIsRefused(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(t.TempDir(), "nope.toml"), path); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, filepath.Join(t.TempDir(), "nope.toml"), path)
 	for _, plan := range []func() (Plan, error){
 		func() (Plan, error) { return PlanInstall(ClientCodex, env, tBin, tCfg, tState) },
 		func() (Plan, error) { return PlanRemove(ClientCodex, env) },
@@ -424,9 +437,7 @@ func TestSymlinkedConfigIsEditedThroughTheLink(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, path); err != nil {
-		t.Fatal(err)
-	}
+	symlinkOrSkip(t, target, path)
 	p, err := PlanInstall(ClientCodex, env, tBin, tCfg, tState)
 	if err != nil {
 		t.Fatal(err)

@@ -47,7 +47,7 @@ func newMCPSetupRig(t *testing.T, onPath ...string) *mcpSetupRig {
 		},
 		env:   mcpinstall.Env{Getenv: func(string) string { return "" }, Home: r.home},
 		now:   func() time.Time { return time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC) },
-		exe:   "/opt/herdr-dots/bin/herdr-dots",
+		exe:   filepath.Join(r.home, "opt", "herdr-dots", "bin", "herdr-dots"), // absolute on every OS
 		paths: func() (paths.Paths, error) { return r.p, nil },
 	}
 	return r
@@ -129,7 +129,7 @@ func TestSetupMCPBothSkipsAMissingClientAndInstallsCodex(t *testing.T) {
 
 func TestSetupMCPRefusesGoRunBinaries(t *testing.T) {
 	r := newMCPSetupRig(t, "claude")
-	r.io.exe = "/var/folders/x/T/go-build123/b001/exe/herdr-dots"
+	r.io.exe = filepath.Join(os.TempDir(), "go-build123", "b001", "exe", "herdr-dots")
 	if err := setupMCP([]string{"--yes"}, r.io); err == nil || !strings.Contains(err.Error(), "go run") {
 		t.Fatalf("got %v", err)
 	}

@@ -108,3 +108,10 @@ Run on Windows 10 1809+ or Windows 11 with the Herdr Windows beta (preview chann
 - [ ] A stopped Ollama shows "Ollama isn't running" (Windows reports `WSAECONNREFUSED`), and the providers screen still saves with a network warning.
 - [ ] A second Windows user (or a pipe pre-created under `\\.\pipe\herdr-dots-<key>` by another account) can't reach the engine: the UI refuses the pipe instead of talking to it.
 - [ ] Glyphs render in Windows Terminal; otherwise `HERDR_DOTS_ASCII=1` gives readable ASCII.
+
+## Phase 5 port (Task 10)
+
+- Guard findings before the port: `cmd/herdr-dots/memory.go` (`sh -c` editor, Phase 2), `internal/backend/codex_mcp.go` (`HOME`, `.codex`), `internal/mcpinstall/install.go` (`.claude.json`, `.codex`). All fixed; the guard passes.
+- Ported without a guard finding: `setup-mcp` children through `platform.Command` / `platform.LookPath`; `mcp.go` and its test on `EngineEndpoint` (Task 6); Phase 5's IPC, MCP and engine tests on `ipc.Listen` endpoints.
+- Carry-in: `internal/backend/toolloop/tools.go` `gitFiles` runs through `platform.CommandContext` (a dedicated guard test, `TestToolloopListingChildGoesThroughPlatform`, forbids `exec.Command*` there). `internal/memory/project.go` still calls `exec.CommandContext(ctx, "git", ...)` directly (not a guard finding; not in this task).
+- Not run on Windows: `claude mcp add` through npm's `claude.cmd`, `codex mcp list` through `codex.cmd`, the detached engine started by the MCP server, and `memory edit` through cmd.exe are user gates.
