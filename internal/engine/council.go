@@ -61,7 +61,8 @@ type memberResult struct {
 
 // CouncilPreflight computes who would sit on a council for the pane and what
 // it would cost, and publishes the result in the pane's snapshot
-// (view.Pane.CouncilPreflight). Empty slugs means every attached dot.
+// (view.Pane.CouncilPreflight). nil slugs means every attached dot;
+// an explicitly empty selection leaves no members and is refused.
 func (e *Engine) CouncilPreflight(paneID string, slugs []string) (council.Preflight, error) {
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
@@ -123,18 +124,11 @@ func (e *Engine) councilPlan(att state.Attachment, slugs []string) (council.Pref
 	return pf, members, skipped
 }
 
-// unlimitedCalls stands in for "no limit" so council.Plan never refuses a
-// council over a budget that is not set.
-const unlimitedCalls = 1 << 30
-
-// callsLeft is what remains of a call budget; a budget below 1 means
-// unlimited (config and dot validation clamp budgets to 1 or more, so this is
-// a guard against a literal 0 refusing every council).
+// callsLeft is what remains of a call budget (never negative). As in v1, a
+// budget of 0 means no calls; config and dot validation clamp budgets to 1 or
+// more anyway.
 func callsLeft(budget, used int) int {
-	if budget < 1 {
-		return unlimitedCalls
-	}
-	return budget - used
+	return max(0, budget-used)
 }
 
 // Council asks every eligible attached dot (or the listed ones) the same
@@ -180,6 +174,13 @@ func (e *Engine) Council(ctx context.Context, paneID, question string, slugs []s
 	e.councils[paneID] = run
 	delete(e.preflights, paneID)
 	e.mu.Unlock()
+	// The pane may have closed since the first check; dropPane could not find
+	// this council yet.
+	if _, ok := e.d.Attachments.Get(paneID); !ok {
+		e.abandonCouncil(paneID)
+		e.broadcast()
+		return "", fmt.Errorf("%w: %s", state.ErrNoAttachment, paneID)
+	}
 	e.broadcast()
 	e.spawn(func() { e.runCouncil(run) })
 	return run.id, nil
@@ -202,7 +203,7 @@ func (e *Engine) runCouncil(run *councilRun) {
 	if run.rounds >= 2 && council.Answered(parts) >= 2 && mctx.Err() == nil {
 		parts = e.councilRound(mctx, run, 2, parts)
 	}
-	if e.councilAbandoned(run) {
+	if e.councilLost(run) {
 		return
 	}
 	if council.Answered(parts) == 0 {
@@ -216,7 +217,7 @@ func (e *Engine) runCouncil(run *councilRun) {
 	all := append(parts, run.skipped...)
 	e.setCouncilProgress(run, view.CouncilMerging, run.rounds, 0, 0)
 	body, note := e.mergeCouncil(run, all)
-	if e.councilAbandoned(run) {
+	if e.councilLost(run) {
 		return
 	}
 	e.addCouncilCard(run, all, body, note)
@@ -385,6 +386,12 @@ func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.Counc
 		Cwd: att.Cwd, Turns: turns, Question: council.ChairQuestion(run.question, parts), Force: true,
 		Memory: e.chairMemory(&att, turns),
 	}
+	select { // the chair shares max_parallel_runs with the members
+	case e.sem <- struct{}{}:
+	case <-run.ctx.Done():
+		return "", run.ctx.Err()
+	}
+	defer func() { <-e.sem }()
 	ctx, cancel := context.WithTimeout(run.ctx, cfg.RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
@@ -410,8 +417,16 @@ func (e *Engine) addCouncilCard(run *councilRun, parts []council.Part, body, not
 		PaneID: run.paneID, Turn: run.turn, Severity: council.MaxSeverity(parts), Mode: string(dots.ModeQueue),
 		Body: textutil.SanitizeModelText(body), Question: textutil.SanitizeModelText(run.question),
 		Parts: cardParts(parts), Note: textutil.SanitizeModelText(note), Project: att.ProjectID}
+	if e.councilLost(run) {
+		return // the pane closed (or the engine stopped) while the card was built
+	}
 	if _, err := e.d.Queue.Add(c); err != nil {
 		e.d.Logf("queue add: %v", err)
+		msg := "council card lost: " + errText(err)
+		e.feed(run.paneID, councilSlug, run.turn, state.OutcomeError, msg)
+		if nerr := e.d.Herdr.Notify(e.ctx, transcript.CouncilGlyph+" "+transcript.CouncilName+" dot", msg); nerr != nil {
+			e.d.Logf("notify: %v", nerr)
+		}
 		return
 	}
 	e.feed(run.paneID, councilSlug, run.turn, state.OutcomeCouncil,
@@ -451,6 +466,13 @@ func (e *Engine) setCouncilProgress(run *councilRun, phase string, round, done, 
 	}
 	e.mu.Unlock()
 	e.broadcast()
+}
+
+// councilLost reports a council that must produce nothing: its pane closed,
+// or the engine is shutting down (an in-flight council is lost; the members
+// that were still running would otherwise show up as "timed out").
+func (e *Engine) councilLost(run *councilRun) bool {
+	return e.ctx.Err() != nil || e.councilAbandoned(run)
 }
 
 func (e *Engine) councilAbandoned(run *councilRun) bool {

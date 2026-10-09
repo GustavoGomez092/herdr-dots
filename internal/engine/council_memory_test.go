@@ -190,3 +190,28 @@ func TestCouncilTurnNeverTriggersAMemoryPass(t *testing.T) {
 		})
 	}
 }
+
+// Fix round: Remember stores the card's first point, not the "## " header.
+func TestRememberCouncilCardStoresTheFirstPoint(t *testing.T) {
+	for name, tc := range map[string]struct{ body, want string }{
+		"chair digest": {"## Must fix\n- JWT stored in localStorage (Security, Frontend)\n## Should fix\n- No loading state (Frontend)", "JWT stored in localStorage"},
+		"plain merge":  {"## Must fix\n- JWT in localStorage. (Security)\n\n## Should fix\n- No loading state. (Frontend)", "JWT in localStorage."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newMemRig(t, memOpts{}, member("Security", dots.ModeQueue))
+			r.attach(t, "security")
+			c := councilCardFor(t, r)
+			if err := r.q.Edit(c.ID, tc.body); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(ipc.RememberArgs{CardID: c.ID, As: "convention"})
+			if err := r.e.Handle(context.Background(), ipc.CmdRemember, raw); err != nil {
+				t.Fatal(err)
+			}
+			p := r.entries(memory.Filter{Scope: memory.ScopeProject})
+			if len(p) != 1 || p[0].Text != tc.want {
+				t.Fatalf("project memory %+v, want text %q", p, tc.want)
+			}
+		})
+	}
+}

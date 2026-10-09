@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
@@ -81,4 +82,25 @@ func (e *Engine) recordCouncilOutcomes(c queue.Card, kind string, edited bool) {
 	}
 	e.refreshStats(pid)
 	e.broadcast()
+}
+
+// attributionRe is the trailing "(Name, Name)" a digest bullet ends with.
+var attributionRe = regexp.MustCompile(`\s*\([^()]*\)\s*$`)
+
+// councilConventionText is the text to remember from a council digest: its
+// first bullet, without the "- " marker and the trailing attribution. Headers
+// ("## Must fix") are skipped. A digest without bullets is returned as is.
+func councilConventionText(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
+			continue
+		}
+		line = strings.TrimSpace(line[2:])
+		if t := strings.TrimSpace(attributionRe.ReplaceAllString(line, "")); t != "" {
+			return t
+		}
+		return line
+	}
+	return body
 }

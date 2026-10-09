@@ -378,7 +378,11 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	if pid == "" && as != memory.AsGlobal {
 		return fmt.Errorf("card %s: its project is unknown", cardID)
 	}
-	in := memory.RememberInput{As: as, Dot: c.Dot, Text: c.Body, Reason: reason, Ev: ev}
+	text := c.Body
+	if c.Kind == queue.KindCouncil {
+		text = councilConventionText(c.Body) // the digest starts with a "## " header
+	}
+	in := memory.RememberInput{As: as, Dot: c.Dot, Text: text, Reason: reason, Ev: ev}
 	if _, err := e.d.Memory.Remember(pid, in); err != nil {
 		return err
 	}

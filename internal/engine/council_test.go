@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,8 @@ import (
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/council"
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/herdr"
+	"herdr-dots/internal/herdr/herdrtest"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
@@ -652,5 +655,128 @@ func TestChairDigestIsSanitized(t *testing.T) {
 	c := councilCard(t, r)
 	if strings.ContainsAny(c.Body+c.Note, "\x1b\x07") {
 		t.Fatalf("raw control character in %q / %q", c.Body, c.Note)
+	}
+}
+
+// councilRigCancel is councilRig with the engine context's cancel function,
+// for tests that shut the engine down mid-council.
+func councilRigCancel(t *testing.T, ds ...dots.Dot) (*rig, *councilBackend, context.CancelFunc) {
+	t.Helper()
+	cb := &councilBackend{script: map[string][]step{}}
+	srv := herdrtest.New(t)
+	srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusIdle, Cwd: "/repo",
+		AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}})
+	dir := t.TempDir()
+	q, _ := queue.Open(filepath.Join(dir, "queue.json"))
+	atts, _ := state.OpenAttachments(filepath.Join(dir, "attachments.json"))
+	usage, _ := state.OpenUsage(filepath.Join(dir, "usage.json"))
+	feed, _ := state.OpenFeed(filepath.Join(dir, "feed.jsonl"))
+	r := &rig{srv: srv, readers: map[string]*fakeReader{"s1": {}}, q: q, atts: atts, usage: usage}
+	cfg := config.Default()
+	cfg.TurnDebounceMs = 0
+	r.e = New(Deps{
+		Herdr:    &herdr.SocketClient{Path: srv.Path, PluginID: "herdr-dots"},
+		Backend:  func(string) (backend.Backend, error) { return cb, nil },
+		Reader:   func(state.Attachment) transcript.Reader { return r.readers["s1"] },
+		LoadDots: func() ([]dots.Dot, []dots.LoadError) { return ds, nil },
+		SaveDot:  func(dots.Dot) error { return nil },
+		Config:   cfg, Queue: q, Attachments: atts, Usage: usage, Feed: feed,
+		PollInterval: 20 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(r.e.Wait)
+	t.Cleanup(cancel)
+	r.e.Start(ctx)
+	return r, cb, cancel
+}
+
+// Fix round: shutting the engine down mid-council loses the council (spec):
+// no card, no chair call, no charge.
+func TestEngineShutdownMidCouncilLeavesNoCard(t *testing.T) {
+	r, cb, cancel := councilRigCancel(t, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue), member("Copy", dots.ModeQueue))
+	seat(t, r, "security", "frontend", "copy")
+	cb.on("Security", says("critical", "JWT in localStorage."))
+	cb.on("Copy", says("info", "Shorter button copy."))
+	cb.on("Frontend", step{hang: true})
+	cb.on(council.ChairName, says("critical", goodDigest))
+	convene(t, r, "")
+	eventually(t, "two members answered, one hangs", func() bool {
+		p, _ := r.e.Snapshot().Pane(pane)
+		return cb.total() == 3 && cb.running() == 1 && p.Council != nil && p.Council.Done == 2
+	})
+	cancel()
+	r.e.Wait()
+	for _, c := range r.q.All() {
+		if c.Kind == queue.KindCouncil {
+			t.Fatalf("a shut-down engine leaves no council card: %+v", c)
+		}
+	}
+	if len(cb.callsFor(council.ChairName)) != 0 || r.usage.Calls(pane, "council") != 0 {
+		t.Fatal("no chair call and no charge after shutdown")
+	}
+}
+
+// Fix round: the pane closing while the chair runs gives no card.
+func TestPaneClosedDuringChairAbandonsIt(t *testing.T) {
+	r, cb := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	cb.on("Security", says("critical", "JWT in localStorage."))
+	cb.on("Frontend", says("warn", "No loading state."))
+	cb.on(council.ChairName, step{hang: true})
+	convene(t, r, "")
+	eventually(t, "chair running", func() bool { return len(cb.callsFor(council.ChairName)) == 1 && cb.running() == 1 })
+	r.srv.RemovePane(pane)
+	eventually(t, "chair cancelled", func() bool { return cb.running() == 0 })
+	eventually(t, "council forgotten", func() bool {
+		r.e.mu.Lock()
+		defer r.e.mu.Unlock()
+		return len(r.e.councils) == 0
+	})
+	for _, c := range r.q.All() {
+		if c.Kind == queue.KindCouncil {
+			t.Fatalf("a closed pane gets no council card: %+v", c)
+		}
+	}
+}
+
+// Fix round: the chair run shares max_parallel_runs with the members.
+func TestChairHoldsAParallelismSlot(t *testing.T) {
+	r, cb := councilRig(t, func(c *config.Config) { c.MaxParallelRuns = 1 },
+		member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	cb.on("Security", says("critical", "JWT in localStorage."))
+	cb.on("Frontend", says("warn", "No loading state."))
+	gate := make(chan struct{})
+	cb.on(council.ChairName, step{v: backend.Verdict{Relevant: true, Severity: "critical", Message: goodDigest}, wait: gate})
+	convene(t, r, "")
+	eventually(t, "chair running", func() bool { return cb.running() == 1 && len(cb.callsFor(council.ChairName)) == 1 })
+	if len(r.e.sem) != 1 {
+		t.Fatalf("the chair must hold a slot of the semaphore, held %d", len(r.e.sem))
+	}
+	close(gate)
+	councilCard(t, r)
+}
+
+// Fix round: card text is sanitized where the card is built, whatever the
+// callers did upstream.
+func TestCardBuildSanitizesUnsanitizedParts(t *testing.T) {
+	r, _ := councilRig(t, nil, member("Security", dots.ModeQueue))
+	seat(t, r, "security")
+	parts := []council.Part{
+		{Slug: "security", Name: "Sec\x1b[31m", Glyph: "●", Verdict: backend.Verdict{Relevant: true, Severity: "warn", Message: "bad\x1b[2J text"},
+			Stance: council.StanceObject, Reply: "re\x07ply", ReplySeverity: "warn"},
+		{Slug: "frontend", Name: "Front", Glyph: "●", Err: "error: x\x1b]0;t\x07"},
+	}
+	run := &councilRun{id: "council-9", paneID: pane, question: "q\x1b[1m?", turn: 1}
+	r.e.addCouncilCard(run, parts, "body\x1b[0m", "note\x07")
+	c := councilCard(t, r)
+	all := []string{c.Body, c.Question, c.Note}
+	for _, p := range c.Parts {
+		all = append(all, p.DotName, p.Body)
+	}
+	for _, s := range all {
+		if strings.ContainsAny(s, "\x1b\x07") {
+			t.Fatalf("raw control character in %q (card %+v)", s, c)
+		}
 	}
 }
