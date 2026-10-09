@@ -11,29 +11,31 @@ import (
 // unixOnly maps a source pattern that only works on Unix (or hides an OS
 // branch) to what portable code uses instead.
 var unixOnly = map[string]string{
-	`"/dev/null"`:          "platform.DevNull",
-	"syscall.Kill(":        "platform.StartTree / Tree.Kill",
-	"Setpgid":              "platform.StartTree",
-	"Setsid":               "platform.StartDetached",
-	"syscall.Flock":        "internal/lockfile",
-	"syscall.O_NOFOLLOW":   "platform.OpenNoFollow",
-	"syscall.Stat_t":       "platform.CheckPrivate",
-	"syscall.ECONNREFUSED": "platform.ConnRefused",
-	`"unix"`:               "ipc.Listen / ipc.Dial (build-tagged)",
-	"os.Getuid()":          "platform.CheckPrivate",
-	"exec.LookPath(":       "platform.LookPath (prefers .exe over .cmd shims)",
-	"runtime.GOOS":         "a _unix.go / _windows.go file or internal/platform",
-	".EngineSock()":        "Paths.EngineEndpoint",
-	`"/tmp`:                "os.TempDir()",
-	`".claude"`:            "platform.ClaudeProjectsDir / ClaudeUserConfig",
-	`".claude.json"`:       "platform.ClaudeUserConfig",
-	`".codex"`:             "platform.CodexSessionsDir / CodexConfig",
-	`Command("claude"`:     "platform.Command (safe for a claude.cmd shim)",
-	`Command("codex"`:      "platform.Command (safe for a codex.cmd shim)",
-	`(ctx, "claude"`:       "platform.Command (safe for a claude.cmd shim)",
-	`(ctx, "codex"`:        "platform.Command (safe for a codex.cmd shim)",
-	`exec.Command("sh"`:    "platform.EditorCommand (no sh on Windows)",
-	`"HOME"`:               "platform.HomeEnv or os.UserHomeDir (Windows reads USERPROFILE)",
+	`"/dev/null"`:                    "platform.DevNull",
+	"syscall.Kill(":                  "platform.StartTree / Tree.Kill",
+	"Setpgid":                        "platform.StartTree",
+	"Setsid":                         "platform.StartDetached",
+	"syscall.Flock":                  "internal/lockfile",
+	"syscall.O_NOFOLLOW":             "platform.OpenNoFollow",
+	"syscall.Stat_t":                 "platform.CheckPrivate",
+	"syscall.ECONNREFUSED":           "platform.ConnRefused",
+	`"unix"`:                         "ipc.Listen / ipc.Dial (build-tagged)",
+	"os.Getuid()":                    "platform.CheckPrivate",
+	"exec.LookPath(":                 "platform.LookPath (prefers .exe over .cmd shims)",
+	"runtime.GOOS":                   "a _unix.go / _windows.go file or internal/platform",
+	".EngineSock()":                  "Paths.EngineEndpoint",
+	`"/tmp`:                          "os.TempDir()",
+	`".claude"`:                      "platform.ClaudeProjectsDir / ClaudeUserConfig",
+	`".claude.json"`:                 "platform.ClaudeUserConfig",
+	`".codex"`:                       "platform.CodexSessionsDir / CodexConfig",
+	`Command("claude"`:               "platform.Command (safe for a claude.cmd shim)",
+	`Command("codex"`:                "platform.Command (safe for a codex.cmd shim)",
+	`(ctx, "claude"`:                 "platform.Command (safe for a claude.cmd shim)",
+	`(ctx, "codex"`:                  "platform.Command (safe for a codex.cmd shim)",
+	`exec.Command("sh"`:              "platform.EditorCommand (no sh on Windows)",
+	`exec.CommandContext(ctx, "git"`: "platform.CommandContext (a repo-local git.exe in the cwd is ErrDot on Windows)",
+	`exec.Command("git"`:             "platform.Command (a repo-local git.exe in the cwd is ErrDot on Windows)",
+	`"HOME"`:                         "platform.HomeEnv or os.UserHomeDir (Windows reads USERPROFILE)",
 }
 
 // moduleRoot walks up from the test's directory to go.mod.
@@ -120,21 +122,6 @@ func TestProductCodeHasNoUnixOnlyCalls(t *testing.T) {
 	}
 	for _, b := range bad {
 		t.Error(b)
-	}
-}
-
-// The jail's file listing child runs through platform.CommandContext
-// (batch-arg-safe for a shim), never through os/exec directly.
-func TestToolloopListingChildGoesThroughPlatform(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "internal", "backend", "toolloop", "tools.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, line := range strings.Split(string(data), "\n") {
-		code, _, _ := strings.Cut(line, "//")
-		if strings.Contains(code, "exec.Command") {
-			t.Errorf("internal/backend/toolloop/tools.go:%d: exec.Command (use platform.CommandContext)", i+1)
-		}
 	}
 }
 
