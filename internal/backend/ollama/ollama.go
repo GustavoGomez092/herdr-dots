@@ -174,7 +174,78 @@ func (b *Backend) CheckModel(ctx context.Context, model string) error {
 // EstimateTokens is the spec's rough count: characters / 3.5.
 func EstimateTokens(s string) int { return int(float64(len([]rune(s)))/3.5 + 0.5) }
 
-const toolSchemaTokens = 600 // the three tool definitions
+// toolSchemaFallback is used when the tool definitions can't be built.
+const toolSchemaFallback = 600
+
+// minToolRoom is the fewest tokens a tool result may be clipped to; below it
+// the window counts as full.
+const minToolRoom = 64
+
+// errContextFull ends a run whose tool results no longer fit num_ctx.
+var errContextFull = errors.New("ollama: context window full (raise context_window)")
+
+// noteFor is the repo-tools note the system prompt carries: SystemNote when
+// tools are offered, NoToolsNote when the pane's directory is too broad.
+func noteFor(r backend.Request, tools bool) string {
+	switch {
+	case tools:
+		return toolloop.SystemNote
+	case r.RepoRead && r.Pass != backend.PassMemory && toolloop.Unavailable(r.Cwd):
+		return toolloop.NoToolsNote
+	}
+	return ""
+}
+
+func toolDefs(tools []toolloop.Tool) []toolDef {
+	var defs []toolDef
+	for _, t := range tools {
+		var d toolDef
+		d.Type = "function"
+		d.Function.Name, d.Function.Description, d.Function.Parameters = t.Name, t.Description, t.Schema
+		defs = append(defs, d)
+	}
+	return defs
+}
+
+func defsTokens(defs []toolDef) int {
+	if len(defs) == 0 {
+		return 0
+	}
+	raw, err := json.Marshal(defs)
+	if err != nil {
+		return toolSchemaFallback
+	}
+	return EstimateTokens(string(raw))
+}
+
+// promptBudget is what system + conversation may use: 90% of the window minus
+// room for the reply.
+func promptBudget(r backend.Request, window int) int {
+	return window*9/10 - min(backend.MaxTokensFor(r), window/4)
+}
+
+// messageTokens estimates the conversation so far, tool-call arguments included.
+func messageTokens(msgs []message) int {
+	n := 0
+	for _, m := range msgs {
+		n += EstimateTokens(m.Content)
+		for _, tc := range m.ToolCalls {
+			n += EstimateTokens(tc.Function.Name) + EstimateTokens(string(tc.Function.Arguments))
+		}
+	}
+	return n
+}
+
+// clipTokens keeps a prefix of s that fits in room tokens and marks the cut.
+func clipTokens(s string, room int) string {
+	const marker = "\n[clipped to fit num_ctx]"
+	keep := int(float64(room-EstimateTokens(marker)-2) * 3.5)
+	rs := []rune(s)
+	if keep <= 0 || keep >= len(rs) {
+		return s
+	}
+	return string(rs[:keep]) + marker
+}
 
 // FitPrompt shrinks r until system + user prompt (+ tools) fit in 90% of the
 // window minus room for the reply: oldest turns first (keeping at least one),
@@ -184,10 +255,14 @@ func FitPrompt(r backend.Request, window int, tools bool) (backend.Request, bool
 	if window <= 0 {
 		window = backend.DefaultContextWindow
 	}
-	budget := window*9/10 - min(backend.MaxTokensFor(r), window/4)
-	extra := 0
+	budget := promptBudget(r, window)
+	extra := EstimateTokens(noteFor(r, tools))
 	if tools {
-		extra = toolSchemaTokens
+		d := defsTokens(toolDefs(toolloop.RepoTools(r.Cwd, toolloop.DefaultLimits())))
+		if d == 0 {
+			d = toolSchemaFallback
+		}
+		extra += d
 	}
 	size := func(x backend.Request) int {
 		return EstimateTokens(backend.SystemPrompt(x)) + EstimateTokens(backend.UserPrompt(x)) + extra
@@ -240,11 +315,8 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		b.logf("ollama: %s prompt trimmed to fit num_ctx %d", textutil.SanitizeModelText(r.DotName), window)
 	}
 	system := backend.SystemPrompt(r)
-	switch {
-	case len(tools) > 0:
-		system += "\n" + toolloop.SystemNote + "\n"
-	case r.RepoRead && r.Pass != backend.PassMemory && toolloop.Unavailable(r.Cwd):
-		system += "\n" + toolloop.NoToolsNote + "\n"
+	if note := noteFor(r, len(tools) > 0); note != "" {
+		system += "\n" + note + "\n"
 	}
 	base := b.BaseURL(r)
 	cr := chatRequest{
@@ -252,13 +324,8 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		Messages: []message{{Role: "system", Content: system}, {Role: "user", Content: backend.UserPrompt(r)}},
 		Options:  map[string]any{"num_ctx": window, "num_predict": backend.MaxTokensFor(r)},
 	}
-	var defs []toolDef
-	for _, t := range tools {
-		var d toolDef
-		d.Type = "function"
-		d.Function.Name, d.Function.Description, d.Function.Parameters = t.Name, t.Description, t.Schema
-		defs = append(defs, d)
-	}
+	defs := toolDefs(tools)
+	budget, defTokens := promptBudget(r, window), defsTokens(defs)
 	schema := backend.VerdictSchema(r)
 	c := b.client()
 	call := func(ctx context.Context, withTools bool) (toolloop.Reply, error) {
@@ -277,6 +344,10 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 			Text:  resp.Message.Content,
 			Usage: pricing.Usage{In: resp.PromptEvalCount, Out: resp.EvalCount}, CostKnown: true, Model: r.Model,
 		}
+		if resp.DoneReason == "length" && len(resp.Message.ToolCalls) == 0 {
+			// The reply was cut at num_predict; asking again would cut it again.
+			return reply, errors.New("ollama: output truncated (raise max_tokens)")
+		}
 		for i, tc := range resp.Message.ToolCalls {
 			reply.Calls = append(reply.Calls, toolloop.Call{ID: fmt.Sprintf("call_%d_%d", len(cr.Messages), i), Name: tc.Function.Name, Args: tc.Function.Arguments})
 		}
@@ -284,11 +355,23 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		return reply, nil
 	}
 	turn := func(ctx context.Context, results []toolloop.Result, final bool) (toolloop.Reply, error) {
+		used := messageTokens(cr.Messages) + defTokens
 		for _, res := range results {
 			content := res.Content
 			if res.IsError {
 				content = "ERROR: " + content
 			}
+			// Tool results grow the conversation; clip each to what is left of
+			// num_ctx so Ollama never truncates the prompt silently.
+			room := budget - used
+			if room < minToolRoom {
+				b.logf("ollama: %s context window %d full after %d tool results", textutil.SanitizeModelText(r.DotName), window, len(cr.Messages)-2)
+				return toolloop.Reply{}, errContextFull
+			}
+			if EstimateTokens(content) > room {
+				content = clipTokens(content, room)
+			}
+			used += EstimateTokens(content)
 			cr.Messages = append(cr.Messages, message{Role: "tool", ToolName: res.Name, Content: content})
 		}
 		if final && len(results) > 0 {
@@ -301,13 +384,18 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		cr.Messages = append(cr.Messages, message{Role: "user", Content: "Reply now with only the JSON object."})
 		var extra toolloop.Reply
 		extra, err = call(ctx, false)
-		out.Text, out.Usage, out.Turns = extra.Text, out.Usage.Add(extra.Usage), out.Turns+1
+		out.Usage, out.Turns = out.Usage.Add(extra.Usage), out.Turns+1
+		if err == nil {
+			out.Text = extra.Text
+		}
 	}
-	run := backend.APIRun{Text: out.Text, Usage: out.Usage, CostUSD: 0, CostKnown: true, // a local run costs a known $0
-
+	// A local run costs a known $0.
+	run := backend.APIRun{Text: out.Text, Usage: out.Usage, CostUSD: 0, CostKnown: true,
 		Model: r.Model, ToolCalls: out.Calls, Capped: out.Capped, Started: started}
 	if err != nil {
-		return backend.PartialAPI(run), err
+		res := backend.PartialAPI(run)
+		res.Raw = out.Text
+		return res, err
 	}
 	return backend.FinishAPI(r, run)
 }
@@ -322,8 +410,11 @@ func mapErr(err error, base, model string) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("ollama timed out (is the model loaded? first runs can be slow): %w", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("ollama cancelled: %w", err)
 	}
 	var se *httpx.StatusError
 	if errors.As(err, &se) {

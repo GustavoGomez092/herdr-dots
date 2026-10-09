@@ -3,6 +3,7 @@ package ollama
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -303,5 +304,125 @@ func TestServerErrorTextIsSanitized(t *testing.T) {
 	_, err := b.Run(context.Background(), req())
 	if err == nil || strings.ContainsRune(err.Error(), 0x1b) || strings.ContainsRune(err.Error(), 7) {
 		t.Fatalf("error must be sanitized: %q", err)
+	}
+}
+
+func readCall(path string) string {
+	return chat("", fmt.Sprintf(`[{"function":{"name":"read_file","arguments":{"path":%q}}}]`, path))
+}
+
+func bodyTokens(m map[string]any) int {
+	n := 0
+	for _, x := range m["messages"].([]any) {
+		n += EstimateTokens(x.(map[string]any)["content"].(string))
+	}
+	return n
+}
+
+func TestLargeToolResultIsClippedToTheWindow(t *testing.T) {
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "big.txt"), []byte(strings.Repeat(strings.Repeat("abcdefg", 40)+"\n", 210)), 0o600) // ~64 KB
+	f := &fake{replies: []string{readCall("big.txt"), chat(pass, "")}}
+	b, _ := newBackend(t, f)
+	r := req()
+	r.RepoRead, r.Cwd = true, root
+	if _, err := b.Run(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	budget := backend.DefaultContextWindow*9/10 - backend.DefaultMaxTokens
+	if n := bodyTokens(f.bodies[1]); n > budget {
+		t.Fatalf("second request is %d tokens, budget %d", n, budget)
+	}
+	tool := f.bodies[1]["messages"].([]any)[3].(map[string]any)["content"].(string)
+	if !strings.Contains(tool, "clipped to fit num_ctx") || !strings.Contains(tool, "abcdefg") {
+		t.Fatalf("tool result should be a clipped prefix with a marker: %.80q", tool)
+	}
+}
+
+func TestFullWindowStopsWithAClearError(t *testing.T) {
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "a.go"), []byte("SECRET-FILE-BODY\n"), 0o600)
+	f := &fake{replies: []string{readCall("a.go")}}
+	b, logs := newBackend(t, f)
+	r := req()
+	r.RepoRead, r.Cwd, r.ContextWindow = true, root, 2048
+	r.Turns[0].User = strings.Repeat("y", 20000)
+	res, err := b.Run(context.Background(), r)
+	if err == nil || !strings.Contains(err.Error(), "context window full (raise context_window)") {
+		t.Fatalf("err %v", err)
+	}
+	if len(f.bodies) != 1 || res.InputTokens != 321 {
+		t.Fatalf("requests %d, partial usage %d", len(f.bodies), res.InputTokens)
+	}
+	for _, l := range *logs {
+		if strings.Contains(l, "SECRET-FILE-BODY") {
+			t.Fatal("log must not carry content")
+		}
+	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "context window") {
+		t.Fatalf("expected a log line: %v", *logs)
+	}
+}
+
+func TestSystemNoteCountsTowardTheFit(t *testing.T) {
+	r := backend.Request{DotName: "d", Purpose: "p", Model: "m", Cwd: t.TempDir(),
+		Turns: []transcript.Turn{{Index: 1, User: strings.Repeat("x", 6000), Assistant: "ok"}}}
+	with, _ := FitPrompt(r, 2048, true)
+	without, _ := FitPrompt(r, 2048, false)
+	if EstimateTokens(with.Turns[0].User) >= EstimateTokens(without.Turns[0].User) {
+		t.Fatal("tools: the note and tool definitions must use budget")
+	}
+	if got := noteFor(backend.Request{RepoRead: true, Cwd: "/"}, false); got != toolloop.NoToolsNote {
+		t.Fatalf("note %q", got)
+	}
+}
+
+func TestLengthStopIsReportedNotReasked(t *testing.T) {
+	cut := `{"model":"m","message":{"role":"assistant","content":"{\"relevant\":tr"},"done":true,"done_reason":"length","prompt_eval_count":321,"eval_count":45}`
+	f := &fake{replies: []string{cut}}
+	b, _ := newBackend(t, f)
+	r := req()
+	r.RepoRead, r.Cwd = true, t.TempDir()
+	res, err := b.Run(context.Background(), r)
+	if err == nil || !strings.Contains(err.Error(), "output truncated (raise max_tokens)") {
+		t.Fatalf("err %v", err)
+	}
+	if len(f.bodies) != 1 || res.OutputTokens != 45 {
+		t.Fatalf("requests %d, usage %+v", len(f.bodies), res)
+	}
+}
+
+func TestCancelledIsNotTimedOut(t *testing.T) {
+	b, _ := newBackend(t, &fake{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := b.Run(ctx, req())
+	if err == nil || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "cancelled") || strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestFailedReaskKeepsEarlierText(t *testing.T) {
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o600)
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		switch n {
+		case 1:
+			fmt.Fprint(w, readCall("a.go"))
+		case 2:
+			fmt.Fprint(w, chat("Looks fine to me.", ""))
+		default:
+			w.WriteHeader(400)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	b := New(backend.Options{Provider: config.ProviderConfig{BaseURL: srv.URL}})
+	r := req()
+	r.RepoRead, r.Cwd = true, root
+	res, err := b.Run(context.Background(), r)
+	if err == nil || res.Raw != "Looks fine to me." {
+		t.Fatalf("err %v raw %q", err, res.Raw)
 	}
 }
