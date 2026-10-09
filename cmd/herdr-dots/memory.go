@@ -567,18 +567,25 @@ func (c *memCLI) importFile(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Resolve the project before anything is written, so an unknown
+	// project never leaves a partial import; an all-global import needs none.
+	var pr memory.Project
+	for _, e := range es {
+		if e.Scope != memory.ScopeGlobal {
+			if pr, err = c.project(f.project); err != nil {
+				return fmt.Errorf("import: %w (nothing imported)", err)
+			}
+			break
+		}
+	}
 	// Every entry is added (the store dedupes), so every entry is checked.
 	if err := c.secretGate("import", es, f); err != nil {
 		return err
 	}
-	pr, perr := c.project(f.project)
 	n := 0
 	for i, e := range es {
 		pid := ""
 		if e.Scope != memory.ScopeGlobal {
-			if perr != nil {
-				return perr
-			}
 			pid = pr.ID
 		}
 		e.ID, e.Source = "", memory.SourceImport

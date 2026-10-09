@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -349,6 +350,34 @@ func TestMemoryImportSkipNamesTheEntryNotItsText(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "imported 1 entries") {
 		t.Fatalf("%s", out)
+	}
+}
+
+// Final review minor 10: an unknown project fails the import before any
+// write; an all-global import needs no project.
+func TestMemoryImportFailsBeforeAnyWriteWithoutAProject(t *testing.T) {
+	c, _, _ := newMemCLI(t)
+	resolved := 0
+	c.resolve = func(string) (memory.Project, error) {
+		resolved++
+		return memory.Project{}, errors.New("not a git repository")
+	}
+	global := "[[entry]]\nscope = \"global\"\ndot = \"security\"\nkind = \"preference\"\nstatus = \"active\"\ntext = \"Prefer Go for tooling\"\n"
+	mixed := importFile(t, "version = 1\n"+global+
+		"[[entry]]\nscope = \"dot\"\ndot = \"security\"\nkind = \"note\"\nstatus = \"active\"\ntext = \"Use zod for validation\"\n")
+	if err := c.run([]string{"import", mixed}); err == nil || !strings.Contains(err.Error(), "project") {
+		t.Fatalf("want a project error, got %v", err)
+	}
+	if es, _ := c.store.List("", memory.Filter{Scope: memory.ScopeGlobal, Dot: "security"}); len(es) != 0 {
+		t.Fatalf("a failed import wrote entries: %+v", es)
+	}
+	resolved = 0
+	mustRun(t, c, "import", importFile(t, "version = 1\n"+global))
+	if es, _ := c.store.List("", memory.Filter{Scope: memory.ScopeGlobal, Dot: "security"}); len(es) != 1 {
+		t.Fatalf("an all-global import: %+v", es)
+	}
+	if resolved != 0 {
+		t.Fatalf("an all-global import resolved the project %d times", resolved)
 	}
 }
 
