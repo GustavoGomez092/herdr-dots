@@ -54,6 +54,26 @@ type Card struct {
 	Error     string    `json:"error,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	Project   string    `json:"project,omitempty"` // memory project of the pane at creation
+
+	// Council cards (Kind == KindCouncil) only.
+	Kind     string     `json:"kind,omitempty"`     // "" = one dot's card; KindCouncil = merged council digest
+	Question string     `json:"question,omitempty"` // the council question ("" = review the recent turns)
+	Parts    []CardPart `json:"parts,omitempty"`    // every member's own answer, in roster order
+	Note     string     `json:"note,omitempty"`     // shown under the card, never sent ("merged without chair …")
+}
+
+// KindCouncil marks a council card: one digest merged from several dots.
+const KindCouncil = "council"
+
+// CardPart is one council member's answer on a council card.
+type CardPart struct {
+	Dot      string `json:"dot"`
+	DotName  string `json:"dot_name"`
+	Glyph    string `json:"glyph"`
+	Severity string `json:"severity,omitempty"` // "" = the member had nothing to add
+	Body     string `json:"body,omitempty"`     // the answer; for a failed member, why it failed
+	Stance   string `json:"stance,omitempty"`   // round 2: "", agree, object or add
+	Failed   bool   `json:"failed,omitempty"`   // timed out, errored or skipped
 }
 
 // keepTerminal bounds the file: only the most recent sent/dismissed cards stay.

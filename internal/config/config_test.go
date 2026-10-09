@@ -53,3 +53,31 @@ func TestDurations(t *testing.T) {
 		t.Fatal("durations")
 	}
 }
+
+func TestCouncilDefaultsAndClamps(t *testing.T) {
+	if c := Default().Council; c != (CouncilConfig{Rounds: 1, MaxMembers: 8, Merge: MergeChair}) {
+		t.Fatalf("defaults %+v", c)
+	}
+	if (CouncilConfig{}).Normalized() != DefaultCouncil() {
+		t.Fatal("an empty [council] table means the defaults")
+	}
+	p := filepath.Join(t.TempDir(), "config.toml")
+	os.WriteFile(p, []byte("[council]\nchair_backend = \"codex-cli\"\nchair_model = \"gpt-x\"\nrounds = 2\nmerge = \"plain\"\n"), 0o600)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (CouncilConfig{ChairBackend: "codex-cli", ChairModel: "gpt-x", Rounds: 2, MaxMembers: 8, Merge: MergePlain}); c.Council != want {
+		t.Fatalf("council %+v, want %+v", c.Council, want)
+	}
+	os.WriteFile(p, []byte("[council]\nrounds = 7\nmax_members = 1\nmerge = \"vote\"\n"), 0o600)
+	c, _ = Load(p)
+	if want := (CouncilConfig{Rounds: 2, MaxMembers: 2, Merge: MergeChair}); c.Council != want {
+		t.Fatalf("clamped %+v, want %+v", c.Council, want)
+	}
+	os.WriteFile(p, []byte("[council]\nmax_members = 99\nrounds = -1\n"), 0o600)
+	c, _ = Load(p)
+	if c.Council.MaxMembers != 16 || c.Council.Rounds != 1 {
+		t.Fatalf("clamped %+v", c.Council)
+	}
+}

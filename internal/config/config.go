@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -24,10 +25,53 @@ type Config struct {
 	MemoryRetentionDays      int  `toml:"memory_retention_days"`       // unused model/outcome memory is archived after this
 	MemoryMaxEntries         int  `toml:"memory_max_entries"`          // per dot scope; project 1.5x, global 0.5x
 	MemoryAutoApproveProject bool `toml:"memory_auto_approve_project"` // model-written project memory skips approval
+
+	Council CouncilConfig `toml:"council"` // [council] table (Phase 3)
+}
+
+// Council merge modes ([council] merge).
+const (
+	MergeChair = "chair" // a chair run merges the answers; plain merge if it fails
+	MergePlain = "plain" // always the deterministic plain merge
+)
+
+// CouncilConfig is the [council] table.
+type CouncilConfig struct {
+	ChairBackend string `toml:"chair_backend"` // "" = default_backend
+	ChairModel   string `toml:"chair_model"`   // "" = default_model
+	Rounds       int    `toml:"rounds"`        // 1, or 2 for dot-to-dot cross-review
+	MaxMembers   int    `toml:"max_members"`   // 2-16
+	Merge        string `toml:"merge"`         // chair | plain
+}
+
+func DefaultCouncil() CouncilConfig {
+	return CouncilConfig{Rounds: 1, MaxMembers: 8, Merge: MergeChair}
+}
+
+// Normalized fills unset values with the defaults and clamps the rest:
+// rounds 1-2, max_members 2-16, and any merge mode but "plain" means "chair".
+func (c CouncilConfig) Normalized() CouncilConfig {
+	d := DefaultCouncil()
+	if c.Rounds == 0 {
+		c.Rounds = d.Rounds
+	}
+	if c.MaxMembers == 0 {
+		c.MaxMembers = d.MaxMembers
+	}
+	c.Rounds = min(max(c.Rounds, 1), 2)
+	c.MaxMembers = min(max(c.MaxMembers, 2), 16)
+	if strings.ToLower(strings.TrimSpace(c.Merge)) == MergePlain {
+		c.Merge = MergePlain
+	} else {
+		c.Merge = MergeChair
+	}
+	c.ChairBackend, c.ChairModel = strings.TrimSpace(c.ChairBackend), strings.TrimSpace(c.ChairModel)
+	return c
 }
 
 func Default() Config {
 	return Config{
+		Council:            DefaultCouncil(),
 		DefaultBackend:     "claude-cli",
 		DefaultModel:       "sonnet",
 		SessionBudgetCalls: 120,
@@ -77,6 +121,7 @@ func Load(path string) (Config, error) {
 		c.MemoryRetentionDays = 1
 	}
 	c.MemoryMaxEntries = min(max(c.MemoryMaxEntries, 10), 10000)
+	c.Council = c.Council.Normalized()
 	return c, nil
 }
 

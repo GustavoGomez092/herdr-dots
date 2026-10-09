@@ -38,3 +38,19 @@ func TestFormatClipsLongFields(t *testing.T) {
 		t.Fatalf("not clipped: %d runes", len([]rune(out)))
 	}
 }
+
+func TestCouncilTurnIsFromEveryDot(t *testing.T) {
+	text := DotPrefix(CouncilGlyph, CouncilName) + " ## Must fix\n- JWT in localStorage (Security)"
+	tr := Turn{User: text, FromDots: FromDots(text)}
+	if len(tr.FromDots) != 1 || tr.FromDots[0] != "Council" {
+		t.Fatalf("FromDots = %v", tr.FromDots)
+	}
+	for _, name := range []string{"Security", "Frontend", "Anything"} {
+		if !tr.IsFromDot(name) {
+			t.Errorf("%s must treat a council turn as its own", name)
+		}
+	}
+	if (Turn{FromDots: []string{"Security"}}).IsFromDot("Frontend") {
+		t.Fatal("an ordinary dot turn is only from that dot")
+	}
+}
