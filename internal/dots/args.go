@@ -35,6 +35,9 @@ var deniedArgs = map[string][]argRule{
 		{flag: "-s", takes: true},
 		{flag: "-c", takes: true, when: sandboxOrMCP},
 		{flag: "--config", takes: true, when: sandboxOrMCP},
+		{flag: "--add-dir", takes: true, variadic: true}, // more writable roots
+		{flag: "-C", takes: true},                        // another working root
+		{flag: "--cd", takes: true},
 	},
 }
 

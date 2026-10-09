@@ -37,6 +37,11 @@ var codexDenied = [][]string{
 	{"-csandbox_mode=danger-full-access"},
 	{"--config", "mcp_servers.x.command=sh"},
 	{"--config=sandbox_workspace_write.network_access=true"},
+	{"--add-dir", "/"},
+	{"-C", "/"},
+	{"-C/"},
+	{"--cd", "/"},
+	{"--cd=/"},
 }
 
 func TestValidateRejectsUnsafeBackendArgs(t *testing.T) {

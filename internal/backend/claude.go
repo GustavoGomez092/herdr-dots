@@ -12,6 +12,17 @@ import (
 	"herdr-dots/internal/platform"
 )
 
+// A claude draft run gets the tools in ClaudeWriteTools. Only the read
+// tools are pre-approved (ClaudeWriteAllowed): a bare Edit or Write allow
+// rule approves edits to any path, while acceptEdits approves edits inside
+// the working directory only (verified live, Phase 7 V1). ClaudeWriteDenied
+// are refused even if a setting would allow them.
+const (
+	ClaudeWriteTools   = "Read,Grep,Glob,Edit,Write"
+	ClaudeWriteAllowed = "Read,Grep,Glob"
+	ClaudeWriteDenied  = "Bash,WebFetch,WebSearch"
+)
+
 type ClaudeCLI struct {
 	Runner  Runner
 	Bin     string          // default "claude"
@@ -80,9 +91,16 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	if r.Model != "" {
 		args = append(args, "--model", r.Model)
 	}
-	if r.RepoRead {
+	switch {
+	case WriteMode(r):
+		// A draft: file tools only; acceptEdits approves edits inside the
+		// worktree (print mode can't ask, so edits elsewhere are denied); no
+		// shell, no web. Never bypassPermissions.
+		args = append(args, "--tools", ClaudeWriteTools, "--allowedTools", ClaudeWriteAllowed,
+			"--permission-mode", "acceptEdits", "--disallowedTools", ClaudeWriteDenied)
+	case r.RepoRead:
 		args = append(args, "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob")
-	} else {
+	default:
 		args = append(args, "--tools", "")
 	}
 	// Denied args (dots.Validate rejects them too) are dropped so they can never

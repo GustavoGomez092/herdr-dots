@@ -34,6 +34,15 @@ To correct a memory: {"op":"update","id":"d:m9","text":"…"}. To drop a wrong o
 Remember only durable facts about this project: conventions, decisions, recurring risks.
 Never store secrets, credentials, personal data, or code longer than one line.`
 
+// draftContract replaces the verdict contract for Pass == PassWrite.
+const draftContract = `YOU ARE DRAFTING A FIX in an isolated copy of the repository at the working directory.
+Edit files directly with your file tools. Do not run commands: you have no shell.
+Change only what the fix needs. Never touch .git, and never write outside the working directory.
+Nothing you change reaches the developer's files until they review the diff and apply it.
+When done, reply with ONLY one JSON object, no prose, no code fences:
+{"relevant": true, "severity": "info", "message": "<what you changed and why, at most 5 lines>"}
+If you could not make a sensible change, change nothing and reply {"relevant": false, "severity": "info", "message": "<why>"}.`
+
 func verbosityRule(v string) string {
 	switch v {
 	case "terse":
@@ -51,6 +60,10 @@ func SystemPrompt(r Request) string {
 	fmt.Fprintf(&b, "YOUR PURPOSE:\n%s\n\n", strings.TrimSpace(r.Purpose))
 	if r.Pass == PassMemory {
 		b.WriteString(memoryPassContract + "\n")
+		return b.String()
+	}
+	if r.Pass == PassWrite {
+		b.WriteString(draftContract + "\n")
 		return b.String()
 	}
 	fmt.Fprintf(&b, "%s\n\n", verbosityRule(r.Verbosity))
@@ -77,7 +90,9 @@ func UserPrompt(r Request) string {
 	}
 	b.WriteString("CONVERSATION (most recent turns):\n\n")
 	b.WriteString(transcript.Format(r.Turns))
-	if q := strings.TrimSpace(r.Question); q != "" {
+	if q := strings.TrimSpace(r.Question); q != "" && r.Pass == PassWrite {
+		fmt.Fprintf(&b, "\n\nFIX REQUESTED BY THE DEVELOPER:\n%s", q)
+	} else if q != "" {
 		fmt.Fprintf(&b, "\n\nQUESTION FROM THE DEVELOPER:\n%s", q)
 	}
 	b.WriteString("\n\nRespond with the JSON object only.")
