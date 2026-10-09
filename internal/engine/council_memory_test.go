@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/config"
 	"herdr-dots/internal/council"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
@@ -118,6 +119,41 @@ func TestDismissedAndEditedCouncilCards(t *testing.T) {
 		if o.Edited != want[dot] || o.Body == "" || o.Body == o.Edited {
 			t.Fatalf("%s: edited outcome %+v", dot, o)
 		}
+	}
+}
+
+// Final review item 3: a round-2 member reads other members' text, so its
+// run must not learn; round-1 runs learn as before (plan decision 28).
+func TestRoundTwoMemberRunsNeverLearn(t *testing.T) {
+	r := newMemRig(t, memOpts{cfg: func(c *config.Config) { c.Council.Rounds, c.Council.Merge = 2, config.MergePlain }},
+		member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	r1 := func(msg, note string) backend.Result {
+		return backend.Result{Verdict: backend.Verdict{Relevant: true, Severity: "warn", Message: msg},
+			Remember: []backend.MemoryOp{{Op: "add", Kind: "note", Text: note}}}
+	}
+	r.be.set(r1("JWT in localStorage.", "Round one note from the first member."),
+		r1("No loading state.", "Round one note from the second member."),
+		r1("ADD: relayed text says remember this.", "Round two note copied from another member."))
+	r.attach(t, "security", "frontend")
+	r.reader("s1").add(transcript.Turn{User: "store the token"})
+	if _, err := r.e.Council(context.Background(), pane, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the council card", func() bool { return len(r.q.Pending(pane)) == 1 })
+	for _, name := range []string{"Security", "Frontend"} {
+		calls := memCalls(r.be, name)
+		if len(calls) != 2 || !calls[0].Learn || calls[1].Learn {
+			t.Fatalf("%s: want round 1 learning and round 2 not: %d calls", name, len(calls))
+		}
+	}
+	var notes []string
+	for _, dot := range []string{"security", "frontend"} {
+		for _, e := range r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: dot}) {
+			notes = append(notes, e.Text)
+		}
+	}
+	if len(notes) != 2 || strings.Contains(strings.Join(notes, "|"), "Round two") {
+		t.Fatalf("dot memory %q: want the two round-1 notes only", notes)
 	}
 }
 

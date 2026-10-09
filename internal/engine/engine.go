@@ -49,6 +49,7 @@ type runOpts struct {
 	noForce bool                        // summon semantics, but the member may pass ("nothing from my side")
 	ctx     context.Context             // cancels the run with its council; nil = the engine's context
 	sink    func(backend.Result, error) // receives the result instead of route; called exactly once
+	noLearn bool                        // round 2: the run reads other members' text, so it never learns
 
 	forceQueue bool   // the turn was started by a dot: never auto-inject
 	summon     bool   // manual summon: always a card, bypasses running flags
@@ -624,6 +625,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		return
 	}
 	mem := e.loadMemory(&att, d, turns) // outside every engine lock
+	if o.noLearn {
+		mem.learn = false // no remember ops asked for, none applied
+	}
 	req := backend.Request{
 		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
 		Model: d.Backend.Model, Args: d.Backend.Args, RepoRead: d.Context.RepoRead,

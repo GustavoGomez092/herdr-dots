@@ -264,7 +264,9 @@ func (e *Engine) councilRound(ctx context.Context, run *councilRun, round int, p
 			q = council.RoundTwoQuestion(run.question, prev, d.Slug)
 		}
 		turns := tail(run.turns, d.Context.Turns)
-		o := runOpts{summon: true, noForce: true, question: q, ctx: ctx,
+		// Round 2 relays other members' text into the prompt: its remember
+		// ops could carry that text into the member's own memory.
+		o := runOpts{summon: true, noForce: true, question: q, ctx: ctx, noLearn: round == 2,
 			sink: func(res backend.Result, err error) { results <- memberResult{i: i, res: res, err: err} }}
 		e.spawn(func() { e.runDot(run.paneID, d, turns, o) })
 	}
