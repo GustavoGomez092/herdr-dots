@@ -220,9 +220,15 @@ func (m Model) pidOf(e memory.Entry) string {
 
 // mutate runs a store change off the UI goroutine, then notifies the engine.
 func (m Model) mutate(status string, fn func(st *memory.Store) error) tea.Cmd {
+	return m.mutateSaying(func(st *memory.Store) (string, error) { return status, fn(st) })
+}
+
+// mutateSaying is mutate with a status line that fn picks from what it did.
+func (m Model) mutateSaying(fn func(st *memory.Store) (string, error)) tea.Cmd {
 	st, notify := m.d.Store, m.d.Notify
 	return func() tea.Msg {
-		if err := fn(st); err != nil {
+		status, err := fn(st)
+		if err != nil {
 			return changedMsg{err: err}
 		}
 		if notify != nil {
@@ -423,6 +429,12 @@ func (m Model) approveScreen(w int) []string {
 	case by == "":
 		by = "the developer"
 	}
+	switch {
+	case e.Source == memory.SourceImport && e.From != "":
+		by += " (imported from a dot pack)"
+	case e.Source == memory.SourceImport:
+		by += " (restored from backup)" // Phase 2's `memory import` of an export
+	}
 	paths := clean(strings.Join(e.Paths, ", "))
 	if paths == "" {
 		paths = "(none)"
@@ -567,12 +579,19 @@ func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBrowse
 		if m.editRef != nil {
 			ref, pid := *m.editRef, m.editPid
-			return m, m.mutate("saved "+ref.String(), func(st *memory.Store) error {
+			return m, m.mutateSaying(func(st *memory.Store) (string, error) {
+				status := "saved " + ref.String()
 				_, err := st.Update(pid, ref, func(x *memory.Entry) error {
 					x.Text, x.Kind, x.Paths, x.Source = text, kind, paths, memory.SourceUser
+					// Only imports propose dot memory (Phase 9); the developer's
+					// own dot memory is active, so editing one approves it.
+					if x.Status == memory.StatusProposed && x.Scope != memory.ScopeProject {
+						x.Status = memory.StatusActive
+						status = "saved and approved " + ref.String()
+					}
 					return nil
 				})
-				return err
+				return status, err
 			})
 		}
 		sc, dot, pid := m.newTarget()
@@ -604,8 +623,10 @@ func (m Model) keysFilter(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// trunc cuts a row to n runes. row cleans every part it is built from, so
+// trunc keeps its padding (clean would collapse the columns).
 func trunc(s string, n int) string {
-	r := []rune(clean(s))
+	r := []rune(textutil.SanitizeModelText(s))
 	if len(r) > n {
 		return string(r[:max(1, n-1)]) + "…"
 	}
@@ -618,7 +639,13 @@ func (m Model) row(e memory.Entry) string {
 		star = "★"
 	}
 	var who string
+	text := clean(e.Text)
 	switch {
+	case e.Source == memory.SourceImport:
+		who = "(imported)"
+		if from := clean(e.From); from != "" {
+			text = "from " + from + ": " + text // whose pack it came from
+		}
 	case e.Source == memory.SourceUser:
 		who = "(you)"
 	case e.Source == memory.SourceAgent:
@@ -628,7 +655,7 @@ func (m Model) row(e memory.Entry) string {
 	default:
 		who = fmt.Sprintf("used %d×", e.Uses)
 	}
-	return fmt.Sprintf("%-7s %s %-10s %-9s %s", clean(e.Ref().String()), star, clean(string(e.Kind)), who, clean(e.Text))
+	return fmt.Sprintf("%-7s %s %-10s %-10s %s", clean(e.Ref().String()), star, clean(string(e.Kind)), who, text)
 }
 
 // list renders the rows with their section headers and reports the line the

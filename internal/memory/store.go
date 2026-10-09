@@ -358,8 +358,10 @@ func (s *Store) prepare(e Entry) (Entry, error) {
 	switch e.Status {
 	case StatusActive, StatusArchived:
 	case StatusProposed:
-		if e.Scope != ScopeProject {
-			return e, fmt.Errorf("%w: only project memory can be proposed", ErrInvalid)
+		// Imported dot memory waits for approval too (Phase 9): a shared
+		// "don't raise this" must not silence a dot unreviewed.
+		if e.Scope != ScopeProject && !(e.Scope == ScopeDot && e.Source == SourceImport) {
+			return e, fmt.Errorf("%w: only project memory (or imported dot memory) can be proposed", ErrInvalid)
 		}
 	default:
 		return e, fmt.Errorf("%w: status %q", ErrInvalid, e.Status)
@@ -415,13 +417,21 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		// reshape an entry of its own source and dot that is not an approved
 		// project convention; otherwise it just bumps uses.
 		// The main agent never rewrites anything, not even its own proposal.
+		// An import rewrites only an import still waiting for review, never
+		// one the developer approved (Phase 9).
 		rewrite := e.Source == SourceUser ||
-			(e.Source != SourceAgent && x.Source != SourceUser && x.Source == e.Source && x.Dot == e.Dot && !(x.Scope == ScopeProject && x.Status != StatusProposed))
+			(e.Source != SourceAgent && x.Source != SourceUser && x.Source == e.Source && x.Dot == e.Dot && !(x.Scope == ScopeProject && x.Status != StatusProposed) &&
+				!(e.Source == SourceImport && x.Status != StatusProposed))
 		if rewrite {
 			x.Paths = cleanPaths(append(x.Paths, e.Paths...))
 			if bestScore < 1 {
 				x.Text = e.Text
 			}
+		}
+		// A pack's entry that repeats a pending import (a restore included)
+		// is marked as the pack's: a pack never poses as a restore.
+		if e.Source == SourceImport && e.From != "" && x.Source == SourceImport && x.Status == StatusProposed {
+			x.From = e.From
 		}
 		if e.Source == SourceUser && x.Source != SourceUser {
 			x.Source = SourceUser // the developer endorsed it
@@ -433,13 +443,23 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		// the card's (spec M10): only sent and user findings suppress
 		// repeats, so a model must not keep a sent finding from counting by
 		// writing it first. Never the reverse, and never over a user entry.
-		if e.Source == SourceOutcome && x.Source == SourceModel && x.Scope == ScopeDot && x.Dot == e.Dot {
+		// The same holds for an imported entry (Phase 9): the developer's own
+		// verdict on a card is theirs, not someone else's shared conclusion,
+		// so it keeps the card's words and none of the pack's paths:
+		// suppression then matches what the developer actually saw.
+		if e.Source == SourceOutcome && (x.Source == SourceModel || x.Source == SourceImport) && x.Scope == ScopeDot && x.Dot == e.Dot {
+			if x.Source == SourceImport {
+				x.Text, x.Paths = e.Text, nil
+			}
 			x.Source = SourceOutcome
 			if e.Evidence != (Evidence{}) {
 				x.Evidence = e.Evidence
 			}
 		}
-		if x.Status == StatusProposed && e.Status == StatusActive {
+		// Only the developer approves an imported proposal: a model's matching
+		// add (active in dot scope, or with AutoApproveProject) leaves it
+		// waiting. The developer's add and card outcome made it theirs above.
+		if x.Status == StatusProposed && e.Status == StatusActive && x.Source != SourceImport {
 			x.Status = StatusActive
 		}
 		if rewrite && e.Pinned {
@@ -508,6 +528,13 @@ func (s *Store) capFor(sc Scope) int {
 // the developer hasn't reviewed. When keep is itself research and no older
 // research (proposed or active) can make room, keep is archived instead of any
 // non-research entry. A pinned or developer-written keep is never archived.
+//
+// Pending pack imports (Phase 9, ruling P9-R11) sit outside the cap: they are
+// never archived to make room (they leave only by approval, forgetting or
+// DeleteDot), they don't count toward the limit, so local memory keeps its
+// whole cap, and a new one archives nothing. MaxPendingImports bounds them
+// instead, so a scope exceeds its cap by at most that many. Restored entries
+// (Source import, no From) count like any other.
 func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) int {
 	if limit <= 0 {
 		return 0
@@ -516,6 +543,12 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 	var proposed, cands []int
 	for i, e := range f.Entries {
 		if e.Status == StatusArchived {
+			continue
+		}
+		if pendingPack(e) {
+			if e.ID == keep {
+				return 0
+			}
 			continue
 		}
 		live++
@@ -590,6 +623,12 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 }
 
 func isResearchKind(k Kind) bool { return k == KindResearch || k == KindQuestion }
+
+// pendingPack reports a dot pack's imported entry still waiting for the
+// developer (ImportPack sets From; a restore has none).
+func pendingPack(e Entry) bool {
+	return e.Status == StatusProposed && e.Source == SourceImport && e.From != ""
+}
 
 // capScore ranks entries for archiving: rarely used, long unused first.
 func capScore(e Entry, now time.Time) float64 {
@@ -883,7 +922,9 @@ func sortEntries(es []Entry) {
 
 // Candidates loads what a run of dot may see: its dot scope, project scope
 // (active entries plus its own proposals) when readProject, and its global
-// scope. Archived entries are left out.
+// scope. Archived entries are left out, and so are imported proposals
+// (Phase 9): attributed to the importing dot, they would otherwise reach its
+// suppression check unreviewed.
 func (s *Store) Candidates(p, dot string, readProject bool) ([]Entry, error) {
 	var out []Entry
 	d, derr := s.List(p, Filter{Scope: ScopeDot, Dot: dot, Statuses: []Status{StatusActive}})
@@ -893,7 +934,7 @@ func (s *Store) Candidates(p, dot string, readProject bool) ([]Entry, error) {
 		var pe []Entry
 		pe, perr = s.List(p, Filter{Scope: ScopeProject})
 		for _, e := range pe {
-			if e.Status == StatusActive || e.Dot == dot {
+			if e.Status == StatusActive || (e.Dot == dot && e.Source != SourceImport) {
 				out = append(out, e)
 			}
 		}
