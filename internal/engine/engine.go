@@ -397,12 +397,7 @@ func (e *Engine) Detach(paneID, slug string) error {
 		return err
 	}
 	e.hook("detach-updated")
-	if empty {
-		// As dropPane's first steps, before e.mu: a council of the pane
-		// gets no card. (An Attach that lands before the section below
-		// re-decides "empty" still loses its council: the pane was empty.)
-		e.abandonCouncil(paneID)
-	}
+	var cr *councilRun // the pane's council, abandoned with the attachment
 	e.mu.Lock()
 	delete(e.status, key{paneID, slug})
 	delete(e.warned, key{paneID, slug})
@@ -422,6 +417,11 @@ func (e *Engine) Detach(paneID, slug string) error {
 		// and its usage reset, so the same pane id attached again inherits no
 		// card (a digest included), spend or status.
 		e.abandonDraftsLocked(paneID, "")
+		if run := e.councils[paneID]; run != nil { // a closed pane gets no council card
+			e.abandonRunLocked(run)
+			cr = run
+		}
+		delete(e.preflights, paneID)
 		e.gens[paneID]++
 		delete(e.idle, paneID) // a later attach starts a fresh idle period (idle.go)
 		orphaned, oerr = e.d.Queue.OrphanPane(paneID)
@@ -434,6 +434,9 @@ func (e *Engine) Detach(paneID, slug string) error {
 		}
 	}
 	e.mu.Unlock()
+	if cr != nil {
+		cr.cancel()
+	}
 	if empty {
 		if oerr != nil {
 			e.d.Logf("orphan cards for %s: %v", paneID, oerr)

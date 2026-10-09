@@ -59,12 +59,13 @@ func TestFinishedPaidReviewIsNotDoubleCounted(t *testing.T) {
 		t.Fatal("the review never reached its charge")
 	}
 	r.attach(t, "security", "frontend")
-	// Admitted: it is refused with ErrBudget at once or, admitted, waits for
-	// the run slot the paid review still holds until the context ends.
+	// Admitted: a refusal is ErrBudget at once; an admitted ask waits for the
+	// run slot the paid review still holds, so it ends only with the
+	// context's deadline. Anything else, including an answer, fails.
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if _, err := r.e.Ask(ctx, pane, "frontend", "q", false); errors.Is(err, ErrBudget) {
-		t.Fatalf("an ask next to a review that already paid was refused: %v", err)
+	if _, err := r.e.Ask(ctx, pane, "frontend", "q", false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("an ask next to a review that already paid: %v, want it admitted (waiting for the run slot until the deadline)", err)
 	}
 }
 
@@ -88,6 +89,38 @@ func TestCouncilPreflightCountsInFlightWork(t *testing.T) {
 	}
 	if cb.total() != n {
 		t.Fatal("a refused council must run nothing")
+	}
+}
+
+// Detach decides "the attachment is empty" under e.mu, and so does the
+// council abandon: a council started on a pane re-attached while Detach was
+// between its store update and that section survives.
+func TestDetachKeepsACouncilStartedOnAReattachedPane(t *testing.T) {
+	r, cb := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue), member("Docs", dots.ModeQueue))
+	seat(t, r, "security")
+	cb.on("Frontend", step{hang: true})
+	cb.on("Docs", step{hang: true})
+	var hookErr error
+	r.e.testHook = func(point string) {
+		if point != "detach-updated" {
+			return
+		}
+		r.e.testHook = nil
+		if hookErr = r.e.Attach(context.Background(), pane, []string{"frontend", "docs"}); hookErr != nil {
+			return
+		}
+		_, hookErr = r.e.Council(context.Background(), pane, "q", nil)
+	}
+	if err := r.e.Detach(pane, "security"); err != nil {
+		t.Fatal(err)
+	}
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	eventually(t, "both members are running", func() bool { return cb.running() == 2 })
+	time.Sleep(100 * time.Millisecond) // an abandon would cancel them
+	if p, _ := r.e.Snapshot().Pane(pane); p.Council == nil || cb.running() != 2 {
+		t.Fatalf("the council on the re-attached pane was abandoned: %+v, running %d", p.Council, cb.running())
 	}
 }
 
