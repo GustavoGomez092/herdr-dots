@@ -97,6 +97,7 @@ type Engine struct {
 	consulted map[key]bool                                // asked since the pane's last processed turn
 	asks      *askLimiter                                 // per-pane ask limits; its own leaf lock
 	askRuns   map[string]map[*struct{}]context.CancelFunc // in-flight asks by pane
+	asking    map[key]bool                                // dots with an ask in flight (one per dot)
 
 	// Council state (council.go), guarded by mu; maps are created lazily.
 	councils     map[string]*councilRun       // by pane: the council in progress
@@ -507,8 +508,11 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 			}
 			turnEnded = true
 			k := key{paneID, da.Slug}
-			if e.running[k] {
-				e.rerun[k] = true // pick these turns up when the current run ends
+			if e.running[k] || e.asking[k] {
+				// Pick these turns up when the current run or ask ends (an
+				// ask that answers consults the dot, so the turn costs no
+				// second run).
+				e.rerun[k] = true
 				continue
 			}
 			consulted := e.consulted[k]

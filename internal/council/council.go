@@ -26,6 +26,7 @@ const (
 	ReasonBudget     = "budget"
 	ReasonUnknown    = "unknown dot"
 	ReasonMaxMembers = "max members"
+	ReasonAsked      = "being asked" // the main agent is asking it right now (Phase 5)
 )
 
 // NothingToAdd is the digest when no member raised anything.
@@ -85,6 +86,7 @@ type Candidate struct {
 	Unknown   bool // its dot file is gone
 	CallsLeft int  // max_calls_per_session minus calls already made on this pane
 	OverUSD   bool // its max_usd_per_session is spent on this pane (Phase 4)
+	Asked     bool // the main agent is asking it right now (Phase 5)
 }
 
 // PlanInput is everything Plan needs.
@@ -151,6 +153,8 @@ func Plan(in PlanInput) Preflight {
 			reason = ReasonUnknown
 		case c.Paused:
 			reason = ReasonPaused
+		case c.Asked:
+			reason = ReasonAsked
 		case c.CallsLeft < p.Rounds, c.OverUSD:
 			reason = ReasonBudget
 		case in.MaxMembers > 0 && len(p.Members) >= in.MaxMembers:
