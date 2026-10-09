@@ -1,0 +1,171 @@
+# Herdr Dots release workflow. Written in Phase 10 and never run by it: the
+# developer starts it by pushing a tag (a user gate).
+#
+#   The tag must equal v<VERSION> (internal/version/VERSION), checked by
+#   scripts/release-kind.sh. A VERSION ending in -rc.N makes the tag a
+#   candidate, a VERSION without a suffix makes it a final publish; any
+#   other tag fails.
+#
+#   v1.0.0-rc.1  candidate (VERSION 1.0.0-rc.1): tests on three OSes, a
+#                10-minute fuzz pass per target, the six archives built with
+#                GoReleaser (nothing published), and a pull request that
+#                commits release/SHA256SUMS and release/ASSET_ENV for exactly
+#                those archives.
+#   v1.0.0       publish (VERSION 1.0.0), tagged on the merged checksum commit: rebuilds the
+#                archives from the same source and settings, refuses to go on
+#                unless they match the committed checksums byte for byte,
+#                signs them with cosign (keyless, GitHub OIDC) and creates a
+#                draft GitHub release for the developer to publish.
+#
+# Herdr installs the default branch (or --ref), and scripts/build.sh only
+# trusts release/SHA256SUMS from that tree, so the checksums a user installs
+# always come from the repository they chose.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      candidate: ${{ steps.v.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          version=$(tr -d ' \r\n' < internal/version/VERSION)
+          kind=$(sh scripts/release-kind.sh "$version" "$GITHUB_REF_NAME")
+          if [ "$kind" = candidate ]; then
+            echo "candidate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "candidate=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: meta
+    if: needs.meta.outputs.candidate == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  fuzz:
+    needs: meta
+    if: needs.meta.outputs.candidate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: sh scripts/fuzz.sh 10m
+
+  candidate:
+    needs: [meta, test, fuzz]
+    if: needs.meta.outputs.candidate == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: pin the build inputs
+        shell: bash
+        run: |
+          {
+            echo "HERDR_DOTS_VERSION=${{ needs.meta.outputs.version }}"
+            echo "ASSET_COMMIT=$(git rev-parse --short=12 HEAD)"
+            echo "ASSET_TIME=$(git log -1 --format=%ct HEAD)"
+          } > release/ASSET_ENV
+          cat release/ASSET_ENV >> "$GITHUB_ENV"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean --skip=publish,sign,validate
+      - name: commit the checksums on a branch and open a pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp dist/SHA256SUMS release/SHA256SUMS
+          # The run id keeps a rerun from colliding with an already-pushed branch.
+          branch="release/v${{ needs.meta.outputs.version }}-checksums-${{ github.run_id }}-${{ github.run_attempt }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add release/SHA256SUMS release/ASSET_ENV
+          git commit -m "release: checksums for v${{ needs.meta.outputs.version }} (from $GITHUB_REF_NAME)"
+          git push origin "$branch"
+          gh pr create --title "Release checksums for v${{ needs.meta.outputs.version }}" \
+            --body "Archives built by $GITHUB_REF_NAME. Merge, then tag v${{ needs.meta.outputs.version }} on the merge commit."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-dist
+          path: dist/
+
+  publish:
+    needs: meta
+    if: needs.meta.outputs.candidate == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # cosign keyless signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: load the pinned build inputs
+        shell: bash
+        run: |
+          test -s release/SHA256SUMS || { echo "release/SHA256SUMS is empty: merge the candidate's checksum PR first"; exit 1; }
+          grep -q "^HERDR_DOTS_VERSION=${{ needs.meta.outputs.version }}$" release/ASSET_ENV
+          cat release/ASSET_ENV >> "$GITHUB_ENV"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean --skip=publish,sign,validate
+      - name: the rebuilt archives must match the committed checksums
+        run: diff -u release/SHA256SUMS dist/SHA256SUMS
+      - uses: sigstore/cosign-installer@v3
+      - name: sign every archive
+        shell: bash
+        run: |
+          for f in dist/*.tar.gz dist/*.zip; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+      - name: draft the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "See CHANGELOG.md. Verify with: herdr-dots verify-release" \
+            dist/*.tar.gz dist/*.zip dist/*.sigstore.json dist/SHA256SUMS

@@ -15,10 +15,8 @@ import (
 type handler func(args []string) error
 
 var commands = map[string]handler{
-	"version": func([]string) error {
-		fmt.Println("herdr-dots", version.Version, "(scaffold)")
-		return nil
-	},
+	"version":    printVersion,
+	"--version":  printVersion,
 	"engine":     runEngine,
 	"pane":       runPane,
 	"manage":     runManage,
@@ -31,6 +29,12 @@ var commands = map[string]handler{
 	"diff-ui":    runDiffUI,
 	"keys":       runKeys,
 	"mcp":        runMCP,
+}
+
+// printVersion prints "herdr-dots <version> (<release|source>, commit <id>)".
+func printVersion([]string) error {
+	fmt.Println(version.String())
+	return nil
 }
 
 func usage() error {

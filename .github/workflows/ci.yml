@@ -1,11 +1,13 @@
-# Herdr Dots CI: the same checks on macOS, Linux and Windows. Written in
-# Phase 6; it runs once the user pushes the repository (nothing is pushed
-# automatically).
+# Herdr Dots CI: the same checks on macOS, Linux and Windows, plus fuzzing,
+# govulncheck and a short soak. Written in Phases 6 and 10; it runs once the
+# developer pushes the repository (nothing is pushed automatically).
 name: ci
 
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "17 3 * * *" # nightly: the long soak
 
 permissions:
   contents: read
@@ -35,18 +37,67 @@ jobs:
       - name: cross-compile
         if: runner.os == 'Linux'
         run: |
-          GOOS=windows GOARCH=amd64 go build ./...
+          for t in darwin/amd64 darwin/arm64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} go build ./...
+          done
           GOOS=windows GOARCH=amd64 go vet ./...
-          GOOS=darwin GOARCH=arm64 go build ./...
       - name: build the plugin (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1
           if (-not (Test-Path bin/herdr-dots.exe)) { throw "bin/herdr-dots.exe missing" }
-          ./bin/herdr-dots.exe version
+          ./bin/herdr-dots.exe --version
       - name: build the plugin (Unix)
         if: runner.os != 'Windows'
         run: |
           sh scripts/build.sh
-          ./bin/herdr-dots version
+          ./bin/herdr-dots --version
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: fuzz every target for 30s
+        run: sh scripts/fuzz.sh 30s
+      - name: keep crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
+
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350 # GitHub-hosted jobs stop at 6h; the 8h soak runs locally
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: soak (15m on pushes, 5h nightly)
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = schedule ]; then
+            export SOAK_DURATION=5h SOAK_IDLE=10m
+          else
+            export SOAK_DURATION=15m SOAK_IDLE=5m
+          fi
+          go test -tags soak -run TestSoak -timeout 340m -v ./internal/engine/
