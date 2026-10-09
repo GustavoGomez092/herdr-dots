@@ -1,28 +1,28 @@
-// Package lockfile guarantees one engine per Herdr session with flock(2). The
-// kernel releases the lock if the engine dies, so stale locks can't happen.
+// Package lockfile guarantees one engine per Herdr session with an OS file
+// lock: flock(2) on Unix, LockFileEx on Windows. The OS releases the lock if
+// the holder dies, so stale locks can't happen.
 package lockfile
 
 import (
 	"errors"
 	"fmt"
 	"os"
-	"syscall"
 )
 
 var ErrLocked = errors.New("lock held by another process")
 
 type Lock struct{ f *os.File }
 
+// TryLock takes the exclusive lock on path without waiting, creating the file
+// if needed, and records this process's pid in it. A lock held through any
+// other open of the file, in this process or another, is ErrLocked.
 func TryLock(path string) (*Lock, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := openLockFile(path)
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockFile(f); err != nil {
 		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, ErrLocked
-		}
 		return nil, err
 	}
 	_ = f.Truncate(0)
@@ -31,7 +31,7 @@ func TryLock(path string) (*Lock, error) {
 }
 
 func (l *Lock) Release() error {
-	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
+	_ = unlockFile(l.f)
 	return l.f.Close()
 }
 

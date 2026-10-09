@@ -988,7 +988,10 @@ func (s *Store) FindProject(arg string) (ProjectMeta, bool, error) {
 	return ProjectMeta{}, false, errors.Join(errs...)
 }
 
-// Purge deletes a project's whole memory directory.
+// Purge deletes a project's whole memory directory. Everything but the lock
+// file goes while the lock is held; the lock file and the directory go after
+// it is released, because Windows can't delete a file another handle (the
+// lock) has open.
 func (s *Store) Purge(p string) error {
 	if !ValidProjectID(p) {
 		return fmt.Errorf("%w: project id %q", ErrInvalid, p)
@@ -997,7 +1000,28 @@ func (s *Store) Purge(p string) error {
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%w: project %s has no memory", ErrNotFound, p)
 	}
-	return s.withLock(dir, func() error { return os.RemoveAll(dir) })
+	if err := s.withLock(dir, func() error { return removeAllBut(dir, "memory.lock") }); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// removeAllBut removes every entry of dir except keep.
+func removeAllBut(dir, keep string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range ents {
+		if e.Name() != keep {
+			errs = append(errs, os.RemoveAll(filepath.Join(dir, e.Name())))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // DeleteDot removes a dot's memory in every project and its global memory,
