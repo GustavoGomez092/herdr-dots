@@ -10,6 +10,7 @@ import (
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
+	"herdr-dots/internal/view"
 )
 
 // flushAuto delivers waiting cards: approved ones need an idle agent; inject
@@ -161,6 +162,7 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 	pl.Lock()
 	defer pl.Unlock()
 	changed := false
+	var slugs []string
 	err := e.d.Attachments.Update(a.PaneID, func(x *state.Attachment) {
 		if x.SessionValue == p.AgentSession.Value {
 			return
@@ -174,11 +176,25 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 		x.ForceScrollback = false
 		for i := range x.Dots {
 			x.Dots[i].LastSeenTurn = 0
+			slugs = append(slugs, x.Dots[i].Slug)
 		}
 	})
 	if errors.Is(err, state.ErrNoAttachment) || !changed {
 		return
 	}
+	// Budgets are per agent session: a new session starts from zero.
+	if err := e.d.Usage.ResetPane(a.PaneID); err != nil {
+		e.d.Logf("reset usage %s: %v", a.PaneID, err)
+	}
+	e.mu.Lock()
+	for _, s := range slugs {
+		k := key{a.PaneID, s}
+		delete(e.warned, k)
+		if e.status[k] == view.StatusBudget {
+			delete(e.status, k)
+		}
+	}
+	e.mu.Unlock()
 	e.dropReader(a.PaneID)
 	if att, ok := e.d.Attachments.Get(a.PaneID); ok {
 		r := e.reader(att)

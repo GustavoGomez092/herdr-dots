@@ -99,6 +99,7 @@ type rig struct {
 	readers map[string]*fakeReader // by session value
 	q       *queue.Store
 	atts    *state.Attachments
+	usage   *state.Usage
 	saved   []dots.Dot
 }
 
@@ -121,7 +122,7 @@ func newRig(t *testing.T, ds ...dots.Dot) *rig {
 	atts, _ := state.OpenAttachments(filepath.Join(dir, "attachments.json"))
 	usage, _ := state.OpenUsage(filepath.Join(dir, "usage.json"))
 	feed, _ := state.OpenFeed(filepath.Join(dir, "feed.jsonl"))
-	r := &rig{srv: srv, be: &fakeBackend{}, readers: map[string]*fakeReader{"s1": {}}, q: q, atts: atts}
+	r := &rig{srv: srv, be: &fakeBackend{}, readers: map[string]*fakeReader{"s1": {}}, q: q, atts: atts, usage: usage}
 	cfg := config.Default()
 	cfg.TurnDebounceMs = 0
 	r.e = New(Deps{
@@ -536,5 +537,67 @@ func TestReaderReplacedWithFewerTurnsStillReviewsNewTurns(t *testing.T) {
 	r.srv.Push(pane, herdr.StatusIdle)
 	eventually(t, "new turn reviewed", func() bool {
 		return r.be.n() > before && r.be.last().Turns[len(r.be.last().Turns)-1].User == "brand new"
+	})
+}
+
+// budgetRig runs one dot with a 1-call budget until it is out of budget.
+func budgetRig(t *testing.T) *rig {
+	t.Helper()
+	d := dot("Security", dots.ModeQueue)
+	d.Budget.MaxCallsPerSession = 1
+	r := newRig(t, d)
+	r.readers["s1"].add(transcript.Turn{User: "one"})
+	r.attach(t, "security")
+	eventually(t, "first run finished", func() bool {
+		p, _ := r.e.Snapshot().Pane(pane)
+		return r.be.n() == 1 && p.Dots[0].Status == view.StatusPassed
+	})
+	r.turnEnds(t, transcript.Turn{User: "two"})
+	eventually(t, "budget status", func() bool {
+		p, _ := r.e.Snapshot().Pane(pane)
+		return p.Dots[0].Status == view.StatusBudget
+	})
+	return r
+}
+
+func TestBudgetToastSaysHowItResets(t *testing.T) {
+	r := budgetRig(t)
+	eventually(t, "budget toast", func() bool { return len(r.srv.Calls("notification.show")) == 1 })
+	body, _ := r.srv.Calls("notification.show")[0].Params["body"].(string)
+	if body != "budget reached; resets on a new agent session or press r" {
+		t.Fatalf("toast %q", body)
+	}
+}
+
+// Budgets are per agent session: /clear (a new session) starts from zero.
+func TestBudgetResetsOnNewAgentSession(t *testing.T) {
+	r := budgetRig(t)
+	s2 := &fakeReader{}
+	s2.add(transcript.Turn{User: "fresh"})
+	r.setReader("s2", s2)
+	p, _ := (&herdr.SocketClient{Path: r.srv.Path}).PaneGet(context.Background(), pane)
+	p.AgentSession = &herdr.AgentSession{Kind: "id", Value: "s2"}
+	r.srv.SetPane(p)
+	r.srv.Push(pane, herdr.StatusIdle)
+	eventually(t, "new session reviewed despite the old budget", func() bool {
+		return r.be.n() == 2 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "fresh"
+	})
+	if c := r.usage.Calls(pane, "security"); c != 1 {
+		t.Fatalf("usage after reset + one run = %d, want 1", c)
+	}
+}
+
+// r (Reset) clears the dot's usage counter, so it runs again.
+func TestResetClearsDotUsage(t *testing.T) {
+	r := budgetRig(t)
+	if err := r.e.Reset(pane, "security"); err != nil {
+		t.Fatal(err)
+	}
+	if c := r.usage.Calls(pane, "security"); c != 0 {
+		t.Fatalf("usage after reset = %d", c)
+	}
+	r.turnEnds(t, transcript.Turn{User: "three"})
+	eventually(t, "dot runs again after reset", func() bool {
+		return r.be.n() == 2 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "three"
 	})
 }

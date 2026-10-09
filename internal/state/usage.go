@@ -62,6 +62,17 @@ func (u *Usage) PaneCalls(paneID string) int {
 	return n
 }
 
+// ResetDot clears one dot's counter on a pane (the pane total drops with it).
+func (u *Usage) ResetDot(paneID, slug string) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if _, ok := u.data[paneID][slug]; !ok {
+		return nil
+	}
+	delete(u.data[paneID], slug)
+	return writeJSON(u.path, u.data)
+}
+
 func (u *Usage) ResetPane(paneID string) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()

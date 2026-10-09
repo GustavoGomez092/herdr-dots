@@ -67,6 +67,26 @@ func TestUsage(t *testing.T) {
 	}
 }
 
+func TestUsageResetDot(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "usage.json")
+	u, _ := OpenUsage(p)
+	_ = u.Record("p1", "a", 1, 1)
+	_ = u.Record("p1", "b", 1, 1)
+	if err := u.ResetDot("p1", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if u.Calls("p1", "a") != 0 || u.Calls("p1", "b") != 1 || u.PaneCalls("p1") != 1 {
+		t.Fatalf("a=%d b=%d pane=%d", u.Calls("p1", "a"), u.Calls("p1", "b"), u.PaneCalls("p1"))
+	}
+	u2, _ := OpenUsage(p)
+	if u2.Calls("p1", "a") != 0 {
+		t.Fatal("reset not persisted")
+	}
+	if err := u.ResetDot("nope", "x"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFeedSanitizesDetail(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "feed.jsonl")
 	// An entry written by an older build, unsanitized, is cleaned on load too.

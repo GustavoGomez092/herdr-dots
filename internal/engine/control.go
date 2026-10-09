@@ -87,13 +87,17 @@ func (e *Engine) TogglePauseAll() {
 	e.broadcast()
 }
 
-// Reset clears a dot's failure stop and budget warning.
+// Reset clears a dot's failure stop, budget warning and call usage on a pane.
 func (e *Engine) Reset(paneID, slug string) error {
 	if err := e.SetPaused(paneID, slug, false); err != nil {
 		return err
 	}
+	if err := e.d.Usage.ResetDot(paneID, slug); err != nil {
+		e.d.Logf("reset usage %s/%s: %v", paneID, slug, err)
+	}
 	e.mu.Lock()
 	delete(e.warned, key{paneID, slug})
 	e.mu.Unlock()
+	e.broadcast()
 	return nil
 }

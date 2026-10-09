@@ -345,7 +345,7 @@ func rule(title string, w int) string {
 const helpText = `j/k move   tab roster/queue   t next agent
 ⏎ send card   a send all   e edit   x dismiss
 s summon dot   m cycle mode   p pause   d detach
-r reset errored dot   f feed   ? help   q close`
+r reset dot+budget    f feed   ? help   q close`
 
 func (m Model) View() string {
 	w := m.width

@@ -339,7 +339,7 @@ func (e *Engine) processPane(paneID string) {
 	pl.Unlock()
 
 	for _, d := range budgetHit {
-		e.notify(d, "budget reached; skipping turns until the budget resets")
+		e.notify(d, "budget reached; resets on a new agent session or press r")
 	}
 	for _, j := range jobs {
 		e.spawn(func() { e.runDot(paneID, j.dot, j.turns, runOpts{forceQueue: j.forceQueue}) })
