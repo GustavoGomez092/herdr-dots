@@ -67,10 +67,18 @@ type Card struct {
 	PatchID    string   `json:"patch_id,omitempty"`    // the draft id: patches/<id>.patch and <id>.json
 	DiffStat   string   `json:"diff_stat,omitempty"`   // "3 files +42 −7"
 	PatchFlags []string `json:"patch_flags,omitempty"` // binary, mode, symlink, symlink-kept, submodule-skipped, conflicts
+
+	// Proactive cards (Phase 8) only.
+	Origin string `json:"origin,omitempty"` // "" = a turn review; else state.RunResearch, RunScheduled or RunCommit
+	Label  string `json:"label,omitempty"`  // header text in place of "turn N": "commit a1b2c3d", "scheduled Mon 09:00"
 }
 
 // KindCouncil marks a council card: one digest merged from several dots.
 const KindCouncil = "council"
+
+// KindDigest marks a "while you were away" card: the relevant results of one
+// idle period's research passes, one part per dot (Parts, like a council).
+const KindDigest = "digest"
 
 // KindPatch marks a patch card: a write-capable dot's drafted fix (Phase 7).
 const KindPatch = "patch"
@@ -148,6 +156,7 @@ func (s *Store) find(id string) int {
 func (s *Store) Add(c Card) (Card, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	c = sanitizeCard(c)
 	s.next++
 	c.ID = strconv.Itoa(s.next)
 	c.CreatedAt = time.Now()
