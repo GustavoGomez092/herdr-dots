@@ -332,9 +332,10 @@ func (c *memCLI) add(args []string) error {
 	if kind == "" {
 		kind = defaultKindFor(sc)
 	}
-	if found, what := memory.ScanSecrets(text); found {
+	globs := splitCSV(f.globs)
+	if found, what := memory.ScanSecrets(text + " " + strings.Join(globs, " ")); found {
 		if !f.force {
-			return fmt.Errorf("refusing: the text looks like a secret (%s); rerun with --force to store it anyway", what)
+			return fmt.Errorf("refusing: the text or paths look like a secret (%s); rerun with --force to store it anyway", what)
 		}
 		fmt.Fprintf(c.errOut, "warning: storing text that looks like a secret (%s)\n", what)
 	}
@@ -349,7 +350,7 @@ func (c *memCLI) add(args []string) error {
 			_ = c.store.SeeProject(pr)
 		}
 	}
-	e := memory.Entry{Scope: sc, Kind: kind, Text: text, Paths: splitCSV(f.globs), Source: memory.SourceUser, Status: memory.StatusActive, Pinned: f.pin}
+	e := memory.Entry{Scope: sc, Kind: kind, Text: text, Paths: globs, Source: memory.SourceUser, Status: memory.StatusActive, Pinned: f.pin}
 	if sc != memory.ScopeProject {
 		e.Dot = f.dot
 	}

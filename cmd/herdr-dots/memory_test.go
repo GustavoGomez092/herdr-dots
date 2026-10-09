@@ -280,6 +280,21 @@ func TestMemoryEditMarksUserSource(t *testing.T) {
 	}
 }
 
+// Final review minor 4: a secret in paths is gated like a secret in text.
+func TestMemorySecretInPathsIsGated(t *testing.T) {
+	c, _, _ := newMemCLI(t)
+	f := importFile(t, "version = 1\n[[entry]]\nscope = \"dot\"\ndot = \"security\"\nkind = \"note\"\nstatus = \"active\"\npaths = [\"deploy/AKIAIOSFODNN7EXAMPLE/**\"]\ntext = \"plain deploy note\"\n")
+	if err := c.run([]string{"import", f}); err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("a secret in paths must need --yes, got %v", err)
+	}
+	if err := c.run([]string{"add", "--scope", "dot", "--dot", "security", "--paths", "deploy/AKIAIOSFODNN7EXAMPLE/**", "plain deploy note"}); err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("add with a secret in --paths must need --force, got %v", err)
+	}
+	if es, _ := c.store.List(testPID, memory.Filter{}); len(es) != 0 {
+		t.Fatalf("nothing may be stored: %+v", es)
+	}
+}
+
 func TestMemoryProjectsPrintsReadableAndErrors(t *testing.T) {
 	c, out, errOut := newMemCLI(t)
 	mustRun(t, c, "add", "--scope", "project", "Postgres is the only datastore")
