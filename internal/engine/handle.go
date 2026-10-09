@@ -93,6 +93,25 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 	case ipc.CmdMemoryChanged:
 		e.MemoryChanged()
 		return nil
+	case ipc.CmdDraft:
+		var a ipc.DraftArgs
+		if err := decode(raw, &a); err != nil {
+			return err
+		}
+		_, err := e.Draft(ctx, a.PaneID, a.Slug, a.Instruction, a.FromCardID)
+		return err
+	case ipc.CmdApplyPatch:
+		var a ipc.CardArgs
+		if err := decode(raw, &a); err != nil {
+			return err
+		}
+		return e.ApplyPatchChecked(a.ID, a.SHA256)
+	case ipc.CmdDiscardPatch:
+		var a ipc.CardArgs
+		if err := decode(raw, &a); err != nil {
+			return err
+		}
+		return e.DiscardPatch(a.ID)
 	case ipc.CmdCouncil:
 		var a ipc.CouncilArgs
 		if err := decode(raw, &a); err != nil {

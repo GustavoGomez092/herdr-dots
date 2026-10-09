@@ -91,6 +91,9 @@ type SendArgs struct {
 type CardArgs struct {
 	ID   string `json:"id"`
 	Body string `json:"body,omitempty"`
+	// SHA256 (apply_patch only): the hash of the patch the user saw in the
+	// diff viewer; the engine refuses to apply a different one.
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 type SummonArgs struct {

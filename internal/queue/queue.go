@@ -233,8 +233,11 @@ func (s *Store) SetStatus(id string, st Status) error {
 		if !slices.Contains(allowed[c.Status], st) {
 			return fmt.Errorf("%w: %s → %s", ErrTransition, c.Status, st)
 		}
+		if st == StatusApplied && c.Kind != KindPatch {
+			return fmt.Errorf("%w: only a patch card can be %s", ErrTransition, st)
+		}
 		c.Status = st
-		if st == StatusSent {
+		if st == StatusSent || st == StatusApplied {
 			c.Error = ""
 		}
 		return nil
@@ -272,7 +275,13 @@ func (s *Store) SetStatusNote(id string, st Status, note string, flags ...string
 		if !slices.Contains(allowed[c.Status], st) {
 			return fmt.Errorf("%w: %s → %s", ErrTransition, c.Status, st)
 		}
+		if st == StatusApplied && c.Kind != KindPatch {
+			return fmt.Errorf("%w: only a patch card can be %s", ErrTransition, st)
+		}
 		c.Status, c.Note = st, note
+		if st == StatusApplied {
+			c.Error = ""
+		}
 		for _, f := range flags {
 			if !slices.Contains(c.PatchFlags, f) {
 				c.PatchFlags = append(c.PatchFlags, f)

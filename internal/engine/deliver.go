@@ -40,7 +40,7 @@ func (e *Engine) flushAuto(paneID string) {
 
 // deliver must be called with e.dmu held.
 func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
-	gate, err := delivery.Send(e.ctx, e.d.Herdr, paneID, cards, inject)
+	gate, err := delivery.Send(e.ctx, e.d.Herdr, paneID, e.forDelivery(cards), inject)
 	for _, c := range cards {
 		switch {
 		case err != nil:
@@ -50,6 +50,7 @@ func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
 			// deliveries were never approved.
 			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil && c.Approved {
 				e.spawnOutcome(c, memory.OutcomeSent)
+				e.patchSent(c)
 			}
 		case c.Status == queue.StatusPending:
 			_ = e.d.Queue.SetStatus(c.ID, queue.StatusAuto)
@@ -94,6 +95,9 @@ func (e *Engine) SendCards(ids []string) error {
 // Dismiss and Edit hold e.dmu so they never interleave with a delivery: a card
 // is either sent as it was, or dismissed/edited before any flush reads it.
 func (e *Engine) Dismiss(id string) error {
+	if c, ok := e.d.Queue.Get(id); ok && c.Kind == queue.KindPatch {
+		return e.DiscardPatch(id) // x on a patch card discards the patch too
+	}
 	e.dmu.Lock()
 	defer e.dmu.Unlock()
 	c, ok := e.d.Queue.Get(id)
@@ -113,6 +117,9 @@ func (e *Engine) Edit(id, body string) error {
 	e.dmu.Lock()
 	defer e.dmu.Unlock()
 	before, ok := e.d.Queue.Get(id)
+	if ok && before.Kind == queue.KindPatch {
+		return errors.New("a patch card can't be edited: discard it and draft again")
+	}
 	if err := e.d.Queue.Edit(id, body); err != nil {
 		return err
 	}
