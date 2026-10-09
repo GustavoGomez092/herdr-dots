@@ -69,11 +69,17 @@ func (s *Store) LastSchedule(p, dot string) (time.Time, error) {
 	return last, err
 }
 
+// ScheduleSkew is how far past now a stored claim may lie and still count. A
+// later claim was written by a skewed clock: it is treated as absent, since it
+// would otherwise refuse every slot before it (ruling P8-R12).
+const ScheduleSkew = 2 * time.Minute
+
 // ClaimSchedule records slot as dot's last run on p and reports true, or
 // reports false when that slot (or a later one) was already claimed, by this
-// engine or one in another Herdr session. A corrupt file is replaced: losing
-// it can at most re-run one slot.
-func (s *Store) ClaimSchedule(p, dot string, slot time.Time) (bool, error) {
+// engine or one in another Herdr session. A stored claim after now plus
+// ScheduleSkew is treated as absent and overwritten (logged). A corrupt file is
+// replaced: losing it can at most re-run one slot.
+func (s *Store) ClaimSchedule(p, dot string, slot, now time.Time) (bool, error) {
 	if err := checkProjectDot(p, dot); err != nil {
 		return false, err
 	}
@@ -88,7 +94,10 @@ func (s *Store) ClaimSchedule(p, dot string, slot time.Time) (bool, error) {
 			return err
 		}
 		if last, ok := f.Last[dot]; ok && !last.Before(slot) {
-			return nil
+			if !last.After(now.Add(ScheduleSkew)) {
+				return nil
+			}
+			s.logf("memory: %s/schedule.json: dot %s's claim %s is in the future (a clock was wrong); replacing it", p, dot, last.Format(time.RFC3339))
 		}
 		f.Last[dot] = slot
 		data, err := json.MarshalIndent(f, "", "  ")
