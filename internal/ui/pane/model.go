@@ -552,7 +552,7 @@ func (m Model) View() string {
 		if m.area == areaRoster {
 			sel = m.roster
 		}
-		roster = fitRoster(roster, m.height-lineCount(top)-lineCount(queueRule)-lineCount(foot)-1, sel)
+		roster = fitRoster(roster, m.height-lineCount(top)-lineCount(queueRule)-lineCount(foot)-1, sel, w)
 	}
 	head := top + strings.Join(roster, "") + queueRule
 	if m.height > 0 {
@@ -563,14 +563,18 @@ func (m Model) View() string {
 }
 
 // fitRoster returns at most n roster lines. When some are cut, the last line
-// says how many ("+N more") and the selected dot (sel, -1 for none) stays
-// visible.
-func fitRoster(lines []string, n, sel int) []string {
+// says how many ("+N more", cut to the width w) and the selected dot (sel, -1
+// for none) stays visible; with room for one line only, the selected dot's
+// line wins.
+func fitRoster(lines []string, n, sel, w int) []string {
 	if len(lines) <= n {
 		return lines
 	}
 	if n <= 0 {
 		return nil
+	}
+	if n == 1 && sel >= 0 && sel < len(lines) {
+		return []string{lines[sel]}
 	}
 	keep := n - 1
 	off := 0
@@ -578,7 +582,11 @@ func fitRoster(lines []string, n, sel int) []string {
 		off = min(sel-keep+1, len(lines)-keep)
 	}
 	out := append([]string(nil), lines[off:off+keep]...)
-	return append(out, style.Dim.Render(fmt.Sprintf("  +%d more", len(lines)-keep))+"\n")
+	more := []rune(fmt.Sprintf("  +%d more", len(lines)-keep))
+	if w > 0 && len(more) > w {
+		more = more[:w]
+	}
+	return append(out, style.Dim.Render(string(more))+"\n")
 }
 
 // lineCount counts lines in s; a trailing line without "\n" counts too.
