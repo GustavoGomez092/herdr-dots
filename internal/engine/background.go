@@ -455,13 +455,20 @@ func (e *Engine) chargeBackground(j bgJob, d state.Delta) {
 	_ = e.d.Usage.Add(j.paneID, j.dot.Slug, d)
 }
 
-// inFlightLocked counts the pane's runs that may still charge it: MCP asks,
-// live drafts and the running background job (bgBusy; a job still waiting
-// for bgSem has not started and re-checks the budgets itself), except the
-// background run keyed except. Phase 7's ask and draft budget checks count
-// them too (ruling P8-R2). Caller holds e.mu.
+// inFlightLocked counts the pane's runs that may still charge it: turn
+// reviews and memory passes (e.running), MCP asks, live drafts and the
+// running background job (bgBusy; a job still waiting for bgSem has not
+// started and re-checks the budgets itself), except the background run keyed
+// except. Every session-budget check (turn reviews, asks, drafts, research,
+// commit and background runs) counts them as calls already made (rulings
+// P8-R2 and P8-R8). Caller holds e.mu.
 func (e *Engine) inFlightLocked(paneID string, except key) int {
 	n := 0
+	for k := range e.running {
+		if k.pane == paneID {
+			n++
+		}
+	}
 	for k := range e.asking {
 		if k.pane == paneID {
 			n++

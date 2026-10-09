@@ -568,7 +568,10 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 	var budgetHit []budgetNote
 	turnEnded := false
 	e.mu.Lock()
-	paneCalls := e.d.Usage.PaneCalls(paneID)
+	// Reviews, memory passes, asks, drafts and background runs in flight
+	// count as calls already made (ruling P8-R8, the shared inFlightLocked),
+	// and so does each run this pass starts (paneCalls++ below).
+	paneCalls := e.d.Usage.PaneCalls(paneID) + e.inFlightLocked(paneID, key{})
 	paneCost := e.d.Usage.PaneCost(paneID)
 	_ = e.d.Attachments.Update(paneID, func(a *state.Attachment) {
 		if a.SessionValue != session {
