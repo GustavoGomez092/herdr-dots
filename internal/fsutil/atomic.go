@@ -15,7 +15,11 @@ var restrictFn = restrict
 // also gets an owner-only DACL on Windows, applied to the temp file before any
 // byte is written, and a write whose privacy can't be set fails. On Windows
 // the rename is retried briefly while another process has the old file open.
+// A file a newer herdr-dots wrote (see ProtectNewer) is never replaced.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if err := CheckWritable(path); err != nil {
+		return err
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
