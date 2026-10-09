@@ -531,6 +531,7 @@ func (e *Engine) ApplyPatch(cardID, wantSHA256 string) error {
 	if err != nil {
 		return fmt.Errorf("apply: %w", err)
 	}
+	e.hook("apply-applied")
 	note, detail := "applied to your working tree (not staged)", m.Stat
 	var flags []string
 	if len(conflicts) > 0 {
@@ -577,6 +578,13 @@ func (e *Engine) DiscardPatch(cardID string) error {
 		return err
 	}
 	e.hook("discard-reserved")
+	// A patch already applied (an apply interrupted after the patch landed,
+	// before the card was marked) is never discarded: memory would record
+	// "discarded" after "applied". The reservation keeps an apply out.
+	m, merr := e.d.Patches.Get(c.PatchID)
+	if merr == nil && m.Status == patchstore.StatusApplied {
+		return fmt.Errorf("patch %s was already applied to your working tree", c.PatchID)
+	}
 	// The status changes under dmu, like Dismiss of any card, so it never
 	// interleaves with a delivery; the git and patch-file work comes after.
 	e.dmu.Lock()
@@ -587,7 +595,7 @@ func (e *Engine) DiscardPatch(cardID string) error {
 	}
 	oc := c
 	stuck := false
-	if m, err := e.d.Patches.Get(c.PatchID); err == nil {
+	if merr == nil {
 		if s := memorySummary(m); s != "" {
 			oc.Body = s
 		}
