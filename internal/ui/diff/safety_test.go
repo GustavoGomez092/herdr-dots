@@ -77,3 +77,14 @@ func TestFileListFlagsRiskyFilesAndConfirmNamesUnseenOnes(t *testing.T) {
 		t.Fatalf("every file was shown:\n%s", v)
 	}
 }
+
+// The patch record's Summary is meant to be redacted already; the viewer
+// redacts again so a key never reaches the screen if that ever slips.
+func TestSummaryKeysAreRedactedInTheView(t *testing.T) {
+	meta := sampleMeta()
+	meta.Summary = "Wired the client to sk-ant-api03-abcdefghijklmnop for tests."
+	m, _ := New([]byte(samplePatch), meta, "7", &recCaller{}).Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	if v := m.View(); strings.Contains(v, "abcdefghijklmnop") {
+		t.Fatalf("key reached the view:\n%s", v)
+	}
+}

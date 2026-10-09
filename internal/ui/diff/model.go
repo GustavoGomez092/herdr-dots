@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/patchstore"
 	"herdr-dots/internal/textutil"
@@ -247,7 +248,7 @@ func (m Model) w() int {
 }
 
 func (m Model) summaryLine() string {
-	s := strings.TrimSpace(clean(m.meta.Summary))
+	s := strings.TrimSpace(clean(credentials.Redact(m.meta.Summary)))
 	if s == "" {
 		return ""
 	}
