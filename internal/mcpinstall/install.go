@@ -312,6 +312,10 @@ func planCodexInstall(env Env, bin, configDir, stateDir string) (Plan, error) {
 		p.Backups = []string{path}
 	}
 	p.Preview = Diff(before, after)
+	if keys := codexUserKeys(before); len(keys) > 0 {
+		// Allowed (the diff shows it), but said in words too.
+		p.Preview += "Note: your edits inside the managed block will be replaced: " + strings.Join(keys, ", ") + "\n"
+	}
 	return p, nil
 }
 

@@ -217,6 +217,34 @@ func UpsertCodexBlock(before, bin, configDir, stateDir string) (string, error) {
 	return after, nil
 }
 
+// managedKeys are the keys CodexBlock writes.
+var managedKeys = []string{"command", "args", "env_vars", "startup_timeout_sec", "tool_timeout_sec"}
+
+// codexUserKeys lists, sorted, the keys and sub-tables of the herdr-dots
+// table in before that setup-mcp doesn't write (the user's edits, such as
+// enabled = false). A reinstall replaces them.
+func codexUserKeys(before string) []string {
+	lines := strings.SplitAfter(before, "\n")
+	start, end, ok, err := findRegion(lines)
+	if err != nil || !ok {
+		return nil
+	}
+	var m map[string]any
+	if _, err := toml.Decode(strings.Join(lines[start:end], ""), &m); err != nil {
+		return nil
+	}
+	servers, _ := m["mcp_servers"].(map[string]any)
+	ours, _ := servers[ServerName].(map[string]any)
+	var out []string
+	for k := range ours {
+		if !slices.Contains(managedKeys, k) {
+			out = append(out, k)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // RemoveCodexBlock deletes the server's lines. After an install that
 // appended the block, the result equals the original file byte for byte.
 func RemoveCodexBlock(before string) (string, bool, error) {
