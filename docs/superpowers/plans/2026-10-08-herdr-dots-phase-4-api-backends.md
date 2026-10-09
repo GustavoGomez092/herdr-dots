@@ -12,9 +12,11 @@
 
 **Binding rulings used here:** (6) API keys live in `credentials.toml` (`0600`) with environment-variable indirection; the OS keychain comes later. (7) The default Anthropic model for API dots is `claude-opus-5-5`, with per-dot `effort` for cost control. (8) Anthropic refusal fallbacks are on by default (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`) and every fallback is logged.
 
+**Reconciliation (2026-10-08).** This plan was written against v1 plus the Phase 2 and Phase 3 *plans*. It has since been replayed task by task, in wave order, on the merged code (`feat/dots-v1` at `803ddac`: Phase 2 and Phase 3 merged with their review fixes, version `0.3.0`). Every diff now applies with plain `git apply` to that code, every code block compiles, and every task's tests pass. The changes are marked "(reconciled)" and listed in Plan decisions 28–36; the design, the tests and rulings 6–8 are unchanged.
+
 **Preconditions (check before Task 1; stop and report if any fails):**
-- Phase 2 (dot memory) is merged into the base branch: `internal/backend/reply.go` defines `ParseReply`, `ParseMemoryOps` and the unexported `finishResult(res Result, text, pass string) (Result, error)`; `backend.Request` has `Memory`, `Learn` and `Pass`; `backend.MemoryPrompt` exists; `paths.Discover() (Paths, error)` exists; `internal/engine/memory.go` defines `MemoryInput` and `DecideMemory`.
-- Phase 3 (council) is merged if its plan has run. Phase 3 is independent of Phase 4; the files both phases touch are listed under "Shared files" below.
+- Phase 2 (dot memory) is merged into the base branch: `internal/backend/reply.go` defines `ParseReply`, `ParseMemoryOps` and the unexported `finishResult(res Result, text, pass string) (Result, error)`; `backend.Request` has `Memory`, `Learn` and `Pass`; `backend.MemoryPrompt` exists (memory goes in the user prompt only); `paths.Discover() (Paths, error)` exists; `internal/engine/memory.go` defines `MemoryInput` and `DecideMemory`; `memory.ScanSecrets` exists.
+- Phase 3 (council) is merged, including its Task 8: `internal/engine/council.go` defines `CouncilPreflight`, `councilPlan` and `runChair` (which takes `e.sem` and records the chair under the `council` slug); `internal/council` defines `Plan`, `Candidate`, `PlanInput` and `Preflight`; `version.Version` is `0.3.0` and `cmd/herdr-dots/memwire_test.go` has `TestVersionIsPhaseThree`. Run `grep -n TestVersionIsPhaseThree cmd/herdr-dots/memwire_test.go` (one match).
 - `go test -race ./... && go vet ./...` passes on the base.
 
 ## Global Constraints
@@ -47,7 +49,12 @@ All v1 Global Constraints still apply (copied from `docs/superpowers/plans/2026-
 Phase 2 constraints that still bind code touched here:
 - Memory is rendered in the **user** prompt as reference data, never in the system prompt. (The Anthropic adapter sends it as its own cached user content block.)
 - `backend.Verdict` stays comparable; memory ops ride on `backend.Result.Remember`.
-- `engine.Deps.Memory == nil` keeps v1 behavior; every v1 and Phase 2 test passes unchanged except the two `config` comparisons Task 4 updates (Plan decision 4).
+- `engine.Deps.Memory == nil` keeps v1 behavior; every v1, Phase 2 and Phase 3 test passes unchanged except the two `config` comparisons Task 4 updates (Plan decision 4) and Phase 3's version pin, which Task 17 moves to `TestVersionIsPhaseFour` (Plan decision 34).
+- Memory ops from API replies are parsed exactly like CLI replies (`backend.FinishAPI` → `finishResult` → `ParseReply` / `ParseMemoryOps`) and stored through Phase 2's sanitizer and secret scanner; provider key shapes are secrets to that scanner (Plan decision 33).
+
+Phase 3 constraints that bind code touched here (reconciled):
+- Council members and the chair can be API dots. Members run through `runDot`, so their usage, cost and redaction are the same as any run; the chair's cost counts against the pane (`council` slug), never a dot. The preflight and the popup respect dollar budgets (Plan decision 30).
+- Model text is sanitized wherever it is shown or logged (council cards already sanitize member and chair text; Task 7 sanitizes the tool-refusal log line).
 
 ## Plan decisions
 
@@ -72,7 +79,7 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 17. **`[providers]` changes apply without a restart.** `cmd/herdr-dots/backends.go` re-reads `config.toml` on every `Deps.Backend(kind)` call and rebuilds an adapter only when its provider settings, deny globs, key-variable names or prices path changed. `engine.Deps.Backend` keeps its v1 signature.
 18. **View fields.** `view.DotState` gains `CostUSD`, `CostUnknown` and `BudgetUSD`; `view.Pane` gains `CostUSD` and `BudgetUSD`. The spec's `CostKnown bool` is stored inverted as `CostUnknown`, so the zero value of an old snapshot means "known" and a pane with no spend shows no dollars.
 19. **Feed details.** A pass is `cost=$0.0123 tokens=1234/210`, plus ` tools=N`, ` (cap)` and ` model=<served>` when they apply. A flagged run is `<message> · <that detail>`. Errors are unchanged (redacted). The Dots pane shows the `cost=…` part for pass/flagged lines.
-20. **Dollar budgets can be overshot by runs already in flight** (at most `max_parallel_runs`), exactly like call budgets in one pass. Phase 2's memory passes check the dollar budgets too (`MemoryInput` gains the same four fields). A summon still ignores budgets (v1). Phase 3's council preflight gets dollar checks only if its code exposes a per-member budget check (Task 14, Step 7).
+20. **Dollar budgets can be overshot by runs already in flight** (at most `max_parallel_runs`), exactly like call budgets in one pass. Phase 2's memory passes check the dollar budgets too (`MemoryInput` gains the same four fields). A summon still ignores budgets (v1). Phase 3's council preflight gets dollar checks (Task 14, Step 7; Plan decision 30, reconciled).
 21. **Editor behavior.** The kind field cycles the six kinds. Kind-specific fields (effort, max tokens, base URL, context window, refusal fallbacks) are hidden for kinds they don't apply to and saved as zero values. Switching kinds swaps the model only when it still holds the old kind's default (`sonnet` → `claude-opus-5-5` → `""`). Switching to an API kind clears CLI `args`. `ctrl+space` on the model field fetches the backend's model list once and then cycles through it. The cost line reads `est. $0.0040/run at 3 turns (prices as of 2026-10-08)`, `price unknown: dollar budgets won't count this dot (add it to prices.toml)`, `local model: $0 per run` or `cost comes from OpenRouter after each run`.
 22. **Providers screen (`K`).** Rows for anthropic, openai and openrouter show the key source (`env:NAME`, `file`, `missing`) and only `…last4`. The ollama row shows the server URL. `s` opens a masked input (`EchoPassword`), `t` tests, `x` removes. After a store, the screen reloads the list and tests the key. Typed keys are never rendered, and test errors are redacted.
 23. **claude CLI cache tokens** (coordinator addendum, from live verification). `claude -p --output-format json` reports `usage.input_tokens` as the uncached part only. `ParseClaudeOutput` now records `InputTokens = input + cache_creation + cache_read`, plus `CacheWriteTokens` and `CacheReadTokens`. The Anthropic API adapter does the same, and its cost prices uncached input, cache writes and cache reads separately from the table's `input`, `cache_write` and `cache_read` prices.
@@ -80,16 +87,30 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 25. **`r` (reset) does not run `Check`.** The spec's §6.2 mentions it, but a keypress shouldn't make network calls, and the next run reports a broken key anyway. The editor save and the Providers screen are the checks.
 26. **Unknown-cost display.** A dot whose runs were all priced shows ` $0.12` in the roster; a dot with any unpriced run shows ` $0.12?`; the header shows `$0.42/2.00` with a pane dollar budget and `$0.42` without one.
 27. **Prices on the editor's cost line** are loaded once when the manage popup opens; the engine re-reads them whenever an adapter is rebuilt (Plan decision 17).
+28. **(reconciled) Diffs against the merged code.** The diffs for `config.go`/`config_test.go` (Task 4), `dots/dot.go` (Task 5), `engine.go`, `memory.go`, `view.go` (Task 14), `manage/model.go` (Task 15), `pane/model.go` (Task 16) and `main.go`, `ui.go`, `version.go`, `herdr-plugin.toml` (Task 17) were regenerated against `803ddac`; the "post-Phase-2 form" hand-edit notes are gone. The edits are the same ones the plan described: Phase 2's `MemoryEnabled` and Phase 3's `Council` stay in `Config`; `Validate` appends `validateAPI` after Phase 2's `d.Memory.validate()`; the request keeps Phase 2's `Memory`/`Learn` and Phase 3's `Force: o.summon && !o.noForce`; the snapshot keeps Phase 2's memory counts and Phase 3's council view; the manage popup keeps Phase 2's `M`/`P` screens (`K` joins the help line); the pane keeps Phase 2's `feedOutcome` and `fitRoster` layout and Phase 3's council progress line.
+29. **(reconciled) The tool-refusal log line is sanitized.** The driver logs the tool name and arguments of a jail violation; both are model text, so the line goes through `textutil.SanitizeModelText` before `Logf` (Task 7, `TestRefusalLogIsSanitized`), like every other piece of model text Phase 2 and 3 show or log.
+30. **(reconciled) Council mode with API dots** (Task 14, Step 7):
+    - The council preflight skips a member whose `max_usd_per_session` is spent (`council.Candidate.OverUSD` → `ReasonBudget`) and refuses when the pane's `session_budget_usd` is spent (`pane dollar budget reached: $X of $Y spent`). The check lives in `Preflight.finish`, so the popup's client-side `Select` keeps it. `Preflight` carries `PaneCostUSD`/`PaneBudgetUSD`, and the popup's estimate line adds `· $0.42 of $2.00 spent` when a pane dollar budget is set. A per-member dollar estimate is out of scope (the engine has no price table); members are priced after they run, like any dot.
+    - `runChair` records `deltaOf(res)` under the `council` slug (was `Usage.Record`), so the chair's dollars count against the pane, shown in the header.
+    - Run errors are redacted before the council sink sees them (`redactErr` in `runDot`), and `runChair` redacts its own errors, so neither a member's failed part nor the chair-failure note can carry key material. `redactErr` returns the error unchanged when there is nothing to scrub, so `errors.Is(err, context.DeadlineExceeded)` (Phase 3's "timed out") still works.
+    - Without `chair_model`, a chair whose `chair_backend` differs from `default_backend` uses `dots.DefaultModelFor(kind)` (`claude-opus-5-5` for `anthropic-api`) instead of `default_model`, which belongs to the default backend (`sonnet` would fail on the API). An empty `chair_backend` keeps Phase 3's behavior (the default backend and model).
+    - Memory for API members and the chair is unchanged from Phase 3 (decision 28 there): members load their own block into the user prompt; the chair sees project memory only and never writes memory.
+31. **(reconciled) Wave 3 gains files, not tasks.** Task 14 now also edits `internal/engine/council.go`, `internal/council/council.go` and `internal/ui/summon/council.go`; no other Phase 4 task touches them, so the waves stay disjoint.
+32. **(reconciled) `herdr-dots keys` with no arguments prints its usage** before looking up the plugin state dir, so Task 17 Step 6's smoke test works on a machine where Herdr hasn't created it.
+33. **(reconciled) Provider keys are memory secrets.** `TestEveryProviderKeyShapeIsAMemorySecret` (Task 2) pins that Phase 2's `memory.ScanSecrets` flags `sk-ant-…`, `sk-or-v1-…` and `sk-proj-…` keys (a model echoing a key into a remember op is refused) and that `Redact` scrubs the same shapes.
+34. **(reconciled) Version pin.** Phase 3 pinned `0.3.0` in `TestVersionIsPhaseThree` (`cmd/herdr-dots/memwire_test.go`). Task 17 renames it `TestVersionIsPhaseFour` and pins `0.4.0`, test first, in the same commit as the bump.
+35. **(reconciled) README and roadmap anchors** are the ones Phase 3 Task 8 left: the Backends section goes after "Council mode" (and gains a "Councils" paragraph), the "No API/Ollama backends" bullet is edited in place, row 4 says "in this scaffold since 0.4.0" like Phase 3's row, and the roadmap spec's phase table links the plan instead of the outline (as Phase 3 did). The final "not done" grep filters two earlier-phase lines.
+36. **(reconciled) Live steps stay user-gated.** Task 1 Steps 2–6 and Task 17 Step 5's `-tags live` run need real keys or a local Ollama; the replay compiled them (`go vet -tags live`) and ran every httptest suite, but made no network call to a provider.
 
 ## Review Focus
 
 The five inputs the spec implies but its test list doesn't exercise, most likely to bite first. Each has a test in its owning task.
 
 1. **A symlink or `../` escape from the tool jail** (`read_file("../../.ssh/id_rsa")`, a repo symlink pointing outside, a symlink named innocently that points at `.env`). Expect a tool error (`path outside project` / `path denied`), no bytes leaked, a log line, and the run carrying on. Tests: `TestResolveInRootRefusesEscapes`, `TestResolveInRootDeniesSecretsEvenThroughSymlinks` (Task 7), `TestToolRoundTripThroughTheJail` (Task 10).
-2. **A key echoed in a provider error** (a 401 or 400 body that quotes the key). Expect redaction before the error reaches the feed, a toast, the engine log or a snapshot. Tests: `TestRedact` (Task 2), `TestNoRetryOn4xxAndBodyIsRedacted` (Task 9), `TestUnauthorizedNeverEchoesTheKey` and `TestBadRequestBodyIsRedacted` (Task 10), `TestRunErrorsReachTheFeedRedacted` (Task 14).
+2. **A key echoed in a provider error** (a 401 or 400 body that quotes the key). Expect redaction before the error reaches the feed, a toast, the engine log or a snapshot. Tests: `TestRedact`, `TestEveryProviderKeyShapeIsAMemorySecret` (Task 2), `TestNoRetryOn4xxAndBodyIsRedacted` (Task 9), `TestUnauthorizedNeverEchoesTheKey` and `TestBadRequestBodyIsRedacted` (Task 10), `TestRunErrorsReachTheFeedRedacted`, `TestCouncilErrorsAreRedacted` (Task 14).
 3. **Ollama silently truncating a long prompt** (20 turns plus memory over `num_ctx`). Expect the prompt shrunk to fit with a log line, not a garbage verdict. Tests: `TestFitPromptDropsOldestTurnsThenMemory`, `TestTrimIsLogged` (Task 13).
 4. **Rate limiting mid-council** (Phase 3's fan-out hits 429s). Expect retries with backoff within the run timeout, then a clean `rate limited` error, never a hung run or a sleep past the deadline. Tests: `TestRetriesOn429ThenSucceeds`, `TestStopsWhenTheWaitWouldPassTheDeadline` (Task 9), `TestRateLimitIsRetried` (Task 10).
-5. **A model without a known price under a dollar budget.** Expect cost shown as `?`, the run allowed, an editor warning, and budget arithmetic that never sees NaN. Tests: `TestAddNeverStoresNaNOrNegativeCost` (Task 6), `TestUnknownCostNeverCountsTowardDollarBudgets` (Task 14), `TestEstimateLineAndModelPicker` (Task 15), `TestEstimateLine` (Task 17).
+5. **A model without a known price under a dollar budget.** Expect cost shown as `?`, the run allowed, an editor warning, and budget arithmetic that never sees NaN. Tests: `TestAddNeverStoresNaNOrNegativeCost` (Task 6), `TestUnknownCostNeverCountsTowardDollarBudgets`, `TestCouncilPreflightCountsDollars` (Task 14), `TestEstimateLineAndModelPicker` (Task 15), `TestEstimateLine` (Task 17).
 
 ---
 
@@ -124,11 +145,11 @@ The tasks below appear in wave order; task numbers are stable ids, not the execu
 
 **Gate after Wave 1:** start Wave 3's adapters only after Task 1's notes say "assumption holds: yes" (or "not live-verified, design unaffected") for V1, V2, V3 and V5. If V2 found different OpenAI ids or prices, apply them to `internal/pricing/prices.toml` in the Wave 1 merge (data only, keep `as_of` current). If any assumption is "no", stop and report to the coordinator (the spec's §9 rule).
 
-**Test-name hygiene for parallel tasks:** tasks in one wave never share a package, except Task 8 (package `backend`) and Tasks 7 and 9 (sub-packages), so helper names can't collide. Helpers defined here: Task 2 `envOf`, `credFile`; Task 7 `repoDir`, `run`, `gitInit`, `script`, `echoTool`, `callN`; Task 8 `fakeAPI`; Task 14 `costBE`, `costRig`, `apiDot`; Task 15 `labels`, `cycleKindTo`, `fakeKeys`, `typeText`; Task 17 `keysRig`.
+**Test-name hygiene for parallel tasks:** tasks in one wave never share a package, except Task 8 (package `backend`) and Tasks 7 and 9 (sub-packages), so helper names can't collide. Helpers defined here: Task 2 `envOf`, `credFile`; Task 7 `repoDir`, `run`, `gitInit`, `script`, `echoTool`, `callN`; Task 8 `fakeAPI`; Task 14 `costBE`, `costRig`, `apiDot`, `pricedCouncil`; Task 15 `labels`, `cycleKindTo`, `fakeKeys`, `typeText`; Task 17 `keysRig`.
 
 ### Shared files with Phase 2 and Phase 3
 
-Phase 2 and Phase 3 merge before Phase 4, so these files already carry their changes when Phase 4 starts. The diffs below are against v1 plus Phase 2's backend changes. Where a hunk doesn't apply because a Phase 2/3 line moved, make the same edit by hand (each such spot has a "post-Phase-2 form" note).
+Phase 2 and Phase 3 are merged, so these files already carry their changes. Every diff in this plan is against that merged code (`803ddac`, reconciled) and applies with plain `git apply`.
 
 | File | Phase 2 | Phase 3 | Phase 4 task |
 |---|---|---|---|
@@ -138,13 +159,16 @@ Phase 2 and Phase 3 merge before Phase 4, so these files already carry their cha
 | `internal/dots/dot.go` | `Dot.Memory` | rejects slug `council` | 5 |
 | `internal/engine/engine.go` | memory hooks in `processPaneLocked`, `runDot`, `Snapshot` | council sink in `runDot` | 14 |
 | `internal/engine/memory.go` | `MemoryInput`, `DecideMemory` (new) | — | 14 |
-| `internal/engine/council.go` | — | preflight (new) | 14 (Step 7, conditional) |
+| `internal/engine/council.go` | — | preflight, `runChair` (new) | 14 (Step 7) |
+| `internal/council/council.go` | — | `Plan`, `Preflight` (new) | 14 (Step 7) |
+| `internal/ui/summon/council.go` | — | council popup, `estimateLine` (new) | 14 (Step 7) |
 | `internal/view/view.go` | memory counts | `Council`, `CouncilPreflight` | 14 |
 | `internal/ui/manage/model.go` | `M`/`P` keys, memory screen | — | 15 |
 | `internal/ui/pane/model.go` | header counts, learning status, feed details | council card | 16 |
 | `cmd/herdr-dots/main.go` | `"memory"` command | — | 17 |
 | `cmd/herdr-dots/engine.go`, `ui.go` | `Memory`, `ResolveProject`, `Project` deps | council popup | 17 |
 | `internal/version/version.go`, `herdr-plugin.toml` | `0.2.0` | `0.3.0`, new action | 17 |
+| `cmd/herdr-dots/memwire_test.go` | `TestVersionIsPhaseTwo` | renamed `TestVersionIsPhaseThree` | 17 (`TestVersionIsPhaseFour`) |
 | `README.md`, roadmap | memory docs | council docs | 18 |
 
 ## File Structure
@@ -177,6 +201,9 @@ internal/engine/cost.go                 (new)  OverUSD, requestFor, deltaOf, cos
 internal/engine/filter.go               (mod)  dollar budgets in Decide
 internal/engine/engine.go               (mod)  request fields, Usage.Add, feed cost, redaction, snapshot costs
 internal/engine/memory.go               (mod)  dollar budgets in DecideMemory (Phase 2 file)
+internal/engine/council.go              (mod)  dollar preflight, chair Delta, redaction, chair model (Phase 3 file)
+internal/council/council.go             (mod)  Candidate.OverUSD, pane dollar refusal (Phase 3 file)
+internal/ui/summon/council.go           (mod)  estimate line shows dollar spend (Phase 3 file)
 internal/view/view.go                   (mod)  cost fields
 internal/ui/manage/form.go              (mod)  kind-specific fields, model picker, cost line
 internal/ui/manage/providers.go         (new)  Providers screen
@@ -185,12 +212,13 @@ internal/ui/pane/model.go               (mod)  header, roster and feed costs
 cmd/herdr-dots/backends.go              (new)  backendSet, configLoader, estimateLine, TestProvider
 cmd/herdr-dots/keys.go                  (new)  herdr-dots keys set|remove|list|test
 cmd/herdr-dots/main.go, engine.go, ui.go (mod) keys command, backend set, manage deps
+cmd/herdr-dots/memwire_test.go          (mod)  version pin TestVersionIsPhaseFour
 internal/version/version.go, herdr-plugin.toml (mod) 0.4.0
 README.md, docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md (mod)
 docs/superpowers/notes/2026-10-08-phase-4-verification.md (new)
 ```
 
-**Conventions for code steps.** New files are given in full. Changes to existing files are given as unified diffs: save the block to a file (for example `/tmp/task.patch`) and run `git apply /tmp/task.patch` from the repo root. If a hunk doesn't apply because a neighboring line changed (Phase 2/3 edits), make the same edit by hand: every hunk shows the exact lines to add and remove. Then run `gofmt -w` on the touched files. Every code block in this plan was compiled and its tests run green against v1 plus Phase 2's backend changes while planning (Go 1.25.7, `go test -race ./...`).
+**Conventions for code steps.** New files are given in full. Changes to existing files are given as unified diffs: save the block to a file (for example `/tmp/task.patch`) and run `git apply /tmp/task.patch` from the repo root. Every diff was generated against the merged Phase 2 + 3 code plus the earlier Phase 4 tasks, so it applies as is; if a later fix on the base moves a line, make the same edit by hand (every hunk shows the exact lines to add and remove). Then run `gofmt -w` on the touched files. Every code block in this plan was replayed task by task in wave order on `803ddac` and its tests run green (Go 1.25.7, `go test -race ./...`, reconciled).
 
 ---
 ### Task 1: Verification spike (V1–V6)
@@ -290,10 +318,10 @@ git commit -m "docs: Phase 4 verification spike findings (V1-V6)"
 
 **Files:**
 - Create: `internal/credentials/credentials.go`, `internal/credentials/redact.go`
-- Test: `internal/credentials/credentials_test.go`
+- Test: `internal/credentials/credentials_test.go`, `internal/credentials/memscan_test.go` (reconciled)
 
 **Interfaces:**
-- Consumes: `fsutil.WriteFileAtomic(path string, data []byte, perm os.FileMode) error`; `github.com/BurntSushi/toml`.
+- Consumes: `fsutil.WriteFileAtomic(path string, data []byte, perm os.FileMode) error`; `github.com/BurntSushi/toml`; Phase 2's `memory.ScanSecrets(text string) (bool, string)` (test only, external test package).
 - Produces:
   - `var ErrNoCredentials, ErrInsecurePerms, ErrNotOwner, ErrBadKey error`
   - `var Providers = []string{"anthropic", "openai", "openrouter"}`; `var DefaultEnv map[string]string`
@@ -476,10 +504,43 @@ func TestRedact(t *testing.T) {
 }
 ```
 
+`internal/credentials/memscan_test.go` (reconciled, Plan decision 33; an external test package, so it may import `memory`):
+
+```go
+package credentials_test
+
+import (
+	"strings"
+	"testing"
+
+	"herdr-dots/internal/credentials"
+	"herdr-dots/internal/memory"
+)
+
+// Every provider key shape this package stores is also a secret to Phase 2's
+// memory scanner, so a model that echoes a key into a remember op (or a user
+// pasting one into memory) is refused, and Redact scrubs the same shapes from
+// logs and the feed (reconciled).
+func TestEveryProviderKeyShapeIsAMemorySecret(t *testing.T) {
+	for _, key := range []string{
+		"sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+		"sk-or-v1-0123456789abcdef0123456789abcdef0123456789abcdef",
+		"sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+	} {
+		if found, _ := memory.ScanSecrets("remember: the key is " + key); !found {
+			t.Errorf("memory.ScanSecrets misses %s…", key[:8])
+		}
+		if got := credentials.Redact("401: invalid key " + key); strings.Contains(got, key[len(key)-12:]) {
+			t.Errorf("Redact leaves %q", got)
+		}
+	}
+}
+```
+
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `GOTOOLCHAIN=local go test ./internal/credentials/`
-Expected: FAIL to compile (`undefined: File`, `undefined: Redact`).
+Expected: FAIL to compile (`undefined: File`, `undefined: Redact`, `undefined: credentials.Redact`).
 
 - [ ] **Step 3: Implement**
 
@@ -1216,7 +1277,7 @@ Apply this diff to `internal/config/config_test.go` (it switches both comparison
 ```diff
 --- a/internal/config/config_test.go
 +++ b/internal/config/config_test.go
-@@ -3,13 +3,14 @@
+@@ -3,13 +3,14 @@ package config
  import (
  	"os"
  	"path/filepath"
@@ -1232,17 +1293,17 @@ Apply this diff to `internal/config/config_test.go` (it switches both comparison
  		t.Fatalf("got %+v %v", c, err)
  	}
  }
-@@ -42,7 +43,7 @@
+@@ -42,7 +43,7 @@ func TestLoadBadTOMLReturnsDefaultsWithInjectOffAndError(t *testing.T) {
  	c, err := Load(p)
  	want := Default()
- 	want.InjectEnabled = false
+ 	want.InjectEnabled, want.MemoryEnabled = false, false
 -	if err == nil || c != want {
 +	if err == nil || !reflect.DeepEqual(c, want) {
- 		t.Fatalf("want defaults with inject off + error, got %+v %v", c, err)
+ 		t.Fatalf("want defaults with inject and memory off + error, got %+v %v", c, err)
  	}
  }
-@@ -53,3 +54,44 @@
- 		t.Fatal("durations")
+@@ -81,3 +82,44 @@ func TestCouncilDefaultsAndClamps(t *testing.T) {
+ 		t.Fatalf("clamped %+v", c.Council)
  	}
  }
 +
@@ -1298,12 +1359,13 @@ Expected: FAIL to compile (`c.SessionBudgetUSD undefined`, `c.Provider undefined
 ```diff
 --- a/internal/config/config.go
 +++ b/internal/config/config.go
-@@ -5,10 +5,12 @@
+@@ -5,11 +5,13 @@ import (
  	"errors"
  	"fmt"
  	"io/fs"
 +	"math"
  	"os"
+ 	"strings"
  	"time"
  
  	"github.com/BurntSushi/toml"
@@ -1311,36 +1373,36 @@ Expected: FAIL to compile (`c.SessionBudgetUSD undefined`, `c.Provider undefined
  )
  
  type Config struct {
-@@ -19,8 +21,25 @@
- 	RunTimeoutSeconds  int    `toml:"run_timeout_seconds"`
- 	TurnDebounceMs     int    `toml:"turn_debounce_ms"`
- 	InjectEnabled      bool   `toml:"inject_enabled"`
+@@ -27,8 +29,25 @@ type Config struct {
+ 	MemoryAutoApproveProject bool `toml:"memory_auto_approve_project"` // model-written project memory skips approval
+ 
+ 	Council CouncilConfig `toml:"council"` // [council] table (Phase 3)
 +
 +	// Phase 4: API backends and dollar budgets.
 +	SessionBudgetUSD float64                   `toml:"session_budget_usd"` // per pane; 0 = off
 +	Providers        map[string]ProviderConfig `toml:"providers"`          // [providers.<name>]
 +	ToolDenyGlobs    []string                  `toml:"tool_deny_globs"`    // added to the built-in deny-list
 +	PricesFile       string                    `toml:"prices_file"`        // "" = CONFIG_DIR/prices.toml
- }
- 
++}
++
 +// ProviderConfig is one [providers.<name>] table (anthropic, openai,
 +// openrouter, ollama). Keys never live here: api_key_env names a variable.
 +type ProviderConfig struct {
 +	APIKeyEnv    string            `toml:"api_key_env"`
 +	BaseURL      string            `toml:"base_url"`
 +	ExtraHeaders map[string]string `toml:"extra_headers"`
-+}
-+
+ }
+ 
 +// Provider returns the [providers.<name>] table (zero value when absent).
 +func (c Config) Provider(name string) ProviderConfig { return c.Providers[name] }
 +
- func Default() Config {
- 	return Config{
- 		DefaultBackend:     "claude-cli",
-@@ -64,6 +83,16 @@
- 	if c.SessionBudgetCalls < 1 {
- 		c.SessionBudgetCalls = 1
+ // Council merge modes ([council] merge).
+ const (
+ 	MergeChair = "chair" // a chair run merges the answers; plain merge if it fails
+@@ -122,6 +141,16 @@ func Load(path string) (Config, error) {
  	}
+ 	c.MemoryMaxEntries = min(max(c.MemoryMaxEntries, 10), 10000)
+ 	c.Council = c.Council.Normalized()
 +	if math.IsNaN(c.SessionBudgetUSD) || math.IsInf(c.SessionBudgetUSD, 0) || c.SessionBudgetUSD < 0 {
 +		c.SessionBudgetUSD = 0
 +	}
@@ -1610,7 +1672,7 @@ func validateAPI(d Dot) []error {
 ```diff
 --- a/internal/dots/dot.go
 +++ b/internal/dots/dot.go
-@@ -36,7 +36,7 @@
+@@ -36,7 +36,7 @@ func (m Mode) Next() Mode {
  }
  
  var (
@@ -1619,7 +1681,7 @@ func validateAPI(d Dot) []error {
  	Verbosities  = []string{"terse", "normal", "detailed"}
  	Colors       = []string{"red", "green", "yellow", "blue", "magenta", "cyan", "white"}
  )
-@@ -58,6 +58,14 @@
+@@ -59,6 +59,14 @@ type BackendSpec struct {
  	Kind  string   `toml:"kind"`
  	Model string   `toml:"model"`
  	Args  []string `toml:"args"`
@@ -1634,7 +1696,7 @@ func validateAPI(d Dot) []error {
  }
  
  type DeliverySpec struct {
-@@ -77,7 +85,8 @@
+@@ -78,7 +86,8 @@ type ContextSpec struct {
  }
  
  type BudgetSpec struct {
@@ -1643,11 +1705,11 @@ func validateAPI(d Dot) []error {
 +	MaxUSDPerSession   float64 `toml:"max_usd_per_session,omitzero"` // 0 = off
  }
  
- // New returns a dot with every default from the spec filled in.
-@@ -157,5 +166,6 @@
- 	if d.Budget.MaxCallsPerSession < 1 {
+ // ReservedName and ReservedSlug belong to council mode: council cards use
+@@ -171,5 +180,6 @@ func (d Dot) Validate() error {
  		add("budget max_calls_per_session must be >= 1")
  	}
+ 	errs = append(errs, d.Memory.validate()...)
 +	errs = append(errs, validateAPI(d)...)
  	return errors.Join(errs...)
  }
@@ -1896,7 +1958,7 @@ git commit -m "feat(state): usage records cache tokens and known USD cost per do
 - Test: `internal/backend/toolloop/tools_test.go`, `internal/backend/toolloop/driver_test.go`
 
 **Interfaces:**
-- Consumes: `pricing.Usage` and `(pricing.Usage) Add`; `doublestar/v4`; the `git` binary (optional: without a git work tree the file list comes from a walk).
+- Consumes: `pricing.Usage` and `(pricing.Usage) Add`; `textutil.SanitizeModelText` (the refusal log line, reconciled); `doublestar/v4`; the `git` binary (optional: without a git work tree the file list comes from a walk).
 - Produces:
   - `var ErrOutsideRoot` ("path outside project"), `var ErrDenied` ("path denied: it may hold secrets"), `var DefaultDeny []string`, `func Denied(rel string, globs []string) bool`, `func ResolveInRoot(root, p string, deny []string) (abs, rel string, err error)`
   - `type Tool struct{ Name, Description string; Schema map[string]any; Run func(ctx context.Context, args json.RawMessage) (string, error) }`
@@ -2205,6 +2267,24 @@ func TestToolErrorsGoBackToTheModel(t *testing.T) {
 	}
 	if len(logged) != 1 || !strings.Contains(logged[0], "path outside project") {
 		t.Fatalf("jail violation must be logged: %v", logged)
+	}
+}
+
+// The refusal log line carries model text (tool name and args): it is
+// sanitized like every other piece of model text (reconciled).
+func TestRefusalLogIsSanitized(t *testing.T) {
+	var logged []string
+	bad := Tool{Name: "read_file", Run: func(context.Context, json.RawMessage) (string, error) { return "", ErrDenied }}
+	s := &script{replies: []Reply{
+		{Calls: []Call{{ID: "a", Name: "read_file", Args: json.RawMessage("{\"path\":\".env\u009b2J\x7f\"}")}}},
+		{Text: "done"},
+	}}
+	d := Driver{Tools: []Tool{bad}, Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }}
+	if _, err := d.Run(context.Background(), s.turn); err != nil {
+		t.Fatal(err)
+	}
+	if len(logged) != 1 || strings.ContainsAny(logged[0], "\u009b\x7f") || !strings.Contains(logged[0], ".env") {
+		t.Fatalf("log line must be sanitized: %q", logged)
 	}
 }
 
@@ -2749,6 +2829,7 @@ import (
 	"fmt"
 
 	"herdr-dots/internal/pricing"
+	"herdr-dots/internal/textutil"
 )
 
 // Call is one tool call a model asked for.
@@ -2866,7 +2947,10 @@ func (d Driver) execute(ctx context.Context, c Call) Result {
 	text, err := tool.Run(ctx, args)
 	if err != nil {
 		if (errors.Is(err, ErrOutsideRoot) || errors.Is(err, ErrDenied)) && d.Logf != nil {
-			d.Logf("tool %s refused: %v (args %s)", c.Name, err, clip(string(args), 200))
+			// The name and args are model text: strip control characters
+			// before they reach the engine log (reconciled, Phase 2 rule).
+			line := fmt.Sprintf("tool %s refused: %v (args %s)", c.Name, err, clip(string(args), 200))
+			d.Logf("%s", textutil.SanitizeModelText(line))
 		}
 		res.Content, res.IsError = err.Error(), true
 		return res
@@ -5703,16 +5787,16 @@ git commit -m "feat(ollama): local /api/chat backend with explicit num_ctx and p
 
 ### Task 14: Engine: request fields, usage deltas, dollar budgets, views
 
-**Depends on:** Task 5, Task 6, Task 8 (Wave 3). **Shared files:** `internal/engine/engine.go` (Phase 2 memory hooks, Phase 3 council sink), `internal/engine/memory.go` (Phase 2), `internal/view/view.go` (Phase 2 and 3 fields), and possibly `internal/engine/council.go` (Phase 3, Step 7).
+**Depends on:** Task 5, Task 6, Task 8 (Wave 3). **Shared files:** `internal/engine/engine.go` (Phase 2 memory hooks, Phase 3 council sink), `internal/engine/memory.go` (Phase 2), `internal/engine/council.go` and `internal/council/council.go` (Phase 3), `internal/view/view.go` (Phase 2 and 3 fields), `internal/ui/summon/council.go` (Phase 3 popup). Every diff below is against the merged Phase 2 + Phase 3 code (reconciled) and applies with `git apply`.
 
 **Files:**
 - Create: `internal/engine/cost.go`
-- Modify: `internal/engine/filter.go`, `internal/engine/engine.go`, `internal/engine/memory.go`, `internal/view/view.go`
-- Test: `internal/engine/cost_test.go`, `internal/engine/memory_cost_test.go`
+- Modify: `internal/engine/filter.go`, `internal/engine/engine.go`, `internal/engine/memory.go`, `internal/engine/council.go`, `internal/council/council.go`, `internal/ui/summon/council.go`, `internal/view/view.go`
+- Test: `internal/engine/cost_test.go`, `internal/engine/memory_cost_test.go`, `internal/engine/council_cost_test.go`, `internal/council/dollars_test.go`, `internal/ui/summon/dollars_test.go`
 
 **Interfaces:**
-- Consumes: `dots.BackendSpec` Phase 4 fields, `dots.BudgetSpec.MaxUSDPerSession`; `state.Delta`, `(*Usage) Add/Cost/CostKnown/PaneCost`; `config.Config.SessionBudgetUSD`; `backend.Request`/`Result` Phase 4 fields; `credentials.Redact`; Phase 2's `MemoryInput`, `DecideMemory`, `runOpts.memoryPass`, `loadMemory`; v1 test helpers `newRigWith`, `dot`, `eventually`, `baseInput`, `pane`, `rig.attach`, `rig.turnEnds`.
-- Produces: `FilterInput.DotCostUSD, PaneCostUSD, DotBudgetUSD, PaneBudgetUSD float64`; `MemoryInput` gains the same four fields; `func OverUSD(cost, budget float64) bool`; unexported `requestFor`, `deltaOf`, `costDetail`, `withCost`; `view.DotState.CostUSD float64`, `CostUnknown bool`, `BudgetUSD float64`; `view.Pane.CostUSD, BudgetUSD float64`. Behavior: `runDot` sends the dot's effort, max tokens, base URL, context window and fallbacks; records a `state.Delta` (cost only when known); the feed shows the cost detail (Plan decision 19); `runFailed` redacts before logging; `Snapshot` fills the cost fields; `Decide` and `DecideMemory` stop at dollar budgets.
+- Consumes: `dots.BackendSpec` Phase 4 fields, `dots.BudgetSpec.MaxUSDPerSession`, `dots.DefaultModelFor`, `dots.KindAnthropicAPI`, `dots.DefaultAnthropicModel`; `state.Delta`, `(*Usage) Add/Cost/CostKnown/PaneCost`; `config.Config.SessionBudgetUSD`; `backend.Request`/`Result` Phase 4 fields; `credentials.Redact`; Phase 2's `MemoryInput`, `DecideMemory`, `runOpts.memoryPass`, `loadMemory`; Phase 3's `runOpts.sink/ctx/noForce`, `councilPlan`, `runChair` (takes `e.sem`), `council.Candidate`, `council.PlanInput`, `council.Preflight` (+`Select`/`finish`), `council.ReasonBudget`, `estimateLine` (summon popup); v1/Phase 3 test helpers `newRigWith`, `dot`, `eventually`, `baseInput`, `pane`, `rig.attach`, `rig.turnEnds`, `councilRig`, `councilBackend`, `member`, `seat`, `convene`, `councilCard`, `councilDone`, `says`, `step`, `goodDigest`; summon test helpers `councilSnap`, `run`, `fakeCaller`.
+- Produces: `FilterInput.DotCostUSD, PaneCostUSD, DotBudgetUSD, PaneBudgetUSD float64`; `MemoryInput` gains the same four fields; `func OverUSD(cost, budget float64) bool`; unexported `requestFor`, `deltaOf`, `costDetail`, `withCost`, `redactErr`; `view.DotState.CostUSD float64`, `CostUnknown bool`, `BudgetUSD float64`; `view.Pane.CostUSD, BudgetUSD float64`; `council.Candidate.OverUSD bool`; `council.PlanInput.PaneCostUSD, PaneBudgetUSD float64`; `council.Preflight.PaneCostUSD, PaneBudgetUSD float64` (JSON `pane_cost_usd`, `pane_budget_usd`). Behavior: `runDot` sends the dot's effort, max tokens, base URL, context window and fallbacks; records a `state.Delta` (cost only when known); the feed shows the cost detail (Plan decision 19); run errors are redacted before the log, the feed, a notification or a council sink; `Snapshot` fills the cost fields; `Decide` and `DecideMemory` stop at dollar budgets; the council chair records a `state.Delta` under the `council` slug, redacts its errors and, without `chair_model`, uses `dots.DefaultModelFor(kind)` when `chair_backend` differs from `default_backend`; the council preflight skips members past their dollar budget and refuses when the pane's dollar budget is spent; the popup's estimate line shows `$spent of $budget` (Plan decision 30).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5954,9 +6038,11 @@ Expected: FAIL to compile (`unknown field DotBudgetUSD in struct literal`, `p.Co
 package engine
 
 import (
+	"errors"
 	"fmt"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/state"
 )
@@ -6002,6 +6088,20 @@ func costDetail(d dots.Dot, res backend.Result) string {
 	return s
 }
 
+// redactErr scrubs key-shaped text from a run error before it reaches the
+// engine log, the feed, a council card or a notification (adapters redact
+// already; this is defense in depth). An error with nothing to scrub is
+// returned as is, so errors.Is still sees context.DeadlineExceeded.
+func redactErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if s := credentials.Redact(err.Error()); s != err.Error() {
+		return errors.New(s)
+	}
+	return err
+}
+
 // withCost appends the cost detail to a flagged run's message.
 func withCost(msg, detail string) string {
 	if msg == "" {
@@ -6045,15 +6145,15 @@ func withCost(msg, detail string) string {
  	return Decision{Run: true, Reason: ReasonRun, Turns: turns}
 ```
 
-`internal/view/view.go` (Phase 2 and 3 add their own fields to the same structs; keep theirs and add these):
+`internal/view/view.go` (against the merged Phase 2 + 3 structs, reconciled):
 
 ```diff
 --- a/internal/view/view.go
 +++ b/internal/view/view.go
-@@ -26,17 +26,24 @@
- 	Paused bool   `json:"paused"`
- 	Calls  int    `json:"calls"`
- 	Budget int    `json:"budget"`
+@@ -30,6 +30,10 @@ type DotState struct {
+ 
+ 	MemoryEntries int  `json:"memory_entries"` // this dot's entries for the pane's project
+ 	Learning      bool `json:"learning"`       // a memory pass is running
 +
 +	CostUSD     float64 `json:"cost_usd,omitempty"`
 +	CostUnknown bool    `json:"cost_unknown,omitempty"` // some runs had no price
@@ -6061,54 +6161,26 @@ func withCost(msg, detail string) string {
  }
  
  type Pane struct {
--	PaneID string            `json:"pane_id"`
--	Agent  string            `json:"agent"`
--	Source string            `json:"source"`
--	Calls  int               `json:"calls"`
--	Budget int               `json:"budget"`
--	Dots   []DotState        `json:"dots"`
--	Cards  []queue.Card      `json:"cards"`
--	Feed   []state.FeedEntry `json:"feed"`
-+	PaneID string     `json:"pane_id"`
-+	Agent  string     `json:"agent"`
-+	Source string     `json:"source"`
-+	Calls  int        `json:"calls"`
-+	Budget int        `json:"budget"`
-+	Dots   []DotState `json:"dots"`
-+
-+	CostUSD   float64           `json:"cost_usd,omitempty"`
-+	BudgetUSD float64           `json:"budget_usd,omitempty"` // 0 = off
-+	Cards     []queue.Card      `json:"cards"`
-+	Feed      []state.FeedEntry `json:"feed"`
- }
+@@ -47,6 +51,9 @@ type Pane struct {
+ 	MemoryEntries   int    `json:"memory_entries"`   // project + dot entries for this project
+ 	MemoryProposals int    `json:"memory_proposals"` // project entries awaiting approval
  
- type LibraryDot struct {
++	CostUSD   float64 `json:"cost_usd,omitempty"`   // known spend on this pane, council chair included
++	BudgetUSD float64 `json:"budget_usd,omitempty"` // 0 = off
++
+ 	Council          *CouncilState      `json:"council,omitempty"`           // a council in progress
+ 	CouncilPreflight *council.Preflight `json:"council_preflight,omitempty"` // the last preflight, for the popup
+ }
 ```
 
 - [ ] **Step 4: Wire `engine.go`**
 
-Apply this diff (shown against v1). Phase 2 rewrote the request literal in `runDot` and Phase 3 added a council branch, so two hunks need the post-Phase-2 form described right after the diff:
+Apply this diff (against the merged Phase 2 + 3 code, reconciled). It builds the request with `requestFor` (Phase 2's `Memory`/`Learn` and Phase 3's `noForce` stay), records `deltaOf(res)` instead of `Usage.Record` (this covers memory passes and council members, since both go through `runDot`), redacts a failed run's error before the council sink and `runFailed` see it, adds the cost detail to the pass and flagged feed lines (Phase 2's `memory pass: nothing new` and `suppressed` lines stay as they are), passes the dollar fields to both `Decide` and `DecideMemory`, and fills the snapshot's cost fields:
 
 ```diff
 --- a/internal/engine/engine.go
 +++ b/internal/engine/engine.go
-@@ -2,6 +2,7 @@
- 
- import (
- 	"context"
-+	"errors"
- 	"fmt"
- 	"sort"
- 	"strings"
-@@ -11,6 +12,7 @@
- 
- 	"herdr-dots/internal/backend"
- 	"herdr-dots/internal/config"
-+	"herdr-dots/internal/credentials"
- 	"herdr-dots/internal/dots"
- 	"herdr-dots/internal/herdr"
- 	"herdr-dots/internal/queue"
-@@ -407,6 +409,7 @@
+@@ -465,6 +465,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
  	var budgetHit []dots.Dot
  	e.mu.Lock()
  	paneCalls := e.d.Usage.PaneCalls(paneID)
@@ -6116,7 +6188,7 @@ Apply this diff (shown against v1). Phase 2 rewrote the request literal in `runD
  	_ = e.d.Attachments.Update(paneID, func(a *state.Attachment) {
  		if a.SessionValue != session {
  			return // the session changed under us; this read is stale
-@@ -432,6 +435,8 @@
+@@ -493,6 +494,8 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
  				Dot: d, Att: *da, NewTurns: newTurns, PausedAll: e.pausedAll,
  				DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls,
  				PaneBudget: e.config().SessionBudgetCalls,
@@ -6125,26 +6197,45 @@ Apply this diff (shown against v1). Phase 2 rewrote the request literal in `runD
  			})
  			da.LastSeenTurn = len(turns)
  			switch dec.Reason {
-@@ -533,12 +538,10 @@
+@@ -510,6 +513,8 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
+ 				if DecideMemory(MemoryInput{
+ 					Dot: d, Att: *da, NewTurns: memTurns, PausedAll: e.pausedAll, MemoryEnabled: e.config().MemoryEnabled,
+ 					DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls, PaneBudget: e.config().SessionBudgetCalls,
++					DotCostUSD: e.d.Usage.Cost(paneID, da.Slug), PaneCostUSD: paneCost,
++					DotBudgetUSD: d.Budget.MaxUSDPerSession, PaneBudgetUSD: e.config().SessionBudgetUSD,
+ 				}) {
+ 					e.running[k] = true
+ 					paneCalls++
+@@ -624,12 +629,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
+ 		return
  	}
- 	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
- 	defer cancel()
--	res, err := be.Run(ctx, backend.Request{
+ 	mem := e.loadMemory(&att, d, turns) // outside every engine lock
+-	req := backend.Request{
 -		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
 -		Model: d.Backend.Model, Args: d.Backend.Args, RepoRead: d.Context.RepoRead,
--		Cwd: att.Cwd, Turns: turns, Question: o.question, Force: o.summon,
--	})
--	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
+-		Cwd: att.Cwd, Turns: turns, Question: o.question, Force: o.summon && !o.noForce,
+-		Memory: mem.block, Learn: mem.learn,
+-	}
 +	req := requestFor(d, att.Cwd)
-+	req.Turns, req.Question, req.Force = turns, o.question, o.summon
-+	res, err := be.Run(ctx, req)
++	req.Turns, req.Question, req.Force = turns, o.question, o.summon && !o.noForce
++	req.Memory, req.Learn = mem.block, mem.learn
+ 	if o.memoryPass {
+ 		if mem.project == "" {
+ 			return // no project: the pass's ops could not be stored, so skip the call
+@@ -639,8 +641,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
+ 	ctx, cancel := context.WithTimeout(base, e.config().RunTimeout())
+ 	defer cancel()
+ 	res, err := be.Run(ctx, req)
+-	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
 +	_ = e.d.Usage.Add(paneID, d.Slug, deltaOf(res))
  	if err != nil {
++		err = redactErr(err) // defense in depth: adapters redact already
+ 		sinkErr = err
  		e.runFailed(k, d, turn, err)
  		return
-@@ -552,16 +555,17 @@
+@@ -682,11 +685,11 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
  		}
- 	})
+ 	}
  	if !res.Verdict.Relevant {
 -		e.feed(paneID, d.Slug, turn, state.OutcomePass, "")
 +		e.feed(paneID, d.Slug, turn, state.OutcomePass, costDetail(d, res))
@@ -6154,30 +6245,30 @@ Apply this diff (shown against v1). Phase 2 rewrote the request literal in `runD
 -	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, res.Verdict.Message)
 +	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, withCost(res.Verdict.Message, costDetail(d, res)))
  	e.setStatus(k, view.StatusFlagged)
- 	e.route(paneID, d, turn, res.Verdict, o)
+ 	if o.sink != nil {
+ 		return // council member: the council turns every answer into one card
+@@ -695,6 +698,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
  }
  
  func (e *Engine) runFailed(k key, d dots.Dot, turn int, err error) {
-+	err = errors.New(credentials.Redact(err.Error())) // defense in depth: adapters redact already
++	err = redactErr(err) // defense in depth: adapters redact already
  	e.d.Logf("dot %s on %s: %v", d.Slug, k.pane, err)
  	e.feed(k.pane, d.Slug, turn, state.OutcomeError, err.Error())
  	e.setStatus(k, view.StatusError)
-@@ -660,7 +664,8 @@
- 	seen := map[string]bool{}
- 	for _, a := range e.d.Attachments.List() {
+@@ -796,6 +800,7 @@ func (e *Engine) Snapshot() view.Snapshot {
+ 		ms := e.memStats[a.ProjectID]
  		pv := view.Pane{PaneID: a.PaneID, Agent: a.Agent, Source: a.Source,
--			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls}
-+			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls,
-+			CostUSD: e.d.Usage.PaneCost(a.PaneID), BudgetUSD: e.config().SessionBudgetUSD}
+ 			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls,
++			CostUSD: e.d.Usage.PaneCost(a.PaneID), BudgetUSD: e.config().SessionBudgetUSD,
+ 			ProjectID: a.ProjectID, ProjectName: a.ProjectName, MemoryEntries: ms.Total(), MemoryProposals: ms.Proposals}
  		for _, da := range a.Dots {
  			d, ok := e.dots[da.Slug]
- 			if !ok {
-@@ -675,7 +680,9 @@
- 			}
+@@ -812,7 +817,9 @@ func (e *Engine) Snapshot() view.Snapshot {
  			pv.Dots = append(pv.Dots, view.DotState{Slug: da.Slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
  				Mode: string(d.Delivery.Mode), Status: st, Paused: da.Paused,
--				Calls: e.d.Usage.Calls(a.PaneID, da.Slug), Budget: d.Budget.MaxCallsPerSession})
-+				Calls: e.d.Usage.Calls(a.PaneID, da.Slug), Budget: d.Budget.MaxCallsPerSession,
+ 				Calls: e.d.Usage.Calls(a.PaneID, da.Slug), Budget: d.Budget.MaxCallsPerSession,
+-				MemoryEntries: ms.Entries[da.Slug], Learning: e.learning[key{a.PaneID, da.Slug}]})
++				MemoryEntries: ms.Entries[da.Slug], Learning: e.learning[key{a.PaneID, da.Slug}],
 +				CostUSD: e.d.Usage.Cost(a.PaneID, da.Slug), CostUnknown: !e.d.Usage.CostKnown(a.PaneID, da.Slug),
 +				BudgetUSD: d.Budget.MaxUSDPerSession})
  		}
@@ -6185,104 +6276,417 @@ Apply this diff (shown against v1). Phase 2 rewrote the request literal in `runD
  		pv.Feed = e.d.Feed.Recent(a.PaneID, 20)
 ```
 
-**Post-Phase-2 forms (make these edits by hand if the hunks don't apply):**
-
-1. In `runDot`, Phase 2's request literal looks like this:
-
-```go
-	mem := e.loadMemory(&att, d, turns) // outside every engine lock
-	req := backend.Request{
-		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
-		Model: d.Backend.Model, Args: d.Backend.Args, RepoRead: d.Context.RepoRead,
-		Cwd: att.Cwd, Turns: turns, Question: o.question, Force: o.summon,
-		Memory: mem.block, Learn: mem.learn,
-	}
-```
-
-Replace it with the lines below, keeping Phase 2's `if o.memoryPass { … }` block after it unchanged:
-
-```go
-	mem := e.loadMemory(&att, d, turns) // outside every engine lock
-	req := requestFor(d, att.Cwd)
-	req.Turns, req.Question, req.Force = turns, o.question, o.summon
-	req.Memory, req.Learn = mem.block, mem.learn
-```
-
-2. Replace `_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)` (it sits right after `be.Run`) with `_ = e.d.Usage.Add(paneID, d.Slug, deltaOf(res))`. This covers memory passes and council members too, since both go through `runDot`.
-3. In the review path, `e.feed(paneID, d.Slug, turn, state.OutcomePass, "")` becomes `e.feed(paneID, d.Slug, turn, state.OutcomePass, costDetail(d, res))`, and the flagged `e.feed(…, state.OutcomeFlagged, res.Verdict.Message)` becomes `e.feed(…, state.OutcomeFlagged, withCost(res.Verdict.Message, costDetail(d, res)))`. Leave Phase 2's `memory pass: nothing new` and `suppressed` feed lines alone.
-4. In `Snapshot`, add the cost fields to Phase 2's longer `view.Pane{…}` and `view.DotState{…}` literals: `CostUSD: e.d.Usage.PaneCost(a.PaneID), BudgetUSD: e.config().SessionBudgetUSD` on the pane, and `CostUSD: e.d.Usage.Cost(a.PaneID, da.Slug), CostUnknown: !e.d.Usage.CostKnown(a.PaneID, da.Slug), BudgetUSD: d.Budget.MaxUSDPerSession` on each dot.
-5. If Phase 2 still reads `e.d.Config` in any line you touch, use `e.config()` (the base reads config at the point of use).
-
 - [ ] **Step 5: Add dollar budgets to Phase 2's memory passes**
 
-In `internal/engine/memory.go`, add four fields at the end of `MemoryInput`:
+`internal/engine/memory.go` (the Step 4 diff already passes the four fields in `processPaneLocked`):
 
-```go
-	// Dollar budgets (Phase 4), as in FilterInput; a budget <= 0 is off.
-	DotCostUSD    float64
-	PaneCostUSD   float64
-	DotBudgetUSD  float64
-	PaneBudgetUSD float64
-```
-
-In `DecideMemory`, add a case right after the call-budget case (`case in.DotCalls >= in.Dot.Budget.MaxCallsPerSession, in.PaneCalls >= in.PaneBudget:`):
-
-```go
-	case OverUSD(in.DotCostUSD, in.DotBudgetUSD), OverUSD(in.PaneCostUSD, in.PaneBudgetUSD):
-		return false
-```
-
-In `engine.go` `processPaneLocked`, add the fields to the `DecideMemory(MemoryInput{…})` literal (the Step 4 diff already declares `paneCost` next to `paneCalls`):
-
-```go
-					DotCostUSD: e.d.Usage.Cost(paneID, da.Slug), PaneCostUSD: paneCost,
-					DotBudgetUSD: d.Budget.MaxUSDPerSession, PaneBudgetUSD: e.config().SessionBudgetUSD,
+```diff
+--- a/internal/engine/memory.go
++++ b/internal/engine/memory.go
+@@ -31,6 +31,12 @@ type MemoryInput struct {
+ 	DotCalls      int
+ 	PaneCalls     int
+ 	PaneBudget    int
++
++	// Dollar budgets (Phase 4), as in FilterInput; a budget <= 0 is off.
++	DotCostUSD    float64
++	PaneCostUSD   float64
++	DotBudgetUSD  float64
++	PaneBudgetUSD float64
+ }
+ 
+ // DecideMemory reports whether an observe-mode dot should run a memory pass
+@@ -47,6 +53,8 @@ func DecideMemory(in MemoryInput) bool {
+ 		return false
+ 	case in.DotCalls >= in.Dot.Budget.MaxCallsPerSession, in.PaneCalls >= in.PaneBudget:
+ 		return false
++	case OverUSD(in.DotCostUSD, in.DotBudgetUSD), OverUSD(in.PaneCostUSD, in.PaneBudgetUSD):
++		return false
+ 	}
+ 	for _, t := range in.NewTurns {
+ 		if !t.IsFromDot(in.Dot.Name) {
 ```
 
 - [ ] **Step 6: Run the tests to see them pass**
 
 Run: `GOTOOLCHAIN=local go test -race ./internal/engine/ ./internal/view/`
-Expected: PASS, including every v1 and Phase 2/3 engine test (`TestDecide`, the budget tests, `TestDecideMemory`).
+Expected: PASS, including every v1 and Phase 2/3 engine test (`TestDecide`, the budget tests, `TestDecideMemory`, the council tests).
 
-- [ ] **Step 7: Phase 3 council preflight (only if `internal/engine/council.go` exists)**
+- [ ] **Step 7: Council: dollar budgets, chair cost, redaction, chair model (reconciled)**
 
-Run: `grep -n "func (e \*Engine) CouncilPreflight" internal/engine/council.go`. If there's no match, skip this step. Otherwise open the function: where it decides that a member is over its call budget (a comparison against `MaxCallsPerSession`), extend the same condition with `|| OverUSD(e.d.Usage.Cost(paneID, d.Slug), d.Budget.MaxUSDPerSession)`; and where it compares the pane's calls with `SessionBudgetCalls`, extend that with `|| OverUSD(e.d.Usage.PaneCost(paneID), e.config().SessionBudgetUSD)`. Then add this test to `internal/engine/cost_test.go`, using the Phase 3 preflight result's existing "member over budget" field (adapt the field name from `council.Preflight`):
+Phase 3 is merged, so this step is no longer conditional (Plan decision 30). Members already run through `runDot` (Step 4 covers their usage, cost and redaction); the chair runs through `runChair`, and the preflight lives in `internal/council`.
+
+Write the failing tests.
+
+`internal/council/dollars_test.go`:
 
 ```go
-func TestCouncilPreflightCountsDollars(t *testing.T) {
-	be := &costBE{res: backend.Result{Verdict: backend.Verdict{Severity: "info"}, CostUSD: 1, CostKnown: true}}
-	d := apiDot("Security")
-	d.Budget.MaxUSDPerSession = 0.5
-	r := costRig(t, be, 0, d)
-	r.attach(t, "security")
-	_ = r.usage.Add(pane, "security", state.Delta{Calls: 1, CostUSD: 0.6, CostKnown: true})
-	pf, err := r.e.CouncilPreflight(pane, []string{"security"})
-	if err != nil {
-		t.Fatal(err)
+package council
+
+import "testing"
+
+// Phase 4: a member past its max_usd_per_session sits out like a member out
+// of calls, and a pane past session_budget_usd refuses the council, even
+// after the popup narrows the selection.
+func TestPlanCountsDollarBudgets(t *testing.T) {
+	p := Plan(PlanInput{Candidates: []Candidate{
+		{Slug: "security", CallsLeft: 40, OverUSD: true},
+		{Slug: "frontend", CallsLeft: 40},
+	}, Rounds: 1, PaneLeft: 100})
+	if len(p.Members) != 1 || p.Members[0] != "frontend" || p.Reasons["security"] != ReasonBudget || !p.Allowed {
+		t.Fatalf("member dollars: %+v", p)
 	}
-	// Replace OverBudget with the Preflight field Phase 3 uses for members it would skip.
-	if len(pf.OverBudget) != 1 {
-		t.Fatalf("preflight %+v: a member past its dollar budget is reported", pf)
+	in := PlanInput{Candidates: []Candidate{{Slug: "security", CallsLeft: 40}, {Slug: "frontend", CallsLeft: 40}},
+		Rounds: 1, PaneLeft: 100, Chair: true, PaneCostUSD: 2.5, PaneBudgetUSD: 2}
+	const why = "pane dollar budget reached: $2.50 of $2.00 spent"
+	if p := Plan(in); p.Allowed || p.Refusal != why || p.PaneCostUSD != 2.5 || p.PaneBudgetUSD != 2 {
+		t.Fatalf("pane dollars: %+v", p)
+	}
+	if p := Plan(in).Select([]string{"frontend"}); p.Allowed || p.Refusal != why {
+		t.Fatalf("Select keeps the dollar refusal: %+v", p)
+	}
+	in.PaneBudgetUSD = 0 // off
+	if p := Plan(in); !p.Allowed {
+		t.Fatalf("a zero dollar budget is off: %+v", p)
 	}
 }
 ```
 
-Run: `GOTOOLCHAIN=local go test -race ./internal/engine/ -run Council`
-Expected: PASS.
+`internal/ui/summon/dollars_test.go`:
+
+```go
+package summon
+
+import (
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"herdr-dots/internal/council"
+)
+
+// Phase 4: the council estimate shows the pane's dollar spend when a pane
+// dollar budget is set, and a pane past it refuses the council.
+func TestCouncilEstimateShowsDollarSpend(t *testing.T) {
+	in := council.PlanInput{Candidates: []council.Candidate{{Slug: "security", CallsLeft: 40}, {Slug: "frontend", CallsLeft: 40}},
+		Rounds: 1, MaxMembers: 8, PaneLeft: 50, Chair: true, PaneCostUSD: 0.42, PaneBudgetUSD: 2}
+	if got, want := estimateLine(council.Plan(in)), "estimate: 3 calls (2 dots × 1 round + chair) · 50 left · $0.42 of $2.00 spent"; got != want {
+		t.Fatalf("estimate %q, want %q", got, want)
+	}
+	in.PaneBudgetUSD = 0
+	if got := estimateLine(council.Plan(in)); strings.Contains(got, "$") {
+		t.Fatalf("no dollar budget, no dollars: %q", got)
+	}
+	in.PaneCostUSD, in.PaneBudgetUSD = 2.5, 2
+	pf := council.Plan(in)
+	fc := &fakeCaller{}
+	var m tea.Model = NewCouncil("w1:p1", fc)
+	m, _ = m.Update(councilSnap(&pf))
+	if !strings.Contains(m.View(), "pane dollar budget reached: $2.50 of $2.00 spent") {
+		t.Fatal(m.View())
+	}
+	if _, _ = run(m, "enter"); len(fc.calls) != 0 {
+		t.Fatalf("a refused council must not be sent: %v", fc.calls)
+	}
+}
+```
+
+`internal/engine/council_cost_test.go`:
+
+```go
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+
+	"herdr-dots/internal/backend"
+	"herdr-dots/internal/config"
+	"herdr-dots/internal/council"
+	"herdr-dots/internal/dots"
+	"herdr-dots/internal/state"
+)
+
+// pricedCouncil is councilBackend with a known price on every answer, as an
+// API backend reports it.
+type pricedCouncil struct {
+	*councilBackend
+	usd float64
+}
+
+func (p pricedCouncil) Run(ctx context.Context, r backend.Request) (backend.Result, error) {
+	res, err := p.councilBackend.Run(ctx, r)
+	res.CostUSD, res.CostKnown = p.usd, true
+	return res, err
+}
+
+// Phase 4 with Phase 3: a member past its dollar budget sits out, and a pane
+// past its dollar budget refuses the council.
+func TestCouncilPreflightCountsDollars(t *testing.T) {
+	sec := member("Security", dots.ModeQueue)
+	sec.Budget.MaxUSDPerSession = 0.5
+	r, cb := councilRig(t, func(c *config.Config) { c.SessionBudgetUSD = 5 }, sec, member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	_ = r.usage.Add(pane, "security", state.Delta{Calls: 1, CostUSD: 0.6, CostKnown: true})
+	pf, err := r.e.CouncilPreflight(pane, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(pf.Members, ",") != "frontend" || pf.Reasons["security"] != council.ReasonBudget || !pf.Allowed ||
+		pf.PaneCostUSD != 0.6 || pf.PaneBudgetUSD != 5 {
+		t.Fatalf("preflight %+v: a member past its dollar budget is skipped", pf)
+	}
+	_ = r.usage.Add(pane, "frontend", state.Delta{Calls: 1, CostUSD: 4.5, CostKnown: true})
+	const why = "pane dollar budget reached: $5.10 of $5.00 spent"
+	if _, err := r.e.Council(context.Background(), pane, "", nil); err == nil || err.Error() != why {
+		t.Fatalf("council: %v", err)
+	}
+	if cb.total() != 0 {
+		t.Fatalf("a refused council spends nothing, got %d calls", cb.total())
+	}
+}
+
+// The chair's spend is recorded under the council slug, so it counts toward
+// the pane's dollar budget like its calls count toward the call budget.
+func TestCouncilChairDollarsCountAgainstThePane(t *testing.T) {
+	cb := &councilBackend{script: map[string][]step{}}
+	r := newRigWith(t, func(d *Deps) {
+		d.Backend = func(string) (backend.Backend, error) { return pricedCouncil{cb, 0.25}, nil }
+	}, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	cb.on("Security", says("warn", "JWT in localStorage."))
+	cb.on("Frontend", says("warn", "No loading state."))
+	cb.on(council.ChairName, says("warn", goodDigest))
+	convene(t, r, "")
+	councilCard(t, r)
+	councilDone(t, r)
+	if got := r.usage.Cost(pane, "council"); got != 0.25 {
+		t.Fatalf("chair cost %v", got)
+	}
+	if got := r.usage.PaneCost(pane); got != 0.75 {
+		t.Fatalf("pane cost %v: members and chair", got)
+	}
+	if p, _ := r.e.Snapshot().Pane(pane); p.CostUSD != 0.75 {
+		t.Fatalf("snapshot pane cost %v", p.CostUSD)
+	}
+}
+
+// Key material in a member's or the chair's error never reaches the card,
+// the feed or the engine log.
+func TestCouncilErrorsAreRedacted(t *testing.T) {
+	const leak = "sk-ant-api03-LEAKEDLEAKED123"
+	cb := &councilBackend{script: map[string][]step{}}
+	var logMu sync.Mutex
+	var logs []string
+	r := newRigWith(t, func(d *Deps) {
+		d.Backend = func(string) (backend.Backend, error) { return cb, nil }
+		d.Logf = func(f string, a ...any) { logMu.Lock(); logs = append(logs, fmt.Sprintf(f, a...)); logMu.Unlock() }
+	}, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue), member("Copy", dots.ModeQueue))
+	seat(t, r, "security", "frontend", "copy")
+	cb.on("Security", says("warn", "JWT in localStorage."))
+	cb.on("Frontend", says("warn", "No loading state."))
+	cb.on("Copy", step{err: errors.New("401 invalid x-api-key " + leak)})
+	cb.on(council.ChairName, step{err: errors.New("401 invalid x-api-key " + leak)})
+	convene(t, r, "")
+	c := councilCard(t, r)
+	councilDone(t, r)
+	if s := fmt.Sprintf("%+v", c); strings.Contains(s, "LEAKED") {
+		t.Fatalf("key on the card: %s", s)
+	}
+	if !strings.Contains(c.Note, "merged without chair") || !strings.Contains(c.Parts[2].Body, "error:") {
+		t.Fatalf("card %+v", c)
+	}
+	if s := fmt.Sprintf("%+v", r.e.Snapshot()); strings.Contains(s, "LEAKED") {
+		t.Fatal("key in a snapshot")
+	}
+	logMu.Lock()
+	defer logMu.Unlock()
+	for _, l := range logs {
+		if strings.Contains(l, "LEAKED") {
+			t.Fatalf("key in the engine log: %s", l)
+		}
+	}
+}
+
+// default_model belongs to default_backend: an API chair without chair_model
+// gets its own kind's default, never "sonnet".
+func TestAPIChairGetsItsKindsDefaultModel(t *testing.T) {
+	r, cb := councilRig(t, func(c *config.Config) { c.Council.ChairBackend = dots.KindAnthropicAPI },
+		member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	seat(t, r, "security", "frontend")
+	cb.on("Security", says("warn", "JWT in localStorage."))
+	cb.on("Frontend", says("warn", "No loading state."))
+	cb.on(council.ChairName, says("warn", goodDigest))
+	convene(t, r, "")
+	councilCard(t, r)
+	councilDone(t, r)
+	if ch := cb.callsFor(council.ChairName); len(ch) != 1 || ch[0].Model != dots.DefaultAnthropicModel {
+		t.Fatalf("chair requests %+v", ch)
+	}
+}
+```
+
+Run: `GOTOOLCHAIN=local go test ./internal/council/ ./internal/ui/summon/ ./internal/engine/ -run 'Dollar|Council|Chair'`
+Expected: FAIL to compile (`unknown field OverUSD in struct literal`, `unknown field PaneCostUSD`).
+
+Implement.
+
+`internal/council/council.go`:
+
+```diff
+--- a/internal/council/council.go
++++ b/internal/council/council.go
+@@ -84,6 +84,7 @@ type Candidate struct {
+ 	Paused    bool // paused on this pane, or every dot is paused
+ 	Unknown   bool // its dot file is gone
+ 	CallsLeft int  // max_calls_per_session minus calls already made on this pane
++	OverUSD   bool // its max_usd_per_session is spent on this pane (Phase 4)
+ }
+ 
+ // PlanInput is everything Plan needs.
+@@ -93,6 +94,10 @@ type PlanInput struct {
+ 	MaxMembers int         // 0 = no limit
+ 	PaneLeft   int         // calls left in the pane's session budget
+ 	Chair      bool        // merge = "chair": a council of 2+ members may cost one more call
++
++	// Phase 4: the pane's known spend and its session_budget_usd (0 = off).
++	PaneCostUSD   float64
++	PaneBudgetUSD float64
+ }
+ 
+ // Preflight is who would sit on a council and what it would cost. The engine
+@@ -107,6 +112,8 @@ type Preflight struct {
+ 	EstimatedCalls int               `json:"estimated_calls"`
+ 	Allowed        bool              `json:"allowed"`
+ 	Refusal        string            `json:"refusal,omitempty"`
++	PaneCostUSD    float64           `json:"pane_cost_usd,omitempty"`   // known spend on the pane (Phase 4)
++	PaneBudgetUSD  float64           `json:"pane_budget_usd,omitempty"` // session_budget_usd; 0 = off
+ }
+ 
+ // EstimateCalls is the worst-case cost of a council: every member in every
+@@ -122,7 +129,8 @@ func EstimateCalls(members, rounds int, chair bool) int {
+ // Plan decides eligibility (paused, unknown, out of budget, over max_members)
+ // and whether the pane budget covers the whole council.
+ func Plan(in PlanInput) Preflight {
+-	p := Preflight{Rounds: max(1, in.Rounds), PaneLeft: in.PaneLeft, Chair: in.Chair}
++	p := Preflight{Rounds: max(1, in.Rounds), PaneLeft: in.PaneLeft, Chair: in.Chair,
++		PaneCostUSD: in.PaneCostUSD, PaneBudgetUSD: in.PaneBudgetUSD}
+ 	for _, c := range in.Candidates {
+ 		reason := ""
+ 		switch {
+@@ -130,7 +138,7 @@ func Plan(in PlanInput) Preflight {
+ 			reason = ReasonUnknown
+ 		case c.Paused:
+ 			reason = ReasonPaused
+-		case c.CallsLeft < p.Rounds:
++		case c.CallsLeft < p.Rounds, c.OverUSD:
+ 			reason = ReasonBudget
+ 		case in.MaxMembers > 0 && len(p.Members) >= in.MaxMembers:
+ 			reason = ReasonMaxMembers
+@@ -174,6 +182,9 @@ func (p Preflight) finish(empty string) Preflight {
+ 	switch {
+ 	case len(p.Members) == 0:
+ 		p.Allowed, p.Refusal = false, empty
++	case p.PaneBudgetUSD > 0 && p.PaneCostUSD >= p.PaneBudgetUSD:
++		p.Allowed = false
++		p.Refusal = fmt.Sprintf("pane dollar budget reached: $%.2f of $%.2f spent", p.PaneCostUSD, p.PaneBudgetUSD)
+ 	case p.EstimatedCalls > p.PaneLeft:
+ 		p.Allowed = false
+ 		p.Refusal = fmt.Sprintf("pane budget too low: this council needs %d calls, %d left", p.EstimatedCalls, max(0, p.PaneLeft))
+```
+
+`internal/ui/summon/council.go`:
+
+```diff
+--- a/internal/ui/summon/council.go
++++ b/internal/ui/summon/council.go
+@@ -231,7 +231,11 @@ func estimateLine(p council.Preflight) string {
+ 	if p.Chair && len(p.Members) >= 2 {
+ 		s += " + chair"
+ 	}
+-	return s + fmt.Sprintf(") · %d left", p.PaneLeft)
++	s += fmt.Sprintf(") · %d left", p.PaneLeft)
++	if p.PaneBudgetUSD > 0 { // Phase 4: API dots spend dollars too
++		s += fmt.Sprintf(" · $%.2f of $%.2f spent", p.PaneCostUSD, p.PaneBudgetUSD)
++	}
++	return s
+ }
+ 
+ // questionWidth is the question input's visible width for a terminal width
+```
+
+`internal/engine/council.go`:
+
+```diff
+--- a/internal/engine/council.go
++++ b/internal/engine/council.go
+@@ -99,12 +99,14 @@ func (e *Engine) councilPlan(att state.Attachment, slugs []string) (council.Pref
+ 		c := council.Candidate{Slug: da.Slug, Paused: da.Paused || pausedAll, Unknown: !ok}
+ 		if ok {
+ 			c.CallsLeft = callsLeft(d.Budget.MaxCallsPerSession, e.d.Usage.Calls(att.PaneID, da.Slug))
++			c.OverUSD = OverUSD(e.d.Usage.Cost(att.PaneID, da.Slug), d.Budget.MaxUSDPerSession)
+ 		}
+ 		cands = append(cands, c)
+ 	}
+ 	pf := council.Plan(council.PlanInput{
+ 		Candidates: cands, Rounds: cc.Rounds, MaxMembers: cc.MaxMembers,
+ 		PaneLeft: callsLeft(cfg.SessionBudgetCalls, e.d.Usage.PaneCalls(att.PaneID)), Chair: cc.Merge == config.MergeChair,
++		PaneCostUSD: e.d.Usage.PaneCost(att.PaneID), PaneBudgetUSD: cfg.SessionBudgetUSD,
+ 	})
+ 	if slugs != nil { // nil = every eligible dot; an explicit empty selection leaves no members
+ 		pf = pf.Select(slugs)
+@@ -370,10 +372,15 @@ func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.Counc
+ 	}
+ 	if model == "" {
+ 		model = cfg.DefaultModel
++		if kind != cfg.DefaultBackend {
++			// default_model belongs to default_backend: an anthropic-api chair
++			// must not be asked for "sonnet" (Phase 4).
++			model = dots.DefaultModelFor(kind)
++		}
+ 	}
+ 	be, err := e.d.Backend(kind)
+ 	if err != nil {
+-		return "", err
++		return "", redactErr(err)
+ 	}
+ 	n := 1
+ 	for _, d := range run.members {
+@@ -395,9 +402,9 @@ func (e *Engine) runChair(run *councilRun, parts []council.Part, cc config.Counc
+ 	ctx, cancel := context.WithTimeout(run.ctx, cfg.RunTimeout())
+ 	defer cancel()
+ 	res, err := be.Run(ctx, req)
+-	_ = e.d.Usage.Record(run.paneID, councilSlug, res.InputTokens, res.OutputTokens)
++	_ = e.d.Usage.Add(run.paneID, councilSlug, deltaOf(res)) // the chair's dollars count against the pane
+ 	if err != nil {
+-		return "", err
++		return "", redactErr(err)
+ 	}
+ 	if !res.Verdict.Relevant || strings.TrimSpace(textutil.SanitizeModelText(res.Verdict.Message)) == "" {
+ 		return "", errors.New("the chair returned no digest")
+```
+
+Run: `GOTOOLCHAIN=local go test -race ./internal/council/ ./internal/ui/summon/ ./internal/engine/`
+Expected: PASS, including Phase 3's `TestCouncilMergesMembersThroughTheChair` (the chair keeps `sonnet` when `chair_backend` is empty, i.e. the default backend) and `TestCouncilPreflightRefusesWhenThePaneBudgetIsShort`.
 
 - [ ] **Step 8: Full check and commit**
 
 ```bash
 gofmt -l . ; GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
-git add internal/engine internal/view
-git commit -m "feat(engine): API request fields, usage deltas with USD, dollar budgets, cost in feed and snapshots"
+git add internal/engine internal/view internal/council internal/ui/summon
+git commit -m "feat(engine): API request fields, usage deltas with USD, dollar budgets (dots, panes, memory passes, councils), cost in feed and snapshots"
 ```
 
 ---
 
 ### Task 15: Manage editor and Providers screen
 
-**Depends on:** Task 2, Task 5 (Wave 3). **Shared file:** `internal/ui/manage/model.go` (Phase 2's memory screen and `M`/`P` keys). Keep Phase 2's additions; the hunks below add to the same `Deps`, screen enum, `Update` switch and library keys.
+**Depends on:** Task 2, Task 5 (Wave 3). **Shared file:** `internal/ui/manage/model.go` (Phase 2's memory screen, `M`/`P` keys, `Memory`/`Project` deps and the delete-memory question). The `model.go` diff is against that merged code (reconciled): Phase 4's fields follow `Project` in `Deps`, `scrProviders` follows `scrConfirmMemory`, and `K providers` joins the help line before Phase 2's `M memory · P project memory`.
 
 **Files:**
 - Create: `internal/ui/manage/providers.go`
@@ -7042,10 +7446,10 @@ func (m Model) providersView() string {
 ```diff
 --- a/internal/ui/manage/model.go
 +++ b/internal/ui/manage/model.go
-@@ -26,6 +26,14 @@
- 	DotsDir string
- 	Check   func(ctx context.Context, kind string) error // backend CLI present?
- 	NewDot  func() dots.Dot                              // blank dot with config defaults; nil → dots.New("")
+@@ -31,6 +31,14 @@ type Deps struct {
+ 
+ 	Memory  *memory.Store                               // nil: memory off (no M/P, no memory step on delete)
+ 	Project func(target string) (memory.Project, error) // the target pane's project when the snapshot lacks it; may be nil
 +
 +	// Phase 4 (all optional).
 +	CheckDot  func(ctx context.Context, d dots.Dot) error              // runs on save instead of Check: key + model
@@ -7057,11 +7461,11 @@ func (m Model) providersView() string {
  }
  
  type SnapshotMsg view.Snapshot
-@@ -40,6 +48,11 @@
+@@ -53,6 +61,11 @@ type (
+ 		name  string
+ 		files int
  	}
- 	deletedMsg  struct{ name string }
- 	reloadedMsg struct{}
-+	modelsMsg   struct {
++	modelsMsg struct {
 +		kind string
 +		ids  []string
 +		err  error
@@ -7069,18 +7473,18 @@ func (m Model) providersView() string {
  )
  
  type screen int
-@@ -49,6 +62,7 @@
- 	scrTemplates
- 	scrEditor
+@@ -64,6 +77,7 @@ const (
  	scrConfirm
-+	scrProviders
+ 	scrMemory        // the memory browser (memui)
+ 	scrConfirmMemory // after deleting a dot: also delete its memory?
++	scrProviders     // API keys and the Ollama server (Phase 4)
  )
  
  type Model struct {
-@@ -68,10 +82,11 @@
- 	delSlug   string // dot the confirm screen asks about, fixed when D is pressed
- 	delName   string
+@@ -85,10 +99,11 @@ type Model struct {
  	width     int
+ 	height    int
+ 	mem       *memui.Model // open memory browser (scrMemory)
 +	prov      *providers
  }
  
@@ -7090,8 +7494,8 @@ func (m Model) providersView() string {
  }
  
  func (m Model) Init() tea.Cmd { return nil }
-@@ -131,6 +146,16 @@
- 		m.status = "deleted " + msg.name
+@@ -184,6 +199,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+ 		}
  		return m, m.reload()
  	case reloadedMsg:
 +	case providersMsg, keyStoredMsg, keyTestedMsg, refreshedMsg:
@@ -7107,16 +7511,16 @@ func (m Model) providersView() string {
  	case doneMsg:
  		return m, tea.Quit
  	case tea.KeyMsg:
-@@ -141,6 +166,8 @@
- 			return m.keysEditor(msg)
- 		case scrConfirm:
+@@ -196,6 +221,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
  			return m.keysConfirm(msg)
+ 		case scrConfirmMemory:
+ 			return m.keysConfirmMemory(msg)
 +		case scrProviders:
 +			return m.providersUpdate(msg)
  		}
  		return m.keysLibrary(msg)
  	}
-@@ -181,9 +208,12 @@
+@@ -236,9 +263,12 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  		if m.d.NewDot != nil {
  			blank = m.d.NewDot()
  		}
@@ -7130,7 +7534,7 @@ func (m Model) providersView() string {
  	case "e":
  		if d, ok := m.current(); ok {
  			full, err := dots.Load(m.d.DotsDir, d.Slug)
-@@ -191,7 +221,7 @@
+@@ -246,7 +276,7 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  				m.status = err.Error()
  				return m, nil
  			}
@@ -7139,7 +7543,7 @@ func (m Model) providersView() string {
  		}
  	case "D":
  		if d, ok := m.current(); ok {
-@@ -238,14 +268,36 @@
+@@ -340,14 +370,36 @@ func (m Model) keysTemplates(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  		m.tcursor = max(m.tcursor-1, 0)
  	case "enter":
  		if m.tcursor >= 0 && m.tcursor < len(m.templates) {
@@ -7177,7 +7581,7 @@ func (m Model) providersView() string {
  	case "esc":
  		m.form, m.scr, m.saving = nil, scrLibrary, false
  		return m, nil
-@@ -271,14 +323,18 @@
+@@ -373,14 +425,18 @@ func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  }
  
  func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
@@ -7198,23 +7602,24 @@ func (m Model) providersView() string {
  			return formErrMsg{err}
  		}
  		if err := dots.Save(dir, d, isNew); err != nil {
-@@ -334,6 +390,8 @@
- 		return b.String()
- 	case scrConfirm:
- 		return style.Title.Render(fmt.Sprintf("Delete %s?", m.delName)) + "\n\n" + style.Dim.Render("y delete · any other key cancels")
+@@ -467,6 +523,8 @@ func (m Model) View() string {
+ 		if m.mem != nil {
+ 			return m.mem.View()
+ 		}
 +	case scrProviders:
 +		return m.providersView()
  	}
  	var b strings.Builder
  	head := "DOTS LIBRARY ─ target: " + m.target
-@@ -361,6 +419,6 @@
+@@ -494,7 +552,7 @@ func (m Model) View() string {
  	if m.status != "" {
  		b.WriteString("\n" + m.status + "\n")
  	}
--	b.WriteString("\n" + style.Dim.Render("space toggle · enter apply · n new · t template · e edit · D delete · esc close"))
-+	b.WriteString("\n" + style.Dim.Render("space toggle · enter apply · n new · t template · e edit · D delete · K providers · esc close"))
- 	return b.String()
- }
+-	help := "space toggle · enter apply · n new · t template · e edit · D delete · esc close"
++	help := "space toggle · enter apply · n new · t template · e edit · D delete · K providers · esc close"
+ 	if m.d.Memory != nil {
+ 		help += " · M memory · P project memory"
+ 	}
 ```
 
 - [ ] **Step 4: Run the tests to see them pass**
@@ -7790,7 +8195,7 @@ git commit -m "feat(openai-api): stateless Responses API backend with strict jso
 
 ### Task 16: Dots pane cost display
 
-**Depends on:** Task 14 (Wave 4). **Shared file:** `internal/ui/pane/model.go` (Phase 2 header counts and feed details, Phase 3 council card). Phase 2 may also print feed details for `learned`/`suppressed`; keep its branches and add the cost branch last.
+**Depends on:** Task 14 (Wave 4). **Shared file:** `internal/ui/pane/model.go` (Phase 2 header counts, `feedOutcome` for `learned`/`suppressed`, the `fitRoster` layout; Phase 3 council card and progress line). The diff is against that merged code (reconciled): the roster line keeps Phase 2's `◌ learning…` status, and the cost branch comes after the error branch.
 
 **Files:**
 - Modify: `internal/ui/pane/model.go`
@@ -7859,25 +8264,25 @@ Expected: FAIL to compile (`undefined: paneCost`).
 ```diff
 --- a/internal/ui/pane/model.go
 +++ b/internal/ui/pane/model.go
-@@ -361,6 +361,7 @@
- 	title := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
+@@ -444,6 +444,7 @@ func (m Model) View() string {
+ 	}
  	if ok {
  		title += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
 +		title += paneCost(p.CostUSD, p.BudgetUSD)
  	}
  	if m.snap.PausedAll {
  		title += "  ⏸ all paused"
-@@ -376,7 +377,7 @@
- 		b.WriteString(style.Dim.Render("No dots here yet. Press prefix+d to add some.") + "\n")
- 	}
- 	for i, d := range p.Dots {
--		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, d.Status)
-+		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, d.Status) + dotCost(d)
+@@ -465,7 +466,7 @@ func (m Model) View() string {
+ 		if d.Learning {
+ 			status = "◌ learning…"
+ 		}
+-		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, status)
++		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, status) + dotCost(d)
  		if m.area == areaRoster && i == m.roster {
  			line = style.Selected.Render(line)
  		}
-@@ -433,6 +434,8 @@
- 			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), e.Outcome)
+@@ -527,6 +528,8 @@ func (m Model) View() string {
+ 			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
  			if e.Detail != "" && e.Outcome == "error" {
  				line += "  " + trunc(e.Detail, max(10, w-24))
 +			} else if c := costPart(e.Detail); c != "" {
@@ -7885,11 +8290,10 @@ Expected: FAIL to compile (`undefined: paneCost`).
  			}
  			b.WriteString(line + "\n")
  		}
-@@ -490,4 +493,37 @@
- 	}
+@@ -629,3 +632,36 @@ func window(text string, n, selStart, selEnd int) string {
  	off = min(off, len(lines)-n)
  	return strings.Join(lines[off:off+n], "")
-+}
+ }
 +
 +// paneCost is the header's dollar part: "  $0.42/2.00" with a budget,
 +// "  $0.42" without one, "" before any priced run.
@@ -7914,7 +8318,7 @@ Expected: FAIL to compile (`undefined: paneCost`).
 +		s += "?"
 +	}
 +	return s
- }
++}
 +
 +// costPart is the "cost=…" tail of a pass/flagged feed detail.
 +func costPart(detail string) string {
@@ -7942,17 +8346,17 @@ git commit -m "feat(pane): session and per-dot cost in the header, roster and fe
 
 ### Task 17: Wiring: backend set, `keys` CLI, manage deps, version 0.4.0
 
-**Depends on:** Tasks 2, 3, 10, 11, 12, 13, 14, 15, 16 (Wave 5). **Shared files:** `cmd/herdr-dots/main.go` (Phase 2 `"memory"`), `engine.go` and `ui.go` (Phase 2 memory deps, Phase 3 council), `internal/version/version.go` and `herdr-plugin.toml` (Phase 3 sets `0.3.0`). Edits `go.mod` / `go.sum` (`golang.org/x/term v0.37.0`).
+**Depends on:** Tasks 2, 3, 10, 11, 12, 13, 14, 15, 16 (Wave 5). **Shared files:** `cmd/herdr-dots/main.go` (Phase 2 `"memory"`), `engine.go` and `ui.go` (Phase 2 memory deps, Phase 3 council), `cmd/herdr-dots/memwire_test.go` (Phase 3's version pin `TestVersionIsPhaseThree`), `internal/version/version.go` and `herdr-plugin.toml` (Phase 3 set `0.3.0`). Every diff below is against the merged Phase 2 + 3 code (reconciled). Edits `go.mod` / `go.sum` (`golang.org/x/term v0.37.0`).
 
 **Files:**
 - Create: `internal/backend/all/all.go`, `internal/backend/all/all_test.go`, `internal/backend/all/live_test.go`
 - Create: `cmd/herdr-dots/backends.go`, `cmd/herdr-dots/keys.go`
 - Modify: `cmd/herdr-dots/main.go`, `cmd/herdr-dots/engine.go`, `cmd/herdr-dots/ui.go`, `internal/version/version.go`, `herdr-plugin.toml`, `go.mod`, `go.sum`
-- Test: `cmd/herdr-dots/backends_test.go`, `cmd/herdr-dots/keys_test.go`
+- Test: `cmd/herdr-dots/backends_test.go`, `cmd/herdr-dots/keys_test.go`, `cmd/herdr-dots/memwire_test.go` (Phase 3's `TestVersionIsPhaseThree` becomes `TestVersionIsPhaseFour`; reconciled)
 
 **Interfaces:**
 - Consumes: every adapter's `init()` registration; `backend.NewWith`, `Options`, `ProviderFor`, `ModelChecker`, `ModelLister`; `ollama.New(...).BaseURL`; `credentials.File`; `pricing.Load`, `Table.Estimate`; `config.Load`; `paths.Paths.CredentialsFile/PricesFile`; Phase 2's `paths.Discover()`; `golang.org/x/term` (`IsTerminal`, `ReadPassword`).
-- Produces: `type backendSet` with `newBackendSet(p paths.Paths, cfg func() config.Config, logf func(string, ...any)) *backendSet`, `Get(kind) (backend.Backend, error)` (the engine's `Deps.Backend`), `CheckDot`, `Models`, `TestProvider(ctx, provider) error`, `OllamaURL() string`, `Prices() pricing.Table`, `creds(config.Config) credentials.File`; `func configLoader(path string) func() config.Config`; `func estimateLine(t pricing.Table, d dots.Dot) string`; `func runKeys(args []string) error` and the testable `keysCmd(args []string, k keysIO) error` (`set <provider>` from stdin, `remove <provider>`, `list`, `test [<provider>]`); the `"keys"` command; version `0.4.0`.
+- Produces: `type backendSet` with `newBackendSet(p paths.Paths, cfg func() config.Config, logf func(string, ...any)) *backendSet`, `Get(kind) (backend.Backend, error)` (the engine's `Deps.Backend`), `CheckDot`, `Models`, `TestProvider(ctx, provider) error`, `OllamaURL() string`, `Prices() pricing.Table`, `creds(config.Config) credentials.File`; `func configLoader(path string) func() config.Config`; `func estimateLine(t pricing.Table, d dots.Dot) string`; `func runKeys(args []string) error` and the testable `keysCmd(args []string, k keysIO) error` (`set <provider>` from stdin, `remove <provider>`, `list`, `test [<provider>]`); the `"keys"` command; version `0.4.0` pinned by `TestVersionIsPhaseFour` (replacing Phase 3's `TestVersionIsPhaseThree`).
 
 The spec's per-adapter live tests are collected in one file, `internal/backend/all/live_test.go`, so a single command exercises every provider. Models for OpenAI, OpenRouter and Ollama come from environment variables, so no OpenAI id is hard-coded.
 
@@ -8154,10 +8558,29 @@ func TestKeysListRemoveTest(t *testing.T) {
 }
 ```
 
+Move the version pin to 0.4.0 before bumping (Phase 3 pinned 0.3.0 in a test; reconciled). `cmd/herdr-dots/memwire_test.go`:
+
+```diff
+--- a/cmd/herdr-dots/memwire_test.go
++++ b/cmd/herdr-dots/memwire_test.go
+@@ -57,8 +57,8 @@ func TestBuildEngineWiresMemory(t *testing.T) {
+ 	}
+ }
+ 
+-func TestVersionIsPhaseThree(t *testing.T) {
+-	if version.Version != "0.3.0" {
+-		t.Fatalf("version %s, want 0.3.0", version.Version)
++func TestVersionIsPhaseFour(t *testing.T) {
++	if version.Version != "0.4.0" {
++		t.Fatalf("version %s, want 0.4.0", version.Version)
+ 	}
+ }
+```
+
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `GOTOOLCHAIN=local go test ./internal/backend/all/ ./cmd/herdr-dots/`
-Expected: FAIL (`TestEveryKindIsRegistered` sees only the two CLI kinds; `cmd/herdr-dots` fails to compile with `undefined: newBackendSet`, `undefined: keysCmd`).
+Expected: FAIL (`TestEveryKindIsRegistered` sees only the two CLI kinds; `cmd/herdr-dots` fails to compile with `undefined: newBackendSet`, `undefined: keysCmd`; once it compiles, `TestVersionIsPhaseFour` fails with `version 0.3.0, want 0.4.0` until Step 4's bump).
 
 - [ ] **Step 3: Implement the registry import, the backend set and the keys CLI**
 
@@ -8480,6 +8903,9 @@ const keysUsage = "usage: herdr-dots keys set <provider> | remove <provider> | l
 // runKeys manages API keys in CONFIG_DIR/credentials.toml. Keys are read from
 // stdin only (no echo on a terminal), never from arguments.
 func runKeys(args []string) error {
+	if len(args) == 0 {
+		return errors.New(keysUsage) // usage needs no plugin state (reconciled)
+	}
 	p, err := paths.Discover()
 	if err != nil {
 		return err
@@ -8595,27 +9021,27 @@ func readKey(k keysIO, provider string) (string, error) {
 
 - [ ] **Step 4: Wire the commands, the engine and the manage popup**
 
-`cmd/herdr-dots/main.go` (Phase 2 added `"memory": runMemory,` to the same map; keep it):
+`cmd/herdr-dots/main.go` (after Phase 2's `"memory": runMemory,`):
 
 ```diff
 --- a/cmd/herdr-dots/main.go
 +++ b/cmd/herdr-dots/main.go
-@@ -25,6 +25,7 @@
- 	"summon-ui":  runSummonUI,
+@@ -26,6 +26,7 @@ var commands = map[string]handler{
  	"action":     runAction,
  	"setup-keys": runSetupKeys,
+ 	"memory":     runMemory,
 +	"keys":       runKeys,
  }
  
  func usage() error {
 ```
 
-`cmd/herdr-dots/engine.go` (keep Phase 2's `Memory`/`ResolveProject` deps; drop the `backend` import only if nothing else in the file uses it, as `go build` will tell you):
+`cmd/herdr-dots/engine.go` (Phase 2's `Memory`/`ResolveProject` deps stay; nothing else in the file uses `backend`, so its import goes):
 
 ```diff
 --- a/cmd/herdr-dots/engine.go
 +++ b/cmd/herdr-dots/engine.go
-@@ -13,7 +13,6 @@
+@@ -13,7 +13,6 @@ import (
  	"syscall"
  	"time"
  
@@ -8623,7 +9049,7 @@ func readKey(k keysIO, provider string) (string, error) {
  	"herdr-dots/internal/config"
  	"herdr-dots/internal/dots"
  	"herdr-dots/internal/engine"
-@@ -125,9 +124,10 @@
+@@ -125,9 +124,10 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
  		return nil, err
  	}
  	home, _ := os.UserHomeDir()
@@ -8637,20 +9063,20 @@ func readKey(k keysIO, provider string) (string, error) {
  				Agent: a.Agent, SessionKind: a.SessionKind, SessionValue: a.SessionValue,
 ```
 
-`cmd/herdr-dots/ui.go` (Phase 2 adds `Memory` and `Project` to the same `manage.Deps` literal; keep them):
+`cmd/herdr-dots/ui.go` (Phase 2's `Memory` and `Project` stay in the same `manage.Deps` literal; v1's `Check` stays for callers without `CheckDot`):
 
 ```diff
 --- a/cmd/herdr-dots/ui.go
 +++ b/cmd/herdr-dots/ui.go
-@@ -129,7 +129,17 @@
+@@ -130,8 +130,17 @@ func runManage([]string) error {
  	}
  	cfg, _ := config.Load(p.ConfigFile()) // malformed config -> defaults; the engine logs the error
  	newDot := func() dots.Dot { return newDotFromConfig(cfg) }
--	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot}), tea.WithAltScreen())
 +	set := newBackendSet(p, configLoader(p.ConfigFile()), nil)
 +	prices := set.Prices()
-+	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{
-+		Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
+ 	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
+-		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject}), tea.WithAltScreen())
++		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject,
 +		CheckDot:  set.CheckDot,
 +		Models:    set.Models,
 +		Estimate:  func(d dots.Dot) string { return estimateLine(prices, d) },
@@ -8663,16 +9089,16 @@ func readKey(k keysIO, provider string) (string, error) {
  	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return manage.SnapshotMsg(s) }, nil)
 ```
 
-`internal/version/version.go` and `herdr-plugin.toml` (whatever version Phase 3 left, the result is `0.4.0`):
+`internal/version/version.go` and `herdr-plugin.toml` (Phase 3 left `0.3.0`; reconciled):
 
 ```diff
 --- a/internal/version/version.go
 +++ b/internal/version/version.go
-@@ -1,4 +1,4 @@
- // Package version holds the herdr-dots version. v1 is a scaffold: stay on 0.x.
+@@ -2,4 +2,4 @@
+ // stay on 0.x until the roadmap's final phase.
  package version
  
--const Version = "0.1.0"
+-const Version = "0.3.0"
 +const Version = "0.4.0"
 ```
 
@@ -8680,10 +9106,10 @@ func readKey(k keysIO, provider string) (string, error) {
 --- a/herdr-plugin.toml
 +++ b/herdr-plugin.toml
 @@ -1,7 +1,7 @@
- # Herdr Dots — always-on specialist agents for Herdr. v1 is a scaffold (0.x).
+ # Herdr Dots — always-on specialist agents for Herdr. Still a scaffold (0.x), not done.
  id = "herdr-dots"
  name = "Herdr Dots"
--version = "0.1.0"
+-version = "0.3.0"
 +version = "0.4.0"
  min_herdr_version = "0.8.0"
  description = "Specialist agents (dots) that join your Claude Code / Codex sessions and review each turn. Scaffold release."
@@ -8703,7 +9129,7 @@ Expected: `go 1.25.0`, `golang.org/x/term v0.37.0`, and both SDKs. If `go get` o
 - [ ] **Step 5: Run the tests to see them pass**
 
 Run: `GOTOOLCHAIN=local go test -race ./internal/backend/all/ ./cmd/herdr-dots/`
-Expected: PASS (`TestEveryKindIsRegistered` lists all six kinds).
+Expected: PASS (`TestEveryKindIsRegistered` lists all six kinds; `TestVersionIsPhaseFour` passes).
 
 Run: `GOTOOLCHAIN=local go vet -tags live ./internal/backend/... && GOTOOLCHAIN=local go test -tags live -run Live -v ./internal/backend/all/`
 Expected: compiles; each live test either passes (key set) or reports SKIP. With keys available, run them and copy each `t.Logf` line (verdict, model, tokens, cache, cost, tools; never the key) into the Task 1 notes under "Live runs".
@@ -8739,9 +9165,11 @@ git commit -m "feat: wire API backends, keys CLI and Providers screen; version 0
 - Consumes: everything above.
 - Produces: user documentation for the API backends, keys, privacy per provider and cost. Phase 2 stays **VITAL** and the product stays "not done".
 
+The anchors below are the README and roadmap as Phase 3 Task 8 left them (`803ddac`, reconciled).
+
 - [ ] **Step 1: Update the README status banner**
 
-Replace the status banner at the top (whatever Phase 3 left) with:
+Replace the status banner at the top (Phase 3 left `> **Status: scaffold (v0.3.0).** Phases 1 (core loop), 2 (dot memory, VITAL) and 3 (council mode) are` and its second line) with:
 
 ```markdown
 > **Status: scaffold (v0.4.0).** Phases 1 (core loop), 2 (dot memory, VITAL), 3 (council) and 4 (API
@@ -8749,7 +9177,7 @@ Replace the status banner at the top (whatever Phase 3 left) with:
 > [Roadmap](#roadmap) for what's missing.
 ```
 
-- [ ] **Step 2: Add a "Backends and keys" section after "Delivery modes" (and after Phase 2's "Dot memory" section)**
+- [ ] **Step 2: Add a "Backends and keys" section after Phase 3's "Council mode" section (right before `## Files`)**
 
 ````markdown
 ### Backends and keys
@@ -8803,6 +9231,12 @@ never count toward dollar budgets (the editor warns). The Dots pane header shows
 roster shows each dot's session cost, and the feed shows each run's cost. When Anthropic's refusal
 fallback answers, the run is priced at the fallback model's rates and the feed shows `model=…`; a
 declined first attempt isn't priced, so such a run's cost can be slightly low.
+
+**Councils.** Members and the chair can be API dots; their runs are priced like any other (the chair
+counts against the pane). With `session_budget_usd` set, the council popup shows `$spent of $budget`,
+members past their `max_usd_per_session` sit out, and a pane past its dollar budget can't start a
+council. An API `chair_backend` without `chair_model` uses that kind's default (`claude-opus-5-5` for
+`anthropic-api`); `openai-api`, `openrouter` and `ollama` chairs need `chair_model`.
 ````
 
 - [ ] **Step 3: Extend "Privacy and safety"**
@@ -8826,7 +9260,7 @@ and replace "Per-dot and per-session call budgets cap cost." with:
 
 - [ ] **Step 4: Update "Known gaps" and the roadmap table**
 
-In "Known gaps in this scaffold", remove "no API/Ollama backends" from the last bullet (leave whatever Phases 2 and 3 left) and add:
+In "Known gaps in this scaffold", change `- No API/Ollama backends, no MCP server, no Windows support.` to `- No MCP server, no Windows support.` (leave the other Phase 2 and 3 bullets) and add after it:
 
 ```markdown
 - API backends are tested against recorded-style fakes; live runs need your keys (see
@@ -8836,20 +9270,26 @@ In "Known gaps in this scaffold", remove "no API/Ollama backends" from the last 
   are reachable through OpenRouter).
 ```
 
-In the "Roadmap" table, change row 4 to:
+In the "Roadmap" table, change row 4 (`| 4 | API and Ollama backends behind the same backend interface |`) to (Phase 3's row says "in this scaffold since 0.3.0"; same form, reconciled):
 
 ```markdown
-| 4 | API and Ollama backends (Anthropic, OpenAI, OpenRouter, Ollama), key storage, USD cost and dollar budgets (this release) |
+| 4 | API and Ollama backends (Anthropic, OpenAI, OpenRouter, Ollama), key storage, USD cost and dollar budgets (in this scaffold since 0.4.0) |
 ```
 
 Keep row 2 exactly as it is (**Dot memory — VITAL.**). Don't add any wording that calls the product done, finished, complete or ready.
 
 - [ ] **Step 5: Update the roadmap spec**
 
-In `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, under "### Phase 4: API and Ollama backends", add one line:
+In `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, row 4 of the phase table links the plan instead of the outline, as Phase 3 did for its row (reconciled). Replace:
 
 ```markdown
-Implementation plan: `docs/superpowers/plans/2026-10-08-herdr-dots-phase-4-api-backends.md` (built in 0.4.0; the product is not done until Phase 10).
+| 4 | 0.4.0 | API and Ollama backends, keys, cost | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-4-api-backends-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-4-api-backends-outline.md) |
+```
+
+with:
+
+```markdown
+| 4 | 0.4.0 | API and Ollama backends, keys, cost | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-4-api-backends-design.md) | [plan](../plans/2026-10-08-herdr-dots-phase-4-api-backends.md) |
 ```
 
 - [ ] **Step 6: Close out the verification notes**
@@ -8859,13 +9299,13 @@ Append a "## Results" section to `docs/superpowers/notes/2026-10-08-phase-4-veri
 - [ ] **Step 7: Final check and commit**
 
 ```bash
-grep -niE '\b(done|finished|complete|ready)\b' README.md | grep -viE 'not (done|finished|complete|ready)|ready to publish' || true
+grep -niE '\b(done|finished|complete|ready)\b' README.md | grep -viE 'not (done|finished|complete|ready)|ready to publish|reports `done`|feature complete only after' || true
 gofmt -l . ; GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md docs/superpowers/notes/2026-10-08-phase-4-verification.md
 git commit -m "docs: Phase 4 backends, keys, privacy and cost in the README; roadmap link (product not done)"
 ```
 
-Expected: the grep prints nothing that claims the product is done.
+Expected: the grep prints nothing (the two earlier-phase lines that mention `done` and "feature complete only after Phase 10" are filtered; reconciled).
 
 ---
 
@@ -8880,7 +9320,7 @@ Spec coverage (every section maps to a task):
 | §1 SC2 / A2 read-only tool loop, jail, deny-list, 8 calls, 64 KB | 7, used by 10–13 |
 | §1 SC3 / A3 structured output, `ParseReply` guards | 8 (`VerdictSchema`, `FinishAPI`), 10–13 |
 | §1 SC4 / A7 tokens + USD, price table, OpenRouter cost, Ollama $0, header and feed | 3, 6, 10–14, 16 |
-| §1 SC5 / A12 dollar budgets | 4, 5, 14 |
+| §1 SC5 / A12 dollar budgets (dots, panes, memory passes, councils) | 4, 5, 14 |
 | §1 SC6 / §8.2 keys never leak; 0600; refused when permissive | 2, 9, 10–14, 15, 17 |
 | §1 SC7 CLI dots unchanged | 8 (`New` wrapper, CLI registration), v1 tests kept green in every task |
 | A1 SDKs for Anthropic/OpenAI, net/http for OpenRouter/Ollama | 10, 11, 12, 13 |
@@ -8901,8 +9341,10 @@ Spec coverage (every section maps to a task):
 | §11 O1–O6 | rulings 6–8 plus the spec's recommendations: tool loop on, no streaming, unknown price warns |
 | Coordinator addendum: claude CLI cache tokens; price the three input kinds separately; same for the Anthropic API | 8 (`TestClaudeOutputCountsCachedInput`), 3 (`TestCostArithmeticWithCache`), 10 (`TestCachedUsageIsCountedAndPricedSeparately`) |
 
-Placeholder scan: no "TBD" or "implement later"; every code step is complete code or an exact diff. Task 14 Step 7 adapts one field name from Phase 3's `council.Preflight`, which isn't knowable before Phase 3's code exists; the step says exactly what to compare.
+Placeholder scan: no "TBD" or "implement later"; every code step is complete code or an exact diff. Task 14 Step 7 is concrete now that Phase 3's code exists (reconciled).
 
 Type consistency: `toolloop.Reply/Outcome/Driver` (Task 7) match their uses in Tasks 10–13; `backend.APIRun/FinishAPI/PartialAPI` (Task 8) match the adapters; `state.Delta` (Task 6) matches `engine.deltaOf` (Task 14); `view.DotState.CostUnknown` (Task 14) matches the pane (Task 16); `manage.Deps` fields (Task 15) match `cmd/herdr-dots/ui.go` (Task 17); `credentials.File.EnvNames` (Task 2) is filled by `backendSet.creds` (Task 17).
 
 Verification while planning: all of the above was applied to a copy of the v1 tree plus Phase 2's backend changes, with `go vet ./...`, `go vet -tags live ./internal/backend/...` and `go test -race ./...` green (29 packages), and the live tests skipping cleanly without keys.
+
+Reconciliation replay (2026-10-08): a scratch worktree of `803ddac` (Phase 2 and 3 merged, version 0.3.0) took every task in wave order, applying the plan's code blocks verbatim (new files written, diffs through plain `git apply`, the `go get` / `go mod tidy` commands as written) and running each task's tests. `go test -race ./...` (35 packages, 32 with tests; the engine, council, summon, toolloop and credentials packages also with `-count=3`), `go vet ./...`, `go vet -tags live ./internal/backend/...` and `gofmt -l internal cmd` came out clean; Task 18's README edits matched their anchors and the "not done" grep printed nothing. No provider API was called (httptest fakes only).
