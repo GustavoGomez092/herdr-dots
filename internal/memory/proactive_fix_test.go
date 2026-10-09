@@ -114,7 +114,7 @@ func TestDeleteDotReplacesACorruptSchedule(t *testing.T) {
 	if _, err := s.DeleteDot("security"); err != nil {
 		t.Fatalf("a corrupt schedule must not block forgetting: %v", err)
 	}
-	if ok, err := s.ClaimSchedule(pid, "security", now); !ok || err != nil {
+	if ok, err := s.ClaimSchedule(pid, "security", now, now); !ok || err != nil {
 		t.Fatalf("a recreated dot inherited a stale claim: %v %v", ok, err)
 	}
 	if got := list(t, s, pid, Filter{Scope: ScopeDot, Dot: "security"}); len(got) != 0 {

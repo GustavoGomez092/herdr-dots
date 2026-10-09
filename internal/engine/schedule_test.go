@@ -1,13 +1,17 @@
 package engine
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	_ "time/tzdata" // the DST tests need America/New_York on every OS
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/config"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
@@ -84,7 +88,14 @@ func TestTwoEnginesRunASlotOnce(t *testing.T) {
 	a.attach(t, "security")
 	b.attach(t, "security")
 	time.Sleep(60 * time.Millisecond)
+	// Both engines pass every pre-check and queue a job before either claims:
+	// the loser must be refused by the claim itself.
+	a.e.bgSem <- struct{}{}
+	b.e.bgSem <- struct{}{}
 	clk.Add(90 * time.Second)
+	eventually(t, "both engines queue the slot", func() bool { return queuedFor(a) > 0 && queuedFor(b) > 0 })
+	<-a.e.bgSem
+	<-b.e.bgSem
 	eventually(t, "one run", func() bool { return len(scheduledRuns(a))+len(scheduledRuns(b)) == 1 })
 	time.Sleep(150 * time.Millisecond)
 	if n := len(scheduledRuns(a)) + len(scheduledRuns(b)); n != 1 {
@@ -98,7 +109,7 @@ func TestCatchUpRunsOnceWithinTheWindow(t *testing.T) {
 	root := t.TempDir()
 	prev := func(m *memory.Store) {
 		knownProject(root, "security", at(8, 0))(m)
-		_, _ = m.ClaimSchedule(testProject, "security", at(9, 0).AddDate(0, 0, -1)) // ran yesterday
+		_, _ = m.ClaimSchedule(testProject, "security", at(9, 0).AddDate(0, 0, -1), at(9, 0).AddDate(0, 0, -1)) // ran yesterday
 	}
 	d := scheduledDot("Security", "0 9 * * *")
 	r := newProRig(t, proOpts{clock: &proClock{t: at(15, 0)}, prepare: prev}, d)
@@ -110,11 +121,46 @@ func TestCatchUpRunsOnceWithinTheWindow(t *testing.T) {
 	if n := len(scheduledRuns(r)); n != 1 {
 		t.Fatalf("%d catch-up runs", n)
 	}
-	stale := newProRig(t, proOpts{clock: &proClock{t: at(22, 0)}, prepare: prev}, d) // 13 h after the slot
+	logs := &logSink{}
+	stale := newProRig(t, proOpts{clock: &proClock{t: at(22, 0)}, prepare: prev, deps: logs.deps}, d) // 13 h after the slot
+	eventually(t, "the stale slot is logged", func() bool { return logs.count("not caught up") == 1 })
 	time.Sleep(150 * time.Millisecond)
 	if n := len(scheduledRuns(stale)); n != 0 {
 		t.Fatalf("a slot older than catch_up_hours ran %d times", n)
 	}
+}
+
+// logSink collects an engine's log lines.
+type logSink struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logSink) deps(d *Deps) {
+	d.Logf = func(f string, a ...any) {
+		l.mu.Lock()
+		l.lines = append(l.lines, fmt.Sprintf(f, a...))
+		l.mu.Unlock()
+	}
+}
+
+func (l *logSink) count(sub string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, s := range l.lines {
+		if strings.Contains(s, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+// queuedFor is the rig pane's queued background jobs for "security".
+func queuedFor(r *proRig) int {
+	r.e.mu.Lock()
+	defer r.e.mu.Unlock()
+	return r.e.bgQueued[key{pane, "security"}]
 }
 
 // A schedule that never ran starts at its next slot: no retroactive run.
@@ -378,5 +424,151 @@ func TestAFarFutureSlotIsNeverClaimed(t *testing.T) {
 	eventually(t, "today's slot still runs", func() bool { return len(scheduledRuns(r)) == 1 })
 	if last, _ := r.mem.LastSchedule(testProject, "security"); !last.Equal(at(11, 0)) {
 		t.Fatalf("claimed %v", last)
+	}
+}
+
+// claimSlot never claims a slot after now plus claimSkew.
+func TestClaimSlotRefusesASlotPastTheSkew(t *testing.T) {
+	r := newProRig(t, proOpts{prepare: knownProject(t.TempDir(), "security", at(8, 0))}, proDot("Security"))
+	if ok, err := r.e.claimSlot(testProject, "security", at(10, 0).Add(claimSkew+time.Minute)); ok || err == nil {
+		t.Fatalf("claimed a slot past the skew: %v %v", ok, err)
+	}
+	if last, _ := r.mem.LastSchedule(testProject, "security"); !last.IsZero() {
+		t.Fatalf("claimed %v", last)
+	}
+	if ok, err := r.e.claimSlot(testProject, "security", at(10, 0).Add(claimSkew)); !ok || err != nil {
+		t.Fatalf("a slot within the skew: %v %v", ok, err)
+	}
+}
+
+// Ruling P8-R12: "attached" expands to at most 10 targets, explicit paths
+// first, then the projects the dot was attached to most recently; the
+// dropped ones are logged once a day.
+func TestScheduleTargetsAreCappedAtTen(t *testing.T) {
+	base := t.TempDir()
+	idOf := func(i int) string { return fmt.Sprintf("g-%016x", i+1) }
+	projects := func(m *memory.Store) {
+		for i := range 15 {
+			root := filepath.Join(base, fmt.Sprint(i))
+			_ = os.Mkdir(root, 0o700)
+			_ = m.SeeProject(memory.Project{ID: idOf(i), Name: fmt.Sprint("repo", i), Root: root})
+			_ = m.SeeDots(idOf(i), []string{"security"}, at(8, 0).Add(time.Duration(i)*time.Minute)) // later i = more recent
+		}
+	}
+	logs := &logSink{}
+	r := newProRig(t, proOpts{prepare: projects, deps: logs.deps}, proDot("Security"))
+	d := scheduledDot("Security", "0 11 * * *")
+	ids := func(ts []schedTarget) []string {
+		var out []string
+		for _, x := range ts {
+			out = append(out, x.id)
+		}
+		return out
+	}
+	var want []string
+	for i := 14; i >= 5; i-- {
+		want = append(want, idOf(i))
+	}
+	if got := ids(r.e.scheduleTargets(d)); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("attached targets %v, want the 10 most recent %v", got, want)
+	}
+	explicit := t.TempDir()
+	d.Schedule.Projects = []string{dots.ScheduleAttached, explicit}
+	got := ids(r.e.scheduleTargets(d))
+	if len(got) != 10 || got[0] != testProject || strings.Join(got[1:], ",") != strings.Join(want[:9], ",") {
+		t.Fatalf("targets %v: want the explicit path first, then the 9 most recent", got)
+	}
+	if n := logs.count("more than 10 projects"); n != 1 {
+		t.Fatalf("%d dropped-project log lines, want one a day", n)
+	}
+}
+
+// Ruling P8-R12: at most maxScheduledPerDay scheduled runs per dot per local
+// day, counted in daily.json (every session). A slot over the cap is left
+// unclaimed; the next day runs.
+func TestScheduledRunsAreCappedPerDay(t *testing.T) {
+	r := newProRig(t, proOpts{cwd: t.TempDir()}, scheduledDot("Security", "0 11 * * *"))
+	r.attach(t, "security")
+	eventually(t, "planned", func() bool { return r.dotState("security").Next == "scheduled Wed 11:00" })
+	for range maxScheduledPerDay {
+		if err := r.daily.Add("security", state.RunScheduled, 0, r.clock.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.clock.Add(time.Hour + 20*time.Second)
+	time.Sleep(150 * time.Millisecond)
+	if n := len(scheduledRuns(r)); n != 0 {
+		t.Fatalf("%d runs over the daily cap", n)
+	}
+	if last, _ := r.mem.LastSchedule(testProject, "security"); !last.IsZero() {
+		t.Fatalf("slot claimed (%v) although the cap refused it", last)
+	}
+	r.clock.Add(24 * time.Hour)
+	eventually(t, "the next day's slot", func() bool { return len(scheduledRuns(r)) == 1 })
+}
+
+// Ruling P8-R12: a stored claim days in the future (a skewed clock) does not
+// block the project: the slot runs once and overwrites it, even with two
+// engines racing for it.
+func TestAFutureClaimIsOverwrittenAndTheSlotRunsOnce(t *testing.T) {
+	shared, root := t.TempDir(), t.TempDir()
+	clk := &proClock{t: at(10, 59)}
+	future := at(11, 0).AddDate(0, 0, 3)
+	seed := func(m *memory.Store) { _, _ = m.ClaimSchedule(testProject, "security", future, future) }
+	d := scheduledDot("Security", "0 11 * * *")
+	a := newProRig(t, proOpts{shared: shared, clock: clk, cwd: root, prepare: seed}, d)
+	b := newProRig(t, proOpts{shared: shared, clock: clk, cwd: root}, d)
+	a.attach(t, "security")
+	b.attach(t, "security")
+	time.Sleep(60 * time.Millisecond)
+	a.e.bgSem <- struct{}{}
+	b.e.bgSem <- struct{}{}
+	clk.Add(90 * time.Second)
+	eventually(t, "both engines queue the slot", func() bool { return queuedFor(a) > 0 && queuedFor(b) > 0 })
+	<-a.e.bgSem
+	<-b.e.bgSem
+	eventually(t, "one run", func() bool { return len(scheduledRuns(a))+len(scheduledRuns(b)) == 1 })
+	time.Sleep(150 * time.Millisecond)
+	runs := append(scheduledRuns(a), scheduledRuns(b)...)
+	if len(runs) != 1 {
+		t.Fatalf("%d runs across two engines", len(runs))
+	}
+	if !strings.Contains(runs[0].Question, "Since: unknown") {
+		t.Fatalf("question %q", runs[0].Question)
+	}
+	if last, _ := a.mem.LastSchedule(testProject, "security"); !last.Equal(at(11, 0)) {
+		t.Fatalf("claimed %v, want the slot that ran", last)
+	}
+}
+
+// Ruling P8-R12: when the proactive switch or memory comes back on, a stale
+// plan re-plans from now: the slot that passed while it was off doesn't run.
+func TestScheduleReplansWhenSwitchedBackOn(t *testing.T) {
+	for name, set := range map[string]func(c *config.Config, on bool){
+		"proactive": func(c *config.Config, on bool) { c.ProactiveEnabled = on },
+		"memory":    func(c *config.Config, on bool) { c.MemoryEnabled = on },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newProRig(t, proOpts{cwd: t.TempDir()}, scheduledDot("Security", "0 11 * * *"))
+			r.attach(t, "security")
+			eventually(t, "planned", func() bool { return r.dotState("security").Next == "scheduled Wed 11:00" })
+			toggle := func(on bool) {
+				c := r.e.config()
+				set(&c, on)
+				r.e.cfg.Store(&c)
+			}
+			toggle(false)
+			time.Sleep(60 * time.Millisecond)
+			r.clock.Add(90 * time.Minute) // 11:30: the 11:00 slot passed while off
+			time.Sleep(60 * time.Millisecond)
+			toggle(true)
+			eventually(t, "re-planned from now", func() bool { return r.dotState("security").Next == "scheduled Thu 11:00" })
+			time.Sleep(100 * time.Millisecond)
+			if n := len(scheduledRuns(r)); n != 0 {
+				t.Fatalf("%d retroactive runs after switching back on", n)
+			}
+			r.clock.Add(23*time.Hour + 30*time.Minute + 20*time.Second)
+			eventually(t, "the next slot", func() bool { return len(scheduledRuns(r)) == 1 })
+		})
 	}
 }

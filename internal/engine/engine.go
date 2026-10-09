@@ -146,6 +146,7 @@ type Engine struct {
 	toasted  map[string]string     // once-a-day toasts: key -> date
 	idle     map[string]*idleState // pane -> idle research bookkeeping (idle.go)
 	plan     map[string]time.Time  // scheduled dot -> its next slot (schedule.go)
+	schedOff bool                  // a schedule tick found proactive work or memory off (schedule.go)
 
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex

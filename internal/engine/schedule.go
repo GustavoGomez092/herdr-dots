@@ -3,10 +3,12 @@ package engine
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/memory"
 	"herdr-dots/internal/schedule"
 	"herdr-dots/internal/state"
 )
@@ -35,7 +37,11 @@ const lateGrace = 2 * time.Minute
 // claimSkew: a slot later than now plus this is never claimed. ClaimSchedule
 // refuses a slot at or before the last claim, so one future claim (a clock
 // stepped back between the tick and the claim) would block every earlier slot.
-const claimSkew = 2 * time.Minute
+const claimSkew = memory.ScheduleSkew
+
+// maxScheduledPerDay caps a dot's scheduled runs per local day across every
+// Herdr session (daily.json; ruling P8-R12): a 15-minute cron fills it.
+const maxScheduledPerDay = 96
 
 // schedPane keys a scheduled dot's fire in bgQueued (no Herdr pane id looks
 // like it): scheduleTick reserves it, the fire releases it, and a slot that
@@ -58,6 +64,9 @@ func catchUpWindow(d dots.Dot) time.Duration {
 // in-memory work under e.mu and spawns the fires.
 func (e *Engine) scheduleTick() {
 	if !e.proactiveOn() || !e.memEnabled() {
+		e.mu.Lock()
+		e.schedOff = true // back on, every schedule re-plans from then
+		e.mu.Unlock()
 		return
 	}
 	now := e.now()
@@ -65,6 +74,8 @@ func (e *Engine) scheduleTick() {
 	var late []string
 	changed := false
 	e.mu.Lock()
+	resume := e.schedOff
+	e.schedOff = false
 	for slug, d := range e.dots {
 		spec, err := schedule.Parse(d.Schedule.Cron)
 		if strings.TrimSpace(d.Schedule.Cron) == "" || err != nil {
@@ -74,6 +85,11 @@ func (e *Engine) scheduleTick() {
 			}
 			continue
 		}
+		if resume {
+			// The proactive switch or memory came back on: slots that passed
+			// while it was off never run (no retroactive run, no catch-up).
+			e.plan[slug], changed = spec.Next(now), true
+		}
 		k := key{schedPane, slug}
 		if e.bgQueued[k] > 0 {
 			continue // the dot's last slot is still running: a slot that came meanwhile runs after it
@@ -82,8 +98,12 @@ func (e *Engine) scheduleTick() {
 		catchUp := false
 		if !planned {
 			next = spec.Next(now)
-			if prev := spec.Prev(now.Add(time.Nanosecond)); !prev.IsZero() && now.Sub(prev) <= catchUpWindow(d) {
-				next, catchUp = prev, true // missed while Herdr was closed: catch up once
+			if prev := spec.Prev(now.Add(time.Nanosecond)); !prev.IsZero() {
+				if now.Sub(prev) <= catchUpWindow(d) {
+					next, catchUp = prev, true // missed while Herdr was closed: catch up once
+				} else {
+					late = append(late, fmt.Sprintf("dot %s: last slot %s is older than catch_up_hours (%d h); not caught up", slug, prev.Format(time.RFC3339), d.Schedule.CatchUpHours))
+				}
 			}
 			e.plan[slug], changed = next, true
 		}
@@ -143,7 +163,12 @@ func (e *Engine) fireSchedule(x dueSlot) {
 			e.d.Logf("dot %s: schedule on %s: %v", d.Slug, t.name, err)
 			continue
 		}
-		if !last.Before(x.slot) {
+		// A claim after now plus claimSkew was written by a skewed clock: it is
+		// treated as absent (ClaimSchedule overwrites it too, ruling P8-R12).
+		future := last.After(e.now().Add(claimSkew))
+		if future {
+			e.d.Logf("dot %s: the last claim on %s (%s) is in the future (a clock was wrong); treated as absent", d.Slug, t.name, last.Format(time.RFC3339))
+		} else if !last.Before(x.slot) {
 			continue // this engine or another session already ran it
 		}
 		if x.catchUp && last.IsZero() {
@@ -155,7 +180,7 @@ func (e *Engine) fireSchedule(x dueSlot) {
 			continue
 		}
 		paneID, att, paused, gen := e.paneOnProject(t.id, d.Slug)
-		if r := e.backgroundGate(d.Slug, state.RunScheduled, 0, paused); r != ReasonRun {
+		if r := e.backgroundGate(d.Slug, state.RunScheduled, maxScheduledPerDay, paused); r != ReasonRun {
 			e.d.Logf("dot %s: %s on %s skipped (%s)", d.Slug, label, t.name, r)
 			continue // not claimed: a later catch-up may still run it
 		}
@@ -174,7 +199,8 @@ func (e *Engine) fireSchedule(x dueSlot) {
 			last = last.In(x.slot.Location())
 		}
 		j := bgJob{kind: state.RunScheduled, paneID: paneID, session: att.SessionValue, project: t.id, projectName: t.name,
-			cwd: t.cwd, dot: d, question: scheduledTask(d, last), label: label, paused: paused, gen: gen, deliver: e.deliverScheduled}
+			cwd: t.cwd, dot: d, question: scheduledTask(d, last, future), label: label, maxPerDay: maxScheduledPerDay,
+			paused: paused, gen: gen, deliver: e.deliverScheduled}
 		j.claim = func() bool {
 			ok, err := e.claimSlot(t.id, d.Slug, x.slot)
 			switch {
@@ -209,7 +235,7 @@ func (e *Engine) claimSlot(pid, slug string, slot time.Time) (bool, error) {
 	var ok bool
 	err := retryLocked(func() error {
 		var err error
-		ok, err = e.d.Memory.ClaimSchedule(pid, slug, slot.UTC())
+		ok, err = e.d.Memory.ClaimSchedule(pid, slug, slot.UTC(), e.now())
 		return err
 	})
 	return ok, err
@@ -217,49 +243,49 @@ func (e *Engine) claimSlot(pid, slug string, slot time.Time) (bool, error) {
 
 // scheduledTask is a scheduled run's Question: the standing task (sanitized
 // and capped: PromptTask, never the raw Task) and the last slot it ran for on
-// this project.
-func scheduledTask(d dots.Dot, last time.Time) string {
+// this project (unknown when the stored claim was in the future).
+func scheduledTask(d dots.Dot, last time.Time, unknown bool) string {
 	since := "never (this is the first scheduled run on this project)"
-	if !last.IsZero() {
+	switch {
+	case unknown:
+		since = "unknown (the last recorded run had a wrong clock)"
+	case !last.IsZero():
 		since = last.Format("Mon 2 Jan 2006 15:04 MST")
 	}
 	return d.Schedule.PromptTask() + "\nSince: " + since
 }
 
+// maxScheduleTargets caps the projects one slot runs on (ruling P8-R5/P8-R12).
+const maxScheduleTargets = 10
+
 // scheduleTargets resolves a dot's [schedule] projects to project ids and
-// checkouts on this machine. Missing roots are skipped with a daily toast.
+// checkouts on this machine, at most maxScheduleTargets: explicit paths
+// first, then "attached" projects, the most recently attached first. The rest
+// are logged once a day. Missing roots are skipped with a daily toast.
 func (e *Engine) scheduleTargets(d dots.Dot) []schedTarget {
 	var out []schedTarget
+	var dropped []string
 	seen := map[string]bool{}
+	full := func(name string) bool {
+		if len(out) < maxScheduleTargets {
+			return false
+		}
+		dropped = append(dropped, name)
+		return true
+	}
 	add := func(t schedTarget) {
-		if !seen[t.id] {
+		if !seen[t.id] && !full(t.name) {
 			seen[t.id] = true
 			out = append(out, t)
 		}
 	}
+	attached := false
 	for _, p := range d.Schedule.Targets() {
 		if p == dots.ScheduleAttached {
-			metas, err := e.d.Memory.RecentDotProjects(d.Slug, e.now().Add(-attachedWindow))
-			if err != nil {
-				e.d.Logf("dot %s: attached projects: %v", d.Slug, err)
-			}
-			for _, m := range metas {
-				name := m.Name
-				if name == "" { // recorded by SeeDots before SeeProject filled it in
-					name = m.ID
-				}
-				root := ""
-				for i := len(m.Roots) - 1; i >= 0 && root == ""; i-- { // the newest checkout first
-					if isDir(m.Roots[i]) {
-						root = m.Roots[i]
-					}
-				}
-				if root == "" { // no checkout here, or no roots recorded yet
-					e.rootMissing(d, name)
-					continue
-				}
-				add(schedTarget{id: m.ID, name: name, cwd: root})
-			}
+			attached = true
+			continue
+		}
+		if full(p) {
 			continue
 		}
 		if !isDir(p) {
@@ -276,6 +302,36 @@ func (e *Engine) scheduleTargets(d dots.Dot) []schedTarget {
 			name = p
 		}
 		add(schedTarget{id: pr.ID, name: name, cwd: p})
+	}
+	if attached {
+		metas, err := e.d.Memory.RecentDotProjects(d.Slug, e.now().Add(-attachedWindow))
+		if err != nil {
+			e.d.Logf("dot %s: attached projects: %v", d.Slug, err)
+		}
+		sort.SliceStable(metas, func(i, j int) bool { return metas[i].DotsSeen[d.Slug].After(metas[j].DotsSeen[d.Slug]) })
+		for _, m := range metas {
+			name := m.Name
+			if name == "" { // recorded by SeeDots before SeeProject filled it in
+				name = m.ID
+			}
+			if seen[m.ID] || full(name) {
+				continue
+			}
+			root := ""
+			for i := len(m.Roots) - 1; i >= 0 && root == ""; i-- { // the newest checkout first
+				if isDir(m.Roots[i]) {
+					root = m.Roots[i]
+				}
+			}
+			if root == "" { // no checkout here, or no roots recorded yet
+				e.rootMissing(d, name)
+				continue
+			}
+			add(schedTarget{id: m.ID, name: name, cwd: root})
+		}
+	}
+	if len(dropped) > 0 && e.onceToday("targets:"+d.Slug) {
+		e.d.Logf("dot %s: schedule reaches more than %d projects; skipped %s", d.Slug, maxScheduleTargets, strings.Join(dropped, ", "))
 	}
 	return out
 }

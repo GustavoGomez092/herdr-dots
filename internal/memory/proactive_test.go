@@ -2,6 +2,7 @@ package memory
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,16 +65,16 @@ func TestClaimScheduleRunsASlotOnce(t *testing.T) {
 	if last, err := s.LastSchedule(pid, "security"); err != nil || !last.IsZero() {
 		t.Fatalf("no claims yet: %v %v", last, err)
 	}
-	if ok, err := s.ClaimSchedule(pid, "security", slot); !ok || err != nil {
+	if ok, err := s.ClaimSchedule(pid, "security", slot, slot); !ok || err != nil {
 		t.Fatalf("first claim: %v %v", ok, err)
 	}
-	if ok, _ := s.ClaimSchedule(pid, "security", slot); ok {
+	if ok, _ := s.ClaimSchedule(pid, "security", slot, slot); ok {
 		t.Fatal("the same slot must not be claimed twice")
 	}
-	if ok, _ := s.ClaimSchedule(pid, "security", slot.Add(-24*time.Hour)); ok {
+	if ok, _ := s.ClaimSchedule(pid, "security", slot.Add(-24*time.Hour), slot); ok {
 		t.Fatal("an older slot must not be claimed after a newer one")
 	}
-	if ok, _ := s.ClaimSchedule(pid, "frontend", slot); !ok {
+	if ok, _ := s.ClaimSchedule(pid, "frontend", slot, slot); !ok {
 		t.Fatal("each dot has its own slots")
 	}
 	if last, _ := s.LastSchedule(pid, "security"); !last.Equal(slot) {
@@ -83,8 +84,41 @@ func TestClaimScheduleRunsASlotOnce(t *testing.T) {
 	if !strings.Contains(string(raw), `"security": "2026-10-21T09:00:00-05:00"`) {
 		t.Fatalf("file %s", raw)
 	}
-	if _, err := s.ClaimSchedule("../etc", "security", slot); err == nil {
+	if _, err := s.ClaimSchedule("../etc", "security", slot, slot); err == nil {
 		t.Fatal("invalid project id")
+	}
+}
+
+// A stored claim later than now plus ScheduleSkew (written by a skewed clock)
+// is treated as absent (ruling P8-R12): it is overwritten, with one log line,
+// and never blocks the slots before it. A claim within the skew still counts.
+func TestClaimScheduleOverwritesAFutureClaim(t *testing.T) {
+	s := testStore(t)
+	var logs []string
+	s.Logf = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	future := now.AddDate(0, 0, 3)
+	if ok, err := s.ClaimSchedule(pid, "security", future, future); !ok || err != nil {
+		t.Fatalf("seed: %v %v", ok, err)
+	}
+	if ok, err := s.ClaimSchedule(pid, "security", now, now); !ok || err != nil {
+		t.Fatalf("a future claim blocked the slot: %v %v", ok, err)
+	}
+	if last, _ := s.LastSchedule(pid, "security"); !last.Equal(now) {
+		t.Fatalf("last %v", last)
+	}
+	if ok, _ := s.ClaimSchedule(pid, "security", now, now); ok {
+		t.Fatal("the fresh claim must still refuse the same slot")
+	}
+	near := now.Add(ScheduleSkew)
+	if ok, _ := s.ClaimSchedule(pid, "security", near, now); !ok {
+		t.Fatal("a claim within the skew is a valid claim")
+	}
+	if ok, _ := s.ClaimSchedule(pid, "security", now.Add(time.Minute), now); ok {
+		t.Fatal("a claim within the skew must still refuse older slots")
+	}
+	if n := strings.Count(strings.Join(logs, "\n"), "in the future"); n != 1 {
+		t.Fatalf("%d future-claim log lines: %q", n, logs)
 	}
 }
 
@@ -130,7 +164,7 @@ func TestClaimScheduleChild(t *testing.T) {
 	}
 	lim := DefaultLimits()
 	lim.LockTimeout = 10 * time.Second
-	ok, err := Open(dir, lim).ClaimSchedule(pid, "security", time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC))
+	ok, err := Open(dir, lim).ClaimSchedule(pid, "security", time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +177,7 @@ func TestClaimScheduleReplacesACorruptFile(t *testing.T) {
 	s := testStore(t)
 	os.MkdirAll(filepath.Join(s.Dir, pid), 0o700)
 	os.WriteFile(filepath.Join(s.Dir, pid, "schedule.json"), []byte("{oops"), 0o600)
-	if ok, err := s.ClaimSchedule(pid, "security", time.Now()); !ok || err != nil {
+	if ok, err := s.ClaimSchedule(pid, "security", time.Now(), time.Now()); !ok || err != nil {
 		t.Fatalf("%v %v", ok, err)
 	}
 }
@@ -217,8 +251,8 @@ func TestDeleteDotScrubsResearchAndProactiveState(t *testing.T) {
 	}
 	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
 	_ = s.SeeDots(pid, []string{"security", "frontend"}, now)
-	_, _ = s.ClaimSchedule(pid, "security", now)
-	_, _ = s.ClaimSchedule(pid, "frontend", now)
+	_, _ = s.ClaimSchedule(pid, "security", now, now)
+	_, _ = s.ClaimSchedule(pid, "frontend", now, now)
 	if _, err := s.DeleteDot("security"); err != nil {
 		t.Fatal(err)
 	}
