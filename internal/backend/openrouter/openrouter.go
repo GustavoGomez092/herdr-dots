@@ -195,6 +195,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		cr.Tools = append(cr.Tools, d)
 	}
 	url := b.base(r) + "/chat/completions"
+	prices := b.o.PriceTable()
 	turn := func(ctx context.Context, results []toolloop.Result, final bool) (toolloop.Reply, error) {
 		for _, res := range results {
 			content := res.Content
@@ -234,6 +235,10 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		}
 		if resp.Usage.Cost != nil {
 			reply.CostUSD, reply.CostKnown = *resp.Usage.Cost, true
+		} else {
+			// No usage.cost: a [openrouter."<model>"] entry in prices.toml
+			// still prices the run (served id, undated, then requested).
+			reply.CostUSD, reply.CostKnown = prices.CostServed(Provider, resp.Model, r.Model, reply.Usage)
 		}
 		if len(resp.Choices) == 0 {
 			return reply, errors.New("openrouter returned no choices")

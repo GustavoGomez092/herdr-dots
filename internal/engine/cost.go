@@ -7,6 +7,7 @@ import (
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/pricing"
 	"herdr-dots/internal/state"
 )
 
@@ -45,7 +46,14 @@ func costDetail(d dots.Dot, res backend.Result) string {
 			s += " (cap)"
 		}
 	}
-	if res.Model != "" && d.Backend.Model != "" && res.Model != d.Backend.Model {
+	// The model that answered, when it isn't the one asked for: a refusal
+	// fallback. A dated snapshot of the asked model ("gpt-6-sol-2026-08-01")
+	// is the same model; a dot with no model asked for the kind's default.
+	want := d.Backend.Model
+	if want == "" {
+		want = dots.DefaultModelFor(d.Backend.Kind)
+	}
+	if res.Model != "" && want != "" && !pricing.SameModel(res.Model, want) {
 		s += " model=" + res.Model
 	}
 	return s

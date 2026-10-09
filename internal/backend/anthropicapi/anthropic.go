@@ -190,7 +190,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		if served == "" {
 			served = model
 		}
-		usd, known := prices.Cost(Provider, served, u)
+		usd, known := prices.CostServed(Provider, served, model, u)
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		if resp.StopReason == anthropic.BetaStopReasonRefusal {
 			return reply, backend.Refused(string(resp.StopDetails.Category))

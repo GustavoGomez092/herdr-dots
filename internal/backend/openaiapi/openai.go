@@ -165,7 +165,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		if served == "" {
 			served = r.Model
 		}
-		usd, known := prices.Cost(Provider, served, u)
+		usd, known := prices.CostServed(Provider, served, r.Model, u)
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		var refusal string
 		for _, it := range resp.Output {
