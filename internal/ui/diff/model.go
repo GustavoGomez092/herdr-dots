@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/patchstore"
@@ -51,6 +52,7 @@ type File struct {
 	Submodule bool // mode 160000
 	Renamed   bool // renamed: the old path is removed
 	Copied    bool
+	Config    bool // agent/CI configuration (toolloop.AgentConfig): allowed, loudly flagged
 }
 
 // clean makes model- or repository-controlled text safe to display on one
@@ -181,6 +183,7 @@ func New(patch []byte, meta patchstore.Meta, cardID string, c Caller) Model {
 	}
 	for i := range files {
 		files[i].Path = clean(files[i].Path)
+		files[i].Config = toolloop.AgentConfig(files[i].Path)
 	}
 	h := sha256.Sum256(patch)
 	return Model{files: files, meta: meta, cardID: cardID, caller: c, sum: hex.EncodeToString(h[:])}
@@ -291,8 +294,11 @@ func plural(n int, one, many string) string {
 
 // includes names the risky kinds of change in the patch.
 func (m Model) includes() string {
-	var bin, del, exe, large, sym, sub, ren int
+	var cfg, bin, del, exe, large, sym, sub, ren int
 	for _, f := range m.files {
+		if f.Config {
+			cfg++
+		}
 		if f.Binary {
 			bin++
 		}
@@ -316,6 +322,9 @@ func (m Model) includes() string {
 		}
 	}
 	var parts []string
+	if cfg > 0 { // first: these run code the next time CI, an editor or git starts
+		parts = append(parts, fmt.Sprintf("%d %s", cfg, toolloop.FlagAgentConfig))
+	}
 	if bin > 0 {
 		parts = append(parts, fmt.Sprintf("%d binary", bin))
 	}
@@ -608,6 +617,9 @@ func fit(s string, w int) string {
 
 func flagTags(f File) string {
 	var s string
+	if f.Config {
+		s += " [" + toolloop.FlagAgentConfig + "]"
+	}
 	if f.Exec {
 		s += " [exec]"
 	}

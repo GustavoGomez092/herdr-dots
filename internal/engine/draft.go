@@ -195,9 +195,10 @@ func (e *Engine) setDraftPhase(id, phase string) {
 }
 
 // denyCheck is the jail's own deny match (case folded) over the built-in
-// list plus the configured tool_deny_globs, for worktree.Validate.
+// list, the draft-only list (agent configuration, for every backend) and the
+// configured tool_deny_globs, for worktree.Validate.
 func (e *Engine) denyCheck() func(rel string) bool {
-	deny := append(append([]string(nil), toolloop.DefaultDeny...), e.config().ToolDenyGlobs...)
+	deny := append(append(append([]string(nil), toolloop.DefaultDeny...), toolloop.DraftDeny...), e.config().ToolDenyGlobs...)
 	return func(rel string) bool { return toolloop.Denied(rel, deny) }
 }
 
@@ -414,6 +415,9 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 	if quiet() {
 		fail(ErrPaneClosed) // no card for a pane that is gone: nobody could apply it
 		return
+	}
+	if toolloop.AgentConfigAny(p.Paths()) { // allowed, but loudly: first on the card
+		p.Flags = append([]string{toolloop.FlagAgentConfig}, p.Flags...)
 	}
 	meta.Summary, meta.Stat, meta.Files, meta.Paths, meta.Flags, meta.Status = summary, p.Stat, p.Files, p.Paths(), p.Flags, patchstore.StatusReady
 	if raw != summary {

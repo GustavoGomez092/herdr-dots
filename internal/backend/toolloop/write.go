@@ -48,8 +48,8 @@ func Select(root string, read, write bool, lim Limits) ([]Tool, Limits, string) 
 // tools' jail: the same deny-list (Unicode case-folded, home-anchored globs
 // included), exact on-disk spellings, Windows-reserved names refused, and no
 // tools at all for an Unavailable root. They never write through a symlink,
-// never create anything outside root and never touch .git in any spelling,
-// whatever the deny-list says.
+// never create anything outside root and never touch .git or agent
+// configuration (DraftDeny) in any spelling, whatever the deny-list says.
 func WriteTools(root string, lim Limits) []Tool {
 	if Unavailable(root) {
 		return nil
@@ -119,7 +119,7 @@ func resolveForWrite(root, p string, deny []string) (rr, abs, rel string, err er
 	if err := worktree.CheckPath(rel); err != nil {
 		return "", "", "", fmt.Errorf("%w (%v)", ErrDenied, err)
 	}
-	if Denied(rel, deny) || platform.ReservedPathName(rel) {
+	if Denied(rel, deny) || Denied(rel, DraftDeny) || platform.ReservedPathName(rel) {
 		return "", "", "", ErrDenied
 	}
 	res := newResolver()
