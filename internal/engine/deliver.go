@@ -66,10 +66,23 @@ func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
 	e.broadcast()
 }
 
-// SendCards approves cards and delivers them now, or as soon as the agent is idle.
-func (e *Engine) SendCards(ids []string) error {
+// SendCards sends cards with no digest part counts, so it refuses any digest.
+func (e *Engine) SendCards(ids []string) error { return e.SendCardsSeen(ids, nil) }
+
+// SendCardsSeen approves cards and delivers them now, or as soon as the agent
+// is idle. seen maps each digest to the part count the developer was shown; a
+// digest whose current count differs, or that has no entry, refuses the whole
+// batch (a digest can gain parts after it was read).
+func (e *Engine) SendCardsSeen(ids []string, seen map[string]int) error {
 	e.dmu.Lock()
 	defer e.dmu.Unlock()
+	for _, id := range ids {
+		if c, ok := e.d.Queue.Get(id); ok && c.Kind == queue.KindDigest {
+			if n, has := seen[id]; !has || n != len(c.Parts) {
+				return errors.New("the digest changed since you read it: expand it again")
+			}
+		}
+	}
 	byPane := map[string][]queue.Card{}
 	var order []string
 	for _, id := range ids {

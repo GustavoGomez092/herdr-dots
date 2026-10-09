@@ -68,7 +68,7 @@ type Model struct {
 	seen            bool // a snapshot or disconnect has been received
 
 	// Council (council.go).
-	opened   map[string]bool           // cards whose parts were expanded at least once
+	opened   map[string]int            // digest id -> how many parts were on screen when it was last expanded
 	expandID string                    // council card whose member answers are shown
 	opener   func(target string) error // opens the council popup (WithOpener); nil = unavailable
 
@@ -91,7 +91,7 @@ func New(target string, c Caller) Model {
 	ti.Placeholder = "optional question, enter to summon"
 	ri := textinput.New()
 	ri.Placeholder = "optional reason, enter to save"
-	return Model{target: target, caller: c, editor: ta, question: ti, reason: ri, opened: map[string]bool{}}
+	return Model{target: target, caller: c, editor: ta, question: ti, reason: ri, opened: map[string]int{}}
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -359,31 +359,36 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "suggestions can't be sent: copy the text instead"
 			return m, nil
 		}
-		if c.Kind == queue.KindDigest && !m.opened[c.ID] {
-			m.expand(c.ID) // never send a digest whose parts weren't shown
-			m.status = "digest expanded: ⏎ again to send it"
+		if m.unseen(c) {
+			grew := m.opened[c.ID] > 0 // expanded before: it gained parts since
+			m.expand(c)                // never send a digest whose parts weren't shown
+			if grew {
+				m.status = "digest has new parts: ⏎ again to send"
+			} else {
+				m.status = "digest expanded: ⏎ again to send it"
+			}
 			return m, nil
 		}
 		if sendable(c) {
-			return m, m.call(ipc.CmdSend, ipc.SendArgs{IDs: []string{c.ID}})
+			return m, m.call(ipc.CmdSend, sendArgs([]queue.Card{c}))
 		}
 	case "a":
-		var ids []string
+		var send []queue.Card
 		unseen := 0
 		for _, c := range m.pane().Cards {
 			if sendable(c) && c.Kind != queue.KindPatch { // each patch is its own decision
-				if c.Kind == queue.KindDigest && !m.opened[c.ID] {
-					unseen++ // a digest is sent only after its parts were shown
+				if m.unseen(c) {
+					unseen++ // a digest is sent only after all its parts were shown
 					continue
 				}
-				ids = append(ids, c.ID)
+				send = append(send, c)
 			}
 		}
 		if unseen > 0 {
 			m.status = fmt.Sprintf("skipped %d digest(s) you haven't expanded: space to read, then ⏎ to send", unseen)
 		}
-		if len(ids) > 0 {
-			return m, m.call(ipc.CmdSend, ipc.SendArgs{IDs: ids})
+		if len(send) > 0 {
+			return m, m.call(ipc.CmdSend, sendArgs(send))
 		}
 	case "x":
 		if c, ok := m.selectedCard(); ok {

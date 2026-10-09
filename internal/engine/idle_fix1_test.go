@@ -127,7 +127,7 @@ func TestCriticalCardSentThenALaterPartMakesANewCard(t *testing.T) {
 	close(gate1)
 	eventually(t, "the critical card", func() bool { return len(r.digests()) == 1 })
 	sent := r.digests()[0]
-	if err := r.e.SendCards([]string{sent.ID}); err != nil {
+	if err := r.e.SendCardsSeen([]string{sent.ID}, map[string]int{sent.ID: len(sent.Parts)}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the card sent", func() bool { c, _ := r.q.Get(sent.ID); return c.Status == queue.StatusSent })
