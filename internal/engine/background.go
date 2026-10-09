@@ -619,5 +619,5 @@ func (e *Engine) nextLocked(d dots.Dot, paneID string, now time.Time) string {
 	if e.dailyClosedLocked(now) || OverUSD(e.todayLocked(now).CostUSD, dailyBudget(e.config().DailyBudgetUSD)) {
 		return "paused · daily budget"
 	}
-	return ""
+	return e.researchNextLocked(d, paneID, now)
 }

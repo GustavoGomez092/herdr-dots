@@ -169,6 +169,7 @@ func (e *Engine) poll() {
 			continue
 		}
 		e.checkSession(a, p)
+		e.observePane(a, p) // idle periods, the away digest, research (idle.go)
 		e.flushAuto(a.PaneID)
 	}
 	e.todayTick()
@@ -193,6 +194,7 @@ func (e *Engine) dropPane(paneID string) {
 	e.mu.Lock()
 	e.abandonDraftsLocked(paneID, "") // same section as the delete (see Draft)
 	e.gens[paneID]++
+	delete(e.idle, paneID) // collected research for a closed pane is dropped (idle.go)
 	orphaned, oerr := e.d.Queue.OrphanPane(paneID)
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)
