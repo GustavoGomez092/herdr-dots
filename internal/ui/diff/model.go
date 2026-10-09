@@ -36,16 +36,20 @@ const largeLines = 2000
 
 // File is one file's section of a patch.
 type File struct {
-	Path     string
-	Lines    []string // from its "diff --git" line on, display-safe
-	Hunks    []int    // indexes into Lines of the "@@" lines
-	Binary   bool
-	Added    int
-	Deleted  int
-	Exec     bool // gains the executable bit (new file or mode change)
-	Deletion bool // the file is removed
-	New      bool // the file is created
-	Large    bool
+	Path      string
+	Lines     []string // from its "diff --git" line on, display-safe
+	Hunks     []int    // indexes into Lines of the "@@" lines
+	Binary    bool
+	Added     int
+	Deleted   int
+	Exec      bool // gains the executable bit (new file or mode change)
+	Deletion  bool // the file is removed
+	New       bool // the file is created
+	Large     bool
+	Symlink   bool // mode 120000
+	Submodule bool // mode 160000
+	Renamed   bool // renamed: the old path is removed
+	Copied    bool
 }
 
 // clean makes model- or repository-controlled text safe to display on one
@@ -65,42 +69,71 @@ func clean(s string) string {
 	}, s)
 }
 
-// Parse splits `git diff` output into files. Every line is sanitized: file
-// contents came from a model and must not reach the terminal raw.
+// Parse splits `git diff` output into files. Header lines are recognised on
+// the raw line (a zero-width prefix does not make a file, so the file count
+// is what git would apply); lines kept for display are sanitized because
+// file contents came from a model and must not reach the terminal raw.
 func Parse(patch []byte) []File {
 	var files []File
 	for _, raw := range strings.Split(strings.TrimRight(string(patch), "\n"), "\n") {
-		line := clean(raw)
-		if strings.HasPrefix(line, "diff --git ") {
-			files = append(files, File{Path: pathOf(line)})
+		if strings.HasPrefix(raw, "diff --git ") {
+			files = append(files, File{Path: clean(pathOf(raw))})
 		}
 		if len(files) == 0 {
 			continue
 		}
 		f := &files[len(files)-1]
+		inHeader := len(f.Hunks) == 0 && !f.Binary
 		switch {
-		case strings.HasPrefix(line, "@@"):
+		case strings.HasPrefix(raw, "@@"):
 			f.Hunks = append(f.Hunks, len(f.Lines))
-		case strings.HasPrefix(line, "GIT binary patch"), strings.HasPrefix(line, "Binary files "):
+		case strings.HasPrefix(raw, "GIT binary patch"), strings.HasPrefix(raw, "Binary files "):
 			f.Binary = true
-		case strings.HasPrefix(line, "new file mode "):
+		case inHeader && strings.HasPrefix(raw, "new file mode "):
 			f.New = true
-			f.Exec = f.Exec || strings.HasSuffix(line, "755")
-		case strings.HasPrefix(line, "new mode "):
-			f.Exec = f.Exec || strings.HasSuffix(line, "755")
-		case strings.HasPrefix(line, "deleted file mode "):
+			f.noteMode(strings.TrimPrefix(raw, "new file mode "))
+		case inHeader && strings.HasPrefix(raw, "new mode "):
+			f.noteMode(strings.TrimPrefix(raw, "new mode "))
+		case inHeader && strings.HasPrefix(raw, "deleted file mode "):
 			f.Deletion = true
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++ "):
+			f.noteMode(strings.TrimPrefix(raw, "deleted file mode "))
+		case inHeader && strings.HasPrefix(raw, "index "):
+			if fl := strings.Fields(raw); len(fl) == 3 {
+				f.noteMode(fl[2])
+			}
+		case inHeader && strings.HasPrefix(raw, "rename from "):
+			f.Renamed, f.Deletion = true, true
+		case inHeader && strings.HasPrefix(raw, "copy from "):
+			f.Copied = true
+		case strings.HasPrefix(raw, "+") && !strings.HasPrefix(raw, "+++ "):
 			f.Added++
-		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "--- "):
+		case strings.HasPrefix(raw, "-") && !strings.HasPrefix(raw, "--- "):
 			f.Deleted++
 		}
-		f.Lines = append(f.Lines, line)
+		f.Lines = append(f.Lines, clean(raw))
 	}
 	for i := range files {
 		files[i].Large = len(files[i].Lines) > largeLines
 	}
 	return files
+}
+
+// noteMode flags a mode: symlink, submodule, or any executable bit.
+func (f *File) noteMode(mode string) {
+	v, err := strconv.ParseUint(strings.TrimSpace(mode), 8, 32)
+	if err != nil {
+		return
+	}
+	switch v &^ 0o7777 {
+	case 0o120000:
+		f.Symlink = true
+	case 0o160000:
+		f.Submodule = true
+	case 0o100000:
+		if v&0o111 != 0 && !f.Deletion {
+			f.Exec = true
+		}
+	}
 }
 
 // pathOf reads the b/ path of a "diff --git a/x b/x" line.
@@ -117,7 +150,8 @@ type appliedMsg struct{ err error }
 // Model is the viewer.
 type Model struct {
 	files   []File
-	seen    []bool // per file: its whole diff has been on screen
+	cov     [][]bool // per file, per line: has been on screen
+	sized   bool     // a WindowSizeMsg arrived
 	meta    patchstore.Meta
 	cardID  string
 	sum     string // SHA-256 of the exact patch bytes shown
@@ -145,7 +179,7 @@ func New(patch []byte, meta patchstore.Meta, cardID string, c Caller) Model {
 		files[i].Path = clean(files[i].Path)
 	}
 	h := sha256.Sum256(patch)
-	return Model{files: files, meta: meta, cardID: cardID, caller: c, sum: hex.EncodeToString(h[:])}.markSeen()
+	return Model{files: files, meta: meta, cardID: cardID, caller: c, sum: hex.EncodeToString(h[:])}
 }
 
 // Failed is a viewer that only explains why the patch can't be shown.
@@ -161,26 +195,44 @@ func (m Model) Arm() Model {
 
 func (m Model) Init() tea.Cmd { return nil }
 
-// markSeen records the selected file as viewed once its last line is on
-// screen. It copies the slice: models are values and may be forked.
+// markSeen records the lines of the selected file that are on screen now.
+// Nothing is recorded before the window size is known. It copies what it
+// changes: models are values and may be forked.
 func (m Model) markSeen() Model {
-	if m.file < 0 || m.file >= len(m.files) {
+	if !m.sized || m.file < 0 || m.file >= len(m.files) {
 		return m
 	}
-	if m.top+m.pageLines() < len(m.files[m.file].Lines) {
+	n := len(m.files[m.file].Lines)
+	from, to := m.top, min(n, m.top+m.pageLines())
+	if from >= to {
 		return m
 	}
-	seen := make([]bool, len(m.files))
-	copy(seen, m.seen)
-	seen[m.file] = true
-	m.seen = seen
+	cov := make([][]bool, len(m.files))
+	copy(cov, m.cov)
+	row := make([]bool, n)
+	copy(row, cov[m.file])
+	for i := from; i < to; i++ {
+		row[i] = true
+	}
+	cov[m.file] = row
+	m.cov = cov
 	return m
 }
 
+// unseen lists the files with at least one line that never was on screen.
 func (m Model) unseen() []string {
 	var out []string
 	for i, f := range m.files {
-		if i >= len(m.seen) || !m.seen[i] {
+		ok := i < len(m.cov) && len(m.cov[i]) == len(f.Lines)
+		if ok {
+			for _, v := range m.cov[i] {
+				if !v {
+					ok = false
+					break
+				}
+			}
+		}
+		if !ok {
 			out = append(out, f.Path)
 		}
 	}
@@ -211,7 +263,7 @@ func plural(n int, one, many string) string {
 
 // includes names the risky kinds of change in the patch.
 func (m Model) includes() string {
-	var bin, del, exe, large int
+	var bin, del, exe, large, sym, sub, ren int
 	for _, f := range m.files {
 		if f.Binary {
 			bin++
@@ -224,6 +276,15 @@ func (m Model) includes() string {
 		}
 		if f.Large {
 			large++
+		}
+		if f.Symlink {
+			sym++
+		}
+		if f.Submodule {
+			sub++
+		}
+		if f.Renamed || f.Copied {
+			ren++
 		}
 	}
 	var parts []string
@@ -239,57 +300,99 @@ func (m Model) includes() string {
 	if large > 0 {
 		parts = append(parts, fmt.Sprintf("%d large", large))
 	}
+	if sym > 0 {
+		parts = append(parts, fmt.Sprintf("%d symlink", sym))
+	}
+	if sub > 0 {
+		parts = append(parts, fmt.Sprintf("%d submodule", sub))
+	}
+	if ren > 0 {
+		parts = append(parts, fmt.Sprintf("%d renamed/copied", ren))
+	}
 	return strings.Join(parts, ", ")
 }
 
-// footer is the bottom of the screen: the apply question with what it
-// covers, or the status/help line. Lines are wrapped to the width.
+// confirmLines is the apply question with what it covers.
+func (m Model) confirmLines() []string {
+	w := m.w()
+	n := len(m.files)
+	noun := "files"
+	if n == 1 {
+		noun = "file"
+	}
+	text := style.Title.Render(fmt.Sprintf("Apply %d %s to your working tree? Nothing is staged or committed. (y/N)", n, noun))
+	out := strings.Split(ansi.Wrap(text, w, ""), "\n")
+	if inc := m.includes(); inc != "" {
+		out = append(out, strings.Split(ansi.Wrap("Includes: "+inc, w, ""), "\n")...)
+	}
+	if u := m.unseen(); len(u) > 0 {
+		shown := u
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		s := "Not yet viewed: " + strings.Join(shown, ", ")
+		if len(u) > len(shown) {
+			s += fmt.Sprintf(" and %d more", len(u)-len(shown))
+		}
+		out = append(out, strings.Split(ansi.Wrap(s, w, ""), "\n")...)
+	}
+	return out
+}
+
+const tooSmall = "window too small — enlarge to review"
+
+// minDiffLines is how much diff must stay on screen beside the apply question.
+const minDiffLines = 3
+
+// fits reports whether the header, the file line, the whole apply question
+// and at least minDiffLines of diff fit the window. The question is only
+// ever open (and y only ever acts) when they do.
+func (m Model) fits() bool {
+	if !m.sized {
+		return false
+	}
+	narrow := 0
+	if m.w() < 60 {
+		narrow = 1
+	}
+	return m.height >= 1+narrow+len(m.confirmLines())+minDiffLines
+}
+
+// footer is the bottom of the screen: the apply question, or the
+// status/help line. Lines are wrapped to the width.
 func (m Model) footer() []string {
 	w := m.w()
 	switch {
 	case m.confirm:
-		n := len(m.files)
-		noun := "files"
-		if n == 1 {
-			noun = "file"
-		}
-		text := style.Title.Render(fmt.Sprintf("Apply %d %s to your working tree? Nothing is staged or committed. (y/N)", n, noun))
-		out := strings.Split(ansi.Wrap(text, w, ""), "\n")
-		if inc := m.includes(); inc != "" {
-			out = append(out, strings.Split(ansi.Wrap("Includes: "+inc, w, ""), "\n")...)
-		}
-		if u := m.unseen(); len(u) > 0 {
-			shown := u
-			if len(shown) > 3 {
-				shown = shown[:3]
-			}
-			s := "Not yet viewed: " + strings.Join(shown, ", ")
-			if len(u) > len(shown) {
-				s += fmt.Sprintf(" and %d more", len(u)-len(shown))
-			}
-			out = append(out, strings.Split(ansi.Wrap(s, w, ""), "\n")...)
-		}
-		return out
+		return m.confirmLines()
 	case m.status != "":
 		return strings.Split(ansi.Wrap(style.Dim.Render(m.status), w, ""), "\n")
 	}
 	return []string{style.Dim.Render(fit("j/k file · ↑/↓ scroll · n/p hunk · A apply · q close", w))}
 }
 
-// pageLines is how many diff lines fit: the window minus the header, the
-// summary, the footer and (in the narrow layout) the file line.
-func (m Model) pageLines() int {
+// layout decides whether the summary line fits and how many diff lines
+// there are: the window minus the header, the summary, the footer and (in
+// the narrow layout) the file line. The summary is the first thing dropped.
+func (m Model) layout() (summary bool, page int) {
+	has := m.summaryLine() != ""
 	if m.height <= 0 {
-		return 20
+		return has, 20
 	}
 	used := 1 + len(m.footer())
-	if m.summaryLine() != "" {
-		used++
-	}
 	if m.w() < 60 {
 		used++
 	}
-	return max(1, m.height-used)
+	if has && m.height-used-1 >= minDiffLines {
+		used++
+		summary = true
+	}
+	return summary, max(1, m.height-used)
+}
+
+func (m Model) pageLines() int {
+	_, p := m.layout()
+	return p
 }
 
 func (m Model) cur() File {
@@ -355,7 +458,10 @@ func (m Model) apply() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
+		m.width, m.height, m.sized = msg.Width, msg.Height, true
+		if m.confirm && !m.fits() {
+			m.confirm, m.status = false, tooSmall
+		}
 		return m.markSeen(), nil
 	case appliedMsg:
 		m.busy = false
@@ -377,10 +483,17 @@ func (m Model) keys(k tea.KeyMsg) (Model, tea.Cmd) {
 	if m.failed != nil {
 		return m, tea.Quit
 	}
+	if k.String() == "ctrl+c" { // close even mid-apply; the engine finishes the apply
+		return m, tea.Quit
+	}
 	if m.busy {
 		return m, nil
 	}
 	if m.confirm {
+		if !m.fits() { // never act on a question that isn't fully on screen
+			m.confirm, m.status = false, tooSmall
+			return m, nil
+		}
 		m.confirm = false
 		if k.String() == "y" && m.caller != nil {
 			m.busy, m.status = true, "applying…"
@@ -416,6 +529,8 @@ func (m Model) keys(k tea.KeyMsg) (Model, tea.Cmd) {
 			m.status = "this patch has no card to apply"
 		case len(m.files) == 0:
 			m.status = "this patch has no files"
+		case !m.fits():
+			m.status = tooSmall
 		default:
 			m.confirm = true
 		}
@@ -462,6 +577,18 @@ func flagTags(f File) string {
 	if f.New {
 		s += " [new]"
 	}
+	if f.Symlink {
+		s += " [symlink]"
+	}
+	if f.Submodule {
+		s += " [submodule]"
+	}
+	if f.Renamed {
+		s += " [renamed]"
+	}
+	if f.Copied {
+		s += " [copied]"
+	}
 	if f.Large {
 		s += " [large]"
 	}
@@ -483,10 +610,10 @@ func (m Model) View() string {
 		head += "  [" + strings.Join(flags, "] [") + "]"
 	}
 	b.WriteString(style.Title.Render(fit(head, w)) + "\n")
-	if s := m.summaryLine(); s != "" {
-		b.WriteString(s + "\n")
+	summary, page := m.layout()
+	if summary {
+		b.WriteString(m.summaryLine() + "\n")
 	}
-	page := m.pageLines()
 	left := min(44, max(14, w/3))
 	var list []string
 	for i, f := range m.files {

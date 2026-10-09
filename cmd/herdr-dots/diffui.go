@@ -43,6 +43,8 @@ func diffModel(store *patchstore.Store, id, cardID string, arm bool, c diff.Call
 	}
 	if cardID == "" {
 		cardID = meta.Card
+	} else if cardID != meta.Card { // the card named in the environment isn't this patch's
+		return diff.Failed(fmt.Errorf("card %s is not the card of patch %s", cardID, id))
 	}
 	m := diff.New(patch, meta, cardID, c)
 	if arm {

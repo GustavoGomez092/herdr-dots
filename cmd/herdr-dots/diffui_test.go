@@ -65,6 +65,13 @@ func TestDiffUIIsRoutedAndInTheManifest(t *testing.T) {
 	if _, err := toml.DecodeFile(filepath.Join("..", "..", "herdr-plugin.toml"), &m); err != nil {
 		t.Fatal(err)
 	}
+	seen := map[string]bool{}
+	for _, p := range m.Panes {
+		if seen[p.ID] {
+			t.Fatalf("pane id %q is declared twice", p.ID)
+		}
+		seen[p.ID] = true
+	}
 	for _, p := range m.Panes {
 		if p.ID == "diff" {
 			if p.Placement != "zoomed" || strings.Join(p.Command, " ") != "./bin/herdr-dots diff-ui" {
