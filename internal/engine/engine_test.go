@@ -494,3 +494,34 @@ func TestStartKeepsAttachmentOnTransientPaneGetError(t *testing.T) {
 		t.Fatal("a transient PaneGet error at Start must not drop the attachment")
 	}
 }
+
+// When the reader is replaced by one with fewer turns (scrollback fallback,
+// restart, path no longer resolving), the counter follows it down so new turns
+// are reviewed instead of skipped.
+func TestReaderReplacedWithFewerTurnsStillReviewsNewTurns(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue))
+	for i := 0; i < 5; i++ {
+		r.readers["s1"].add(transcript.Turn{User: "old"})
+	}
+	r.attach(t, "security")
+	eventually(t, "five turns consumed", func() bool { return lastSeen(r, "security") == 5 })
+	eventually(t, "catch-up run finished", func() bool {
+		p, _ := r.e.Snapshot().Pane(pane)
+		return len(p.Dots) == 1 && p.Dots[0].Status == view.StatusPassed
+	})
+	before := r.be.n()
+
+	small := &fakeReader{}
+	small.add(transcript.Turn{User: "after swap"})
+	r.setReader("s1", small)
+	r.e.dropReader(pane)
+	r.srv.Push(pane, herdr.StatusIdle)
+	eventually(t, "counter follows the smaller reader", func() bool { return lastSeen(r, "security") == 1 })
+
+	small.add(transcript.Turn{User: "brand new"})
+	r.srv.Push(pane, herdr.StatusWorking)
+	r.srv.Push(pane, herdr.StatusIdle)
+	eventually(t, "new turn reviewed", func() bool {
+		return r.be.n() > before && r.be.last().Turns[len(r.be.last().Turns)-1].User == "brand new"
+	})
+}

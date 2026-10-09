@@ -383,7 +383,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 			start := min(da.LastSeenTurn, len(turns))
 			newTurns := turns[start:]
 			if len(newTurns) == 0 {
-				da.LastSeenTurn = max(da.LastSeenTurn, len(turns))
+				da.LastSeenTurn = len(turns)
 				continue
 			}
 			k := key{paneID, da.Slug}
@@ -396,7 +396,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 				DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls,
 				PaneBudget: e.d.Config.SessionBudgetCalls,
 			})
-			da.LastSeenTurn = max(da.LastSeenTurn, len(turns))
+			da.LastSeenTurn = len(turns)
 			switch dec.Reason {
 			case ReasonCooldown:
 				da.CooldownLeft--
