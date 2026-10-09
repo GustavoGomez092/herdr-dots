@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/lockfile"
@@ -105,7 +109,7 @@ func TestMigrateNeverPrintsCredentialsContents(t *testing.T) {
 		t.Fatalf("migrate: %v\n%s", err, out.String())
 	}
 	var logs []string
-	startupMigrations(p, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
+	_, _ = startupMigrations(p, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
 	all := out.String() + strings.Join(logs, "\n")
 	if !strings.Contains(all, "credentials.toml") {
 		t.Fatalf("the unreadable file should still be named:\n%s", all)
@@ -167,8 +171,148 @@ func TestStartupMigrationsLogsTheSummary(t *testing.T) {
 	p := migratePaths(t)
 	writeTestFile(t, p.UsageFile(), `{"version":5}`)
 	var logs []string
-	rep := startupMigrations(p, func(f string, a ...any) { logs = append(logs, f) })
-	if len(rep.ReadOnly) != 1 || len(logs) == 0 {
-		t.Fatalf("report %+v logs %v", rep, logs)
+	rep, err := startupMigrations(p, func(f string, a ...any) { logs = append(logs, f) })
+	if err != nil || len(rep.ReadOnly) != 1 || len(logs) == 0 {
+		t.Fatalf("report %+v logs %v err %v", rep, logs, err)
+	}
+}
+
+// useMigrationSet replaces the set the engine and the CLI gate run.
+func useMigrationSet(t *testing.T, s migrate.Set) {
+	t.Helper()
+	old := migrationSet
+	migrationSet = func() migrate.Set { return s }
+	t.Cleanup(func() { migrationSet = old })
+}
+
+// invalidSet fails Set.Validate: version 2 with no migration from 1.
+func invalidSet() migrate.Set {
+	return migrate.Set{Kinds: []migrate.Kind{{Name: "queue", Root: migrate.SessionRoot, Globs: []string{"queue.json"}, Format: migrate.JSON, Current: 2}}}
+}
+
+func setPluginEnv(t *testing.T, p paths.Paths) {
+	t.Helper()
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", p.ConfigDir)
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", p.StateDir)
+	t.Setenv("HERDR_SOCKET_PATH", p.SocketPath)
+}
+
+// Fail closed: an engine whose migration set is broken can't tell which
+// files are newer, so it refuses to start rather than run unprotected.
+func TestEngineRefusesToStartWhenTheMigrationSetIsInvalid(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	p := migratePaths(t)
+	useMigrationSet(t, invalidSet())
+	// No Herdr socket: if serveEngine got past the migrations it would stop
+	// at herdr.NewFromEnv with a different error, never reach a real Herdr.
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	err := serveEngine(p)
+	if err == nil || !strings.Contains(err.Error(), "schema migrations") {
+		t.Fatalf("serveEngine must refuse to start: %v", err)
+	}
+	if lockfile.Held(p.EngineLock()) {
+		t.Fatal("engine.lock must be released")
+	}
+}
+
+// The CLI gate fails closed too, and dispatch runs it before every writing
+// command: the command never runs unprotected.
+func TestDispatchRunsTheGateBeforeAWritingCommand(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	p := migratePaths(t)
+	writeTestFile(t, p.QueueFile(), `{"version":3,"cards":[]}`)
+	setPluginEnv(t, p)
+	ran, protected := false, false
+	commands["test-writer"] = func([]string) error { ran, protected = true, fsutil.Protected(p.QueueFile()); return nil }
+	writingCommands["test-writer"] = true
+	t.Cleanup(func() { delete(commands, "test-writer"); delete(writingCommands, "test-writer") })
+	if err := dispatch([]string{"test-writer"}); err != nil {
+		t.Fatal(err)
+	}
+	if !ran || !protected {
+		t.Fatalf("the gate must mark the newer queue before the command runs (ran %v, protected %v)", ran, protected)
+	}
+	fsutil.ResetProtected()
+	ran = false
+	useMigrationSet(t, invalidSet())
+	if err := dispatch([]string{"test-writer"}); err == nil || ran {
+		t.Fatalf("a broken migration set must refuse the command: err %v, ran %v", err, ran)
+	}
+}
+
+// Every command is classified: it runs the gate, or it is listed as writing
+// nothing, writing through the engine, or writing only self-guarded or
+// unversioned files. A new command fails here until someone decides.
+func TestEveryCommandIsClassifiedForTheGate(t *testing.T) {
+	for name := range commands {
+		if writingCommands[name] == (gateExempt[name] != "") {
+			t.Errorf("command %q: must be in exactly one of writingCommands and gateExempt", name)
+		}
+	}
+}
+
+// `migrate` reports a state dir it can't read as a failure, never as
+// "all files current".
+func TestMigrateReportsAnUnreadableStateDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 000 doesn't make a directory unreadable on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+	t.Cleanup(fsutil.ResetProtected)
+	p := migratePaths(t)
+	if err := os.Chmod(p.StateDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p.StateDir, 0o700) })
+	var out bytes.Buffer
+	err := migrateCmd(nil, p, &out)
+	if err == nil {
+		t.Fatalf("an unreadable state dir must fail:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "all files current") || !strings.Contains(out.String(), "failed 1") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+// A dry run writes nothing, not even an engine.lock in a session dir that
+// has none.
+func TestMigrateDryRunCreatesNoEngineLock(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	p := migratePaths(t)
+	writeTestFile(t, p.QueueFile(), `{"version":2,"cards":[]}`)
+	var out bytes.Buffer
+	if err := migrateCmd([]string{"--dry-run"}, p, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "read-only 1") {
+		t.Fatalf("the session must still be checked:\n%s", out.String())
+	}
+	if _, err := os.Lstat(p.EngineLock()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a dry run must not create engine.lock: %v", err)
+	}
+}
+
+type blockingNotifier struct{ called chan struct{} }
+
+func (b blockingNotifier) Notify(ctx context.Context, title, body string) error {
+	close(b.called)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A slow Herdr socket can't hold up the read-only toast forever: it gives up
+// after its timeout and logs why.
+func TestReadOnlyToastGivesUpOnASlowHerdr(t *testing.T) {
+	n := blockingNotifier{called: make(chan struct{})}
+	var logs []string
+	start := time.Now()
+	notifyReadOnly(context.Background(), n, "2 file(s) ...", 50*time.Millisecond, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
+	if el := time.Since(start); el > 2*time.Second {
+		t.Fatalf("notify took %v", el)
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "notify") {
+		t.Fatalf("logs %v", logs)
 	}
 }
