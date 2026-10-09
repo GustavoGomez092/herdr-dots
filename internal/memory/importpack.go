@@ -151,11 +151,12 @@ func (s *Store) importOne(f *scopeFile, in Entry) (insertResult, error) {
 	return r, err
 }
 
-// pendingImports counts the imported entries in f still waiting for review.
+// pendingImports counts the pack imports in f still waiting for review
+// (restores don't use up the pack limit).
 func pendingImports(f *scopeFile) int {
 	n := 0
 	for _, x := range f.Entries {
-		if x.Status == StatusProposed && x.Source == SourceImport {
+		if pendingPack(x) {
 			n++
 		}
 	}

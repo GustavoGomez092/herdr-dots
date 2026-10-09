@@ -27,6 +27,7 @@ type tomlEntry struct {
 	Pinned bool     `toml:"pinned"`
 	Paths  []string `toml:"paths"`
 	Text   string   `toml:"text"`
+	From   string   `toml:"from,omitempty"` // the dot pack an imported entry came from (Phase 9)
 }
 
 type tomlDoc struct {
@@ -44,7 +45,7 @@ func ExportTOML(entries []Entry) ([]byte, error) {
 			paths = []string{}
 		}
 		doc.Entry = append(doc.Entry, tomlEntry{Ref: e.Ref().String(), Scope: string(e.Scope), Dot: e.Dot,
-			Kind: string(e.Kind), Status: string(e.Status), Source: string(e.Source), Pinned: e.Pinned, Paths: paths, Text: e.Text})
+			Kind: string(e.Kind), Status: string(e.Status), Source: string(e.Source), Pinned: e.Pinned, Paths: paths, Text: e.Text, From: e.From})
 	}
 	var buf bytes.Buffer
 	buf.WriteString(exportHeader)
@@ -68,7 +69,7 @@ func ImportTOML(data []byte) ([]Entry, error) {
 	for i, te := range doc.Entry {
 		e := Entry{Scope: Scope(strings.TrimSpace(te.Scope)), Dot: strings.TrimSpace(te.Dot), Kind: Kind(strings.TrimSpace(te.Kind)),
 			Status: Status(strings.TrimSpace(te.Status)), Source: Source(strings.TrimSpace(te.Source)), Pinned: te.Pinned,
-			Paths: te.Paths, Text: strings.TrimSpace(te.Text)}
+			Paths: te.Paths, Text: strings.TrimSpace(te.Text), From: strings.TrimSpace(te.From)}
 		if !e.Scope.Valid() {
 			return nil, fmt.Errorf("%w: entry %d: scope %q must be project, dot or global", ErrInvalid, i+1, te.Scope)
 		}
@@ -77,6 +78,9 @@ func ImportTOML(data []byte) ([]Entry, error) {
 		}
 		if e.Dot != "" && !dotSlugRe.MatchString(e.Dot) {
 			return nil, fmt.Errorf("%w: entry %d: dot %q is not a valid dot name", ErrInvalid, i+1, e.Dot)
+		}
+		if e.From != "" && !dotSlugRe.MatchString(e.From) {
+			return nil, fmt.Errorf("%w: entry %d: from %q is not a valid dot name", ErrInvalid, i+1, e.From)
 		}
 		if e.Status != "" && !e.Status.Valid() {
 			return nil, fmt.Errorf("%w: entry %d: status %q must be active, proposed or archived", ErrInvalid, i+1, e.Status)

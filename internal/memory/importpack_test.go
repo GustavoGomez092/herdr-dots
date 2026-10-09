@@ -415,25 +415,105 @@ func TestImportPackRecordsWhereItCameFrom(t *testing.T) {
 	}
 }
 
-// A local proposal makes room by archiving imported proposals first: someone
-// else's unreviewed conclusions never outrank this project's own.
-func TestLocalProposalsArchiveImportsFirst(t *testing.T) {
+// Ruling P9-R11: pending pack imports are never archived to make room, by an
+// incoming local entry or by Prune; they leave only by approval, forgetting
+// or DeleteDot. They don't count against the cap either, so local memory
+// keeps its whole cap and the scope exceeds it by at most MaxPendingImports.
+func TestPendingPackImportsAreNeverArchived(t *testing.T) {
 	s := testStore(t)
 	s.Now = clock()
-	s.Limits.MaxProject = 3
-	model := mustAdd(t, s, pid, Entry{Scope: ScopeProject, Dot: "frontend", Kind: KindNote, Text: distinct(1), Status: StatusProposed, Source: SourceModel})
-	if _, err := s.ImportPack(pid, "security", []Entry{{Scope: ScopeProject, Kind: KindNote, Text: distinct(2)}, {Scope: ScopeProject, Kind: KindNote, Text: distinct(3)}}); err != nil {
+	s.Limits.MaxProject = 4
+	for i := range 3 {
+		mustAdd(t, s, pid, Entry{Scope: ScopeProject, Kind: KindConvention, Text: distinct(i), Source: SourceModel})
+	}
+	local := mustAdd(t, s, pid, Entry{Scope: ScopeProject, Dot: "frontend", Kind: KindNote, Text: distinct(3), Status: StatusProposed, Source: SourceModel})
+	var in []Entry
+	for i := range 5 {
+		in = append(in, Entry{Scope: ScopeProject, Kind: KindNote, Text: distinct(100 + i)})
+	}
+	if res, err := s.ImportPack(pid, "security", in); err != nil || res.Added != 5 {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	// A model proposal over the cap pushes out a local proposal, never a
+	// pending pack import.
+	if res, err := s.Apply(pid, "security", []backend.MemoryOp{{Op: "add", Scope: "project", Kind: "note", Text: distinct(200)}}, Evidence{}); err != nil || res.Added != 1 {
+		t.Fatalf("apply %+v err %v", res, err)
+	}
+	if got, _ := s.Get(pid, local.Ref()); got.Status != StatusArchived {
+		t.Fatalf("the local proposal should have made room: %+v", got)
+	}
+	if _, err := s.Prune(pid, s.now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Propose(pid, Entry{Kind: KindNote, Text: distinct(4)}); err != nil {
+	n, live := 0, list(t, s, pid, Filter{Scope: ScopeProject})
+	for _, e := range live {
+		if e.Source == SourceImport && e.Status == StatusProposed {
+			n++
+		}
+	}
+	if n != 5 || len(live) != 4+5 {
+		t.Fatalf("%d pending pack imports, %d live: %+v", n, len(live), live)
+	}
+	for _, e := range list(t, s, pid, Filter{Scope: ScopeProject, Statuses: []Status{StatusArchived}}) {
+		if e.Source == SourceImport {
+			t.Fatalf("archived a pack import: %+v", e)
+		}
+	}
+}
+
+// A restore (Phase 2's `memory import`: Source import, no From) behaves as
+// before Phase 9: its proposals count against the normal cap (the oldest
+// make room) and never use up the pack limit.
+func TestRestoresKeepPhaseTwoCapBehavior(t *testing.T) {
+	s := testStore(t)
+	s.Now = clock()
+	s.Limits.MaxProject = 4
+	restore := func(i int) {
+		t.Helper()
+		mustAdd(t, s, pid, Entry{Scope: ScopeProject, Dot: "frontend", Kind: KindNote, Text: distinct(i), Status: StatusProposed, Source: SourceImport})
+	}
+	for i := range 80 {
+		restore(i)
+	}
+	live := list(t, s, pid, Filter{Scope: ScopeProject})
+	if len(live) != 4 || live[0].Text != distinct(76) {
+		t.Fatalf("%d live after the restore: %+v", len(live), live)
+	}
+	s2 := testStore(t)
+	for i := range MaxPendingImports + 10 {
+		mustAdd(t, s2, pid, Entry{Scope: ScopeProject, Kind: KindNote, Text: distinct(i), Status: StatusProposed, Source: SourceImport})
+	}
+	if res, err := s2.ImportPack(pid, "security", []Entry{{Scope: ScopeProject, Kind: KindNote, Text: distinct(500)}}); err != nil || res.Added != 1 {
+		t.Fatalf("a pack after a restore: %+v err %v", res, err)
+	}
+}
+
+// A pack can't pose as a restore: merging into a pending restored entry
+// stamps it with the pack.
+func TestPackMergingIntoARestoreMarksIt(t *testing.T) {
+	s := testStore(t)
+	r := mustAdd(t, s, pid, Entry{Scope: ScopeProject, Kind: KindDecision, Text: "Sessions live in Redis.", Status: StatusProposed, Source: SourceImport})
+	if res, err := s.ImportPack(pid, "security", packEntries()[1:2]); err != nil || res.Updated != 1 {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if got, _ := s.Get(pid, r.Ref()); got.From != "security" {
+		t.Fatalf("merged entry %+v", got)
+	}
+}
+
+// Export and restore keep the pack label.
+func TestTOMLKeepsThePackLabel(t *testing.T) {
+	data, err := ExportTOML([]Entry{{ID: "m1", Scope: ScopeProject, Dot: "security", Kind: KindDecision, Text: "Sessions live in Redis.",
+		Status: StatusProposed, Source: SourceImport, From: "security"}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.Get(pid, model.Ref()); got.Status != StatusProposed {
-		t.Fatalf("the oldest local proposal went before an import: %+v", got)
+	es, err := ImportTOML(data)
+	if err != nil || len(es) != 1 || es[0].From != "security" {
+		t.Fatalf("round trip %+v err %v\n%s", es, err, data)
 	}
-	arch := list(t, s, pid, Filter{Scope: ScopeProject, Statuses: []Status{StatusArchived}})
-	if len(arch) != 1 || arch[0].Source != SourceImport || arch[0].Text != distinct(2) {
-		t.Fatalf("archived %+v", arch)
+	if _, err := ImportTOML([]byte("version = 1\n[[entry]]\nscope = \"project\"\nkind = \"note\"\ntext = \"x\"\nfrom = \"../x\"\n")); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad from accepted: %v", err)
 	}
 }
 

@@ -428,6 +428,11 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 				x.Text = e.Text
 			}
 		}
+		// A pack's entry that repeats a pending import (a restore included)
+		// is marked as the pack's: a pack never poses as a restore.
+		if e.Source == SourceImport && e.From != "" && x.Source == SourceImport && x.Status == StatusProposed {
+			x.From = e.From
+		}
 		if e.Source == SourceUser && x.Source != SourceUser {
 			x.Source = SourceUser // the developer endorsed it
 			if x.Scope == ScopeProject {
@@ -524,19 +529,26 @@ func (s *Store) capFor(sc Scope) int {
 // research (proposed or active) can make room, keep is archived instead of any
 // non-research entry. A pinned or developer-written keep is never archived.
 //
-// Imported proposals (Phase 9) are someone else's unreviewed conclusions:
-// among proposals they go right after research, before this project's own,
-// and a new import archives nothing at all, not even an older import (one
-// pack must not collapse to its last entry). Imports are capped per scope
-// file (MaxPendingImports) instead.
+// Pending pack imports (Phase 9, ruling P9-R11) sit outside the cap: they are
+// never archived to make room (they leave only by approval, forgetting or
+// DeleteDot), they don't count toward the limit, so local memory keeps its
+// whole cap, and a new one archives nothing. MaxPendingImports bounds them
+// instead, so a scope exceeds its cap by at most that many. Restored entries
+// (Source import, no From) count like any other.
 func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) int {
 	if limit <= 0 {
 		return 0
 	}
-	live, active, keepProposed, keepResearch, keepImport, keepAt := 0, 0, false, false, false, -1
+	live, active, keepProposed, keepResearch, keepAt := 0, 0, false, false, -1
 	var proposed, cands []int
 	for i, e := range f.Entries {
 		if e.Status == StatusArchived {
+			continue
+		}
+		if pendingPack(e) {
+			if e.ID == keep {
+				return 0
+			}
 			continue
 		}
 		live++
@@ -546,7 +558,6 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		if e.ID == keep {
 			keepProposed = e.Status == StatusProposed
 			keepResearch = isResearchKind(e.Kind) && !e.Pinned && e.Source != SourceUser
-			keepImport = e.Source == SourceImport && e.Status == StatusProposed
 			keepAt = i
 			continue
 		}
@@ -559,7 +570,7 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 			cands = append(cands, i)
 		}
 	}
-	if live <= limit || keepImport {
+	if live <= limit {
 		return 0
 	}
 	archive := func(i int) { f.Entries[i].Status, f.Entries[i].UpdatedAt = StatusArchived, now }
@@ -567,10 +578,6 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		ra, rb := isResearchKind(f.Entries[proposed[a]].Kind), isResearchKind(f.Entries[proposed[b]].Kind)
 		if ra != rb {
 			return ra
-		}
-		ia, ib := f.Entries[proposed[a]].Source == SourceImport, f.Entries[proposed[b]].Source == SourceImport
-		if ia != ib {
-			return ia
 		}
 		return f.Entries[proposed[a]].CreatedAt.Before(f.Entries[proposed[b]].CreatedAt)
 	})
@@ -616,6 +623,12 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 }
 
 func isResearchKind(k Kind) bool { return k == KindResearch || k == KindQuestion }
+
+// pendingPack reports a dot pack's imported entry still waiting for the
+// developer (ImportPack sets From; a restore has none).
+func pendingPack(e Entry) bool {
+	return e.Status == StatusProposed && e.Source == SourceImport && e.From != ""
+}
 
 // capScore ranks entries for archiving: rarely used, long unused first.
 func capScore(e Entry, now time.Time) float64 {
