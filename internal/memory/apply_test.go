@@ -108,3 +108,30 @@ func TestApplyUpdatesAndForgetsOwnEntries(t *testing.T) {
 		t.Fatalf("a duplicate add counts as an update: %+v", res)
 	}
 }
+
+// A control character inside a secret must not hide it from the scan: the
+// scan runs on the text that gets stored.
+func TestApplyScansWhatItStores(t *testing.T) {
+	s := testStore(t)
+	own := mustAdd(t, s, pid, dotNote("security", "an own note"))
+	res, err := s.Apply(pid, "security", []backend.MemoryOp{
+		{Op: "add", Text: "the key is AKIA\u0007IOSFODNN7EXAMPLE ok"},
+		{Op: "update", ID: own.Ref().String(), Text: "the key is AKIA\u0007IOSFODNN7EXAMPLE ok"},
+		{Op: "add", Scope: "SECRET-SCOPE", Text: "x"},
+		{Op: "add", Kind: "SECRET-KIND", Text: "x"},
+		{Op: "forget", ID: "SECRET-ID"},
+	}, ev)
+	if err != nil || res.Applied() != 0 || len(res.Rejected) != 5 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	for _, why := range res.Rejected {
+		if strings.Contains(why, "SECRET") {
+			t.Fatalf("rejection echoes model text: %q", why)
+		}
+	}
+	for _, e := range list(t, s, pid, Filter{Scope: ScopeDot, Dot: "security"}) {
+		if strings.Contains(e.Text, "AKIA") {
+			t.Fatalf("secret stored: %+v", e)
+		}
+	}
+}

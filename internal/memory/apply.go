@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/textutil"
 )
 
 // ApplyResult counts what Store.Apply did. Rejected holds one reason per
@@ -40,14 +41,26 @@ func (s *Store) Apply(p, dot string, ops []backend.MemoryOp, ev Evidence) (Apply
 		case errors.Is(err, ErrLocked), errors.Is(err, ErrVersion):
 			return res, err
 		default:
-			res.Rejected = append(res.Rejected, fmt.Sprintf("op %d (%s): %v", i+1, op.Op, err))
+			res.Rejected = append(res.Rejected, fmt.Sprintf("op %d (%s): %v", i+1, opLabel(op.Op), err))
 		}
 	}
 	return res, nil
 }
 
+// opLabel names an op for a rejection reason; model-chosen strings never
+// appear in reasons.
+func opLabel(op string) string {
+	switch op {
+	case "add", "update", "forget":
+		return op
+	}
+	return "unknown op"
+}
+
 func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *ApplyResult) error {
-	text := strings.TrimSpace(op.Text)
+	// Scan what is stored: prepare strips control characters, which could
+	// otherwise split a secret and hide it from the scan.
+	text := strings.TrimSpace(textutil.SanitizeModelText(op.Text))
 	if op.Op == "add" || op.Op == "update" {
 		if found, kind := ScanSecrets(text); found {
 			return fmt.Errorf("%w (%s)", ErrSecret, kind)
@@ -60,14 +73,14 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *A
 			sc = ScopeDot
 		}
 		if sc != ScopeDot && sc != ScopeProject {
-			return fmt.Errorf("%w: models can't write %q memory", ErrDenied, op.Scope)
+			return fmt.Errorf("%w: models can't write that scope", ErrDenied)
 		}
 		k := Kind(op.Kind)
 		if k == "" {
 			k = KindNote
 		}
 		if !slices.Contains(ModelKinds, k) {
-			return fmt.Errorf("%w: models can't write %q entries", ErrDenied, op.Kind)
+			return fmt.Errorf("%w: models can't write that kind of entry", ErrDenied)
 		}
 		e := Entry{Scope: sc, Dot: dot, Kind: k, Text: text, Paths: op.Paths, Status: StatusActive, Source: SourceModel, Evidence: ev}
 		if sc == ScopeProject && !s.Limits.AutoApproveProject {
@@ -91,7 +104,7 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *A
 	case "update", "forget":
 		ref, err := ParseRef(op.ID, dot)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: invalid id", ErrInvalid)
 		}
 		if ref.Scope == ScopeGlobal {
 			return fmt.Errorf("%w: global memory is written by the developer only", ErrDenied)
@@ -131,5 +144,5 @@ func (s *Store) applyOne(p, dot string, op backend.MemoryOp, ev Evidence, res *A
 		}
 		return nil
 	}
-	return fmt.Errorf("%w: unknown op %q", ErrInvalid, op.Op)
+	return fmt.Errorf("%w: unknown op", ErrInvalid)
 }
