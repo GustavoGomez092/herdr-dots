@@ -229,5 +229,5 @@ func (s Status) Valid() bool {
 
 // Valid reports whether s is a known source.
 func (s Source) Valid() bool {
-	return s == SourceUser || s == SourceModel || s == SourceOutcome || s == SourceImport
+	return s == SourceUser || s == SourceModel || s == SourceOutcome || s == SourceImport || s == SourceAgent
 }
