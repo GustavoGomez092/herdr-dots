@@ -36,7 +36,7 @@ func tempPatch(diff []byte) (dir, file string, err error) {
 // (`git apply --numstat -z`, -p1 as `git apply` will use it): the header
 // paths, not the ones a Patch claims. It runs in dir, outside any repository.
 func patchPaths(ctx context.Context, g Git, dir, file string) ([]string, error) {
-	out, err := g.Output(ctx, dir, nil, "apply", "--numstat", "-z", file)
+	out, err := g.Output(ctx, dir, ceiling(dir), "apply", "--numstat", "-z", file)
 	if err != nil {
 		return nil, err
 	}
@@ -52,6 +52,9 @@ func patchPaths(ctx context.Context, g Git, dir, file string) ([]string, error) 
 		if !slices.Contains(paths, parts[2]) {
 			paths = append(paths, parts[2])
 		}
+	}
+	if len(paths) == 0 {
+		return nil, ErrEmptyPatch
 	}
 	return paths, nil
 }
@@ -119,6 +122,8 @@ func unmergedAmong(ctx context.Context, g Git, repo string, env, want []string) 
 // conflicts with a nil error. A hard failure (a file the patch edits is gone,
 // say) applies nothing and is an error.
 func Apply(ctx context.Context, g Git, repo string, diff []byte) (conflicts []string, err error) {
+	// The user's own filters always apply: a draft runner's overrides are cleared.
+	g.NoFilters, g.Draft = nil, false
 	g.LFSSmudge = true
 	g.Config = append(append([][2]string(nil), g.Config...), [2]string{"core.splitIndex", "false"})
 	top, err := RepoRoot(ctx, g, repo)
@@ -135,6 +140,17 @@ func Apply(ctx context.Context, g Git, repo string, diff []byte) (conflicts []st
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
+	if modes, renames, err := diffHeaders(diff); err != nil {
+		return nil, fmt.Errorf("invalid patch: %w", err)
+	} else if renames {
+		return nil, fmt.Errorf("%w: the diff holds a rename or copy", ErrEscape)
+	} else {
+		for path, m := range modes {
+			if m.old == "160000" || m.new == "160000" {
+				return nil, fmt.Errorf("%w: %s is a submodule", ErrEscape, path)
+			}
+		}
+	}
 	paths, err := patchPaths(ctx, g, dir, patchPath)
 	if err != nil {
 		return nil, err

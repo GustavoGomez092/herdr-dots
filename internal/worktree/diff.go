@@ -72,10 +72,21 @@ func Capture(ctx context.Context, _ Git, co Checkout, s Snapshot) (Patch, error)
 	// The user's diff.* config must not shape the patch: a fixed a/ b/ prefix
 	// (git apply -p1 reads the paths from the headers) and three lines of
 	// context, whatever diff.noprefix, diff.mnemonicPrefix or diff.context say.
-	base := []string{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color",
+	//
+	// The index is read once, by write-tree; the three diffs compare the
+	// snapshot with that immutable tree, so a process that changes the draft's
+	// index meanwhile cannot make them disagree.
+	tree, err := co.Git(ctx, "write-tree")
+	if err != nil {
+		return Patch{}, err
+	}
+	if !shaRe.MatchString(tree) {
+		return Patch{}, fmt.Errorf("unexpected git write-tree output %q", tree)
+	}
+	base := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color",
 		"--src-prefix=a/", "--dst-prefix=b/", "-U3"}
 	with := func(extra ...string) []string {
-		return append(append(append([]string(nil), base...), extra...), s.Commit, "--")
+		return append(append(append([]string(nil), base...), extra...), s.Commit, tree, "--")
 	}
 	raw, err := co.GitOutput(ctx, with("--raw", "-z", "--no-abbrev")...)
 	if err != nil {

@@ -75,6 +75,11 @@ func Validate(ctx context.Context, g Git, co Checkout, p Patch, caps Caps) error
 			return fmt.Errorf("%w: symlink %s points to %s", ErrEscape, c.Path, target)
 		}
 	}
+	// What the diff bytes themselves say (modes, renames) must be what
+	// Changes say: Apply sees only the bytes.
+	if err := checkDiffAgainstChanges(p.Diff, p.Changes); err != nil {
+		return err
+	}
 	dir, file, err := tempPatch(p.Diff)
 	if err != nil {
 		return err
@@ -83,6 +88,9 @@ func Validate(ctx context.Context, g Git, co Checkout, p Patch, caps Caps) error
 	got, err := patchPaths(ctx, g, dir, file)
 	if err != nil {
 		return fmt.Errorf("invalid patch: %w", err)
+	}
+	if err := checkSummary(ctx, g, dir, file, p.Changes); err != nil {
+		return err
 	}
 	want := p.Paths()
 	slices.Sort(got)
