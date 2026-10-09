@@ -451,6 +451,11 @@ func (m Model) View() string {
 	}
 	if ok {
 		title += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
+		if c := paneCost(p.CostUSD, p.BudgetUSD, p.CostUnknown); c != "" {
+			// Only a header carrying the cost part is cut to the width, so
+			// it never wraps; headers without cost stay as they were.
+			title = trunc(title+c, max(10, w))
+		}
 	}
 	if m.snap.PausedAll {
 		title += "  ⏸ all paused"
@@ -472,7 +477,8 @@ func (m Model) View() string {
 		if d.Learning {
 			status = "◌ learning…"
 		}
-		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, status)
+		rest := fmt.Sprintf("%-12s %-8s %s", trunc(d.Name, 12), d.Mode, status) + dotCost(d)
+		line := style.Glyph(d.Glyph, d.Color) + " " + trunc(rest, max(10, w-2))
 		if m.area == areaRoster && i == m.roster {
 			line = style.Selected.Render(line)
 		}
@@ -534,8 +540,10 @@ func (m Model) View() string {
 			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
 			if e.Detail != "" && e.Outcome == "error" {
 				line += "  " + trunc(e.Detail, max(10, w-24))
+			} else if c := costPart(e.Detail); c != "" {
+				line += "  " + c
 			}
-			b.WriteString(line + "\n")
+			b.WriteString(trunc(line, max(10, w)) + "\n")
 		}
 	}
 	if m.showHelp {
@@ -638,4 +646,42 @@ func window(text string, n, selStart, selEnd int) string {
 	}
 	off = min(off, len(lines)-n)
 	return strings.Join(lines[off:off+n], "")
+}
+
+// paneCost is the header dollar part: "  $0.42/2.00" with a budget, "  $0.42"
+// without one, "" before any priced run. A "?" right after the total means
+// some run had no price, so the total is a lower bound.
+func paneCost(cost, budget float64, unknown bool) string {
+	if budget <= 0 && cost <= 0 && !unknown {
+		return ""
+	}
+	s := fmt.Sprintf("  $%.2f", cost)
+	if unknown {
+		s += "?"
+	}
+	if budget > 0 {
+		s += fmt.Sprintf("/%.2f", budget)
+	}
+	return s
+}
+
+// dotCost is a roster line session cost: " $0.12", " $0.12?" when some runs
+// had no price, "" when nothing was spent or priced.
+func dotCost(d view.DotState) string {
+	if d.CostUSD == 0 && !d.CostUnknown {
+		return ""
+	}
+	s := fmt.Sprintf(" $%.2f", d.CostUSD)
+	if d.CostUnknown {
+		s += "?"
+	}
+	return s
+}
+
+// costPart is the "cost=..." tail of a pass/flagged feed detail.
+func costPart(detail string) string {
+	if i := strings.LastIndex(detail, "cost="); i >= 0 {
+		return detail[i:]
+	}
+	return ""
 }
