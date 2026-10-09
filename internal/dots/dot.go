@@ -134,6 +134,9 @@ func (d Dot) Validate() error {
 	if !slices.Contains(BackendKinds, d.Backend.Kind) {
 		add("backend kind %q must be one of %v", d.Backend.Kind, BackendKinds)
 	}
+	if bad := DeniedArgs(d.Backend.Kind, d.Backend.Args); len(bad) > 0 {
+		add("backend args %v are not allowed: they would override the read-only safety flags", bad)
+	}
 	if !d.Delivery.Mode.Valid() {
 		add("delivery mode %q must be one of %v", d.Delivery.Mode, Modes)
 	}

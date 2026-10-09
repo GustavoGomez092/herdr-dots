@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"herdr-dots/internal/dots"
 )
 
 type ClaudeCLI struct {
@@ -56,11 +58,16 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	} else {
 		args = append(args, "--tools", "")
 	}
-	args = append(args, r.Args...)
+	// Denied args (dots.Validate rejects them too) are dropped so they can never
+	// override the flags above.
+	args = append(args, dots.SafeArgs(c.Kind(), r.Args)...)
 	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: CleanEnv(c.environ()), Stdin: UserPrompt(r)}
 }
 
 func (c ClaudeCLI) Run(ctx context.Context, r Request) (Result, error) {
+	if err := checkArgs(c.Kind(), r.Args); err != nil {
+		return Result{}, err
+	}
 	out, stderr, err := c.Runner.Run(ctx, c.BuildCmd(r))
 	if ctx.Err() != nil {
 		return Result{}, fmt.Errorf("claude timed out: %w", ctx.Err())

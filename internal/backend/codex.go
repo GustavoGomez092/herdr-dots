@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"herdr-dots/internal/dots"
 )
 
 // CodexCLI runs `codex exec --json` in a read-only sandbox. Codex has no
@@ -51,12 +53,15 @@ func (c CodexCLI) BuildCmd(r Request) Cmd {
 	if r.Model != "" {
 		args = append(args, "-m", r.Model)
 	}
-	args = append(args, r.Args...)
+	args = append(args, dots.SafeArgs(c.Kind(), r.Args)...) // never override --sandbox
 	args = append(args, "-")
 	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: CleanEnv(c.environ()), Stdin: SystemPrompt(r) + "\n\n" + UserPrompt(r)}
 }
 
 func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
+	if err := checkArgs(c.Kind(), r.Args); err != nil {
+		return Result{}, err
+	}
 	out, stderr, err := c.Runner.Run(ctx, c.BuildCmd(r))
 	if ctx.Err() != nil {
 		return Result{}, fmt.Errorf("codex timed out: %w", ctx.Err())

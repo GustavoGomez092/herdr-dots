@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -25,6 +26,29 @@ func TestCodexBuildCmd(t *testing.T) {
 	}
 	if !strings.Contains(cmd.Stdin, "Find auth bugs.") || !strings.Contains(cmd.Stdin, "add login") {
 		t.Error("codex gets system + user prompt on stdin")
+	}
+}
+
+func TestCodexBuildCmdNeverEmitsDeniedArgs(t *testing.T) {
+	r := req()
+	r.Args = []string{"-s", "danger-full-access", "--sandbox=workspace-write", "--dangerously-bypass-approvals-and-sandbox",
+		"--full-auto", "-c", "sandbox_mode=danger-full-access", "--config", "mcp_servers.x.command=sh", "-c", "model_reasoning_effort=high"}
+	cmd := CodexCLI{Environ: func() []string { return nil }}.BuildCmd(r)
+	for _, banned := range []string{"-s", "danger-full-access", "--sandbox=workspace-write", "--dangerously-bypass-approvals-and-sandbox",
+		"--full-auto", "sandbox_mode=danger-full-access", "mcp_servers.x.command=sh"} {
+		if slices.Contains(cmd.Args, banned) {
+			t.Errorf("BuildCmd emitted %q: %v", banned, cmd.Args)
+		}
+	}
+	if v, _ := argAfter(cmd.Args, "--sandbox"); v != "read-only" || strings.Count(strings.Join(cmd.Args, " "), "--sandbox") != 1 {
+		t.Errorf("sandbox overridden: %v", cmd.Args)
+	}
+	if v, _ := argAfter(cmd.Args, "-c"); v != "model_reasoning_effort=high" || cmd.Args[len(cmd.Args)-1] != "-" {
+		t.Errorf("harmless -c kept, stdin marker last: %v", cmd.Args)
+	}
+	run := &fakeRunner{}
+	if _, err := (CodexCLI{Runner: run, Environ: func() []string { return nil }}).Run(context.Background(), r); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("Run with denied args must fail loudly, got %v", err)
 	}
 }
 

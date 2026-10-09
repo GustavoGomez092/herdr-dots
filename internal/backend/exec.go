@@ -3,9 +3,12 @@ package backend
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"syscall"
+
+	"herdr-dots/internal/dots"
 )
 
 type Cmd struct {
@@ -63,6 +66,15 @@ func CleanEnv(env []string) []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// checkArgs rejects a run whose dot args would override the read-only flags.
+// BuildCmd drops them anyway; failing the run makes the problem visible.
+func checkArgs(kind string, args []string) error {
+	if bad := dots.DeniedArgs(kind, args); len(bad) > 0 {
+		return fmt.Errorf("backend args %v are not allowed: they would override the read-only safety flags", bad)
+	}
+	return nil
 }
 
 // Hint turns CLI failure output into a fix the user can act on.
