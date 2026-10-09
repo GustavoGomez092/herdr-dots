@@ -16,6 +16,13 @@ var redactions = []struct {
 	{regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_\-]{6,}`), "sk-ant-" + Redacted},
 	{regexp.MustCompile(`\bsk-or-[A-Za-z0-9_\-]{6,}`), "sk-or-" + Redacted},
 	{regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{12,}`), "sk-" + Redacted},
+	// Shapes internal/memory.ScanSecrets detects (kept in step by a test there).
+	{regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})`), "gh-" + Redacted},
+	{regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), "aws-" + Redacted},
+	{regexp.MustCompile(`\bxox[abprs]-[A-Za-z0-9-]{10,}`), "xox-" + Redacted},
+	{regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`), "stripe-" + Redacted},
+	{regexp.MustCompile(`\bglpat-[A-Za-z0-9_\-]{20,}`), "glpat-" + Redacted},
+	{regexp.MustCompile(`\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`), "${1}" + Redacted + "@"},
 	// Authorization: Bearer <token>
 	{regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=\-]{16,}`), "${1}" + Redacted},
 	// api_key=…, "api_key": "…", x-api-key: …, authorization: …

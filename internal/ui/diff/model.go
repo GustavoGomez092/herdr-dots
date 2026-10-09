@@ -209,7 +209,7 @@ func (m Model) Init() tea.Cmd { return nil }
 // copies what it changes: models are values and may be forked.
 func (m Model) markSeen() Model {
 	m.reflow()
-	if !m.sized || m.file < 0 || m.file >= len(m.files) || m.contentWidth() < minContent {
+	if !m.drawn() || m.file < 0 || m.file >= len(m.files) || m.contentWidth() < minContent {
 		return m
 	}
 	wr := m.wc
@@ -269,6 +269,11 @@ func (m Model) unseen() []string {
 	}
 	return out
 }
+
+// drawn reports whether a real window size is known. A 0x0 window draws
+// nothing, so it marks no rows seen and cannot hold the apply question,
+// whatever w() and layout() fall back to.
+func (m Model) drawn() bool { return m.sized && m.width > 0 && m.height > 0 }
 
 func (m Model) w() int {
 	if m.width <= 0 {
@@ -386,7 +391,7 @@ const minDiffLines = 3
 // enough to wrap into. The question is only ever open (and y only ever
 // acts) when they do.
 func (m Model) fits() bool {
-	if !m.sized || m.contentWidth() < minContent {
+	if !m.drawn() || m.contentWidth() < minContent {
 		return false
 	}
 	narrow := 0
