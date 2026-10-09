@@ -124,6 +124,9 @@ type Engine struct {
 	applying  map[string]bool      // patch cards being applied, by card id
 	startedAt time.Time            // Start time: older "drafting" records were interrupted
 
+	cleanupStop func(step string) bool // tests only: true = the process "dies" before that cleanup step
+	testHook    func(point string)     // tests only: called at named points of apply and discard
+
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
 	wg     sync.WaitGroup
@@ -348,8 +351,10 @@ func (e *Engine) Detach(paneID, slug string) error {
 	delete(e.status, key{paneID, slug})
 	delete(e.warned, key{paneID, slug})
 	e.mu.Unlock()
+	e.abandonDrafts(paneID, slug) // a detached dot's draft would make a card for a dot that is gone
 	if empty {
 		e.unwatch(paneID)
+		e.abandonDrafts(paneID, "")
 		_ = e.d.Attachments.Delete(paneID)
 	}
 	e.broadcast()

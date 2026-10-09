@@ -32,23 +32,23 @@ func (e *Engine) draftLoop() {
 }
 
 // orphanedPatch reports whether a ready patch has no card the user could act
-// on: it was stored but its card was never made (a crash in between), or the
-// card is gone or resolved. A card of a closed pane (orphaned) stays: the
-// developer can still discard it.
+// on: its card was never made (a crash between storing the patch and adding
+// the card), or the card is gone or resolved. The card is found by the
+// patch id it carries, not by the record's card field (a crash between
+// Queue.Add and that write leaves the field empty). A card of a closed pane
+// (orphaned) stays: the developer can still discard it.
 func (e *Engine) orphanedPatch(m patchstore.Meta) bool {
 	if m.Status != patchstore.StatusReady {
 		return false
 	}
-	if m.Card == "" {
-		return true
-	}
-	c, ok := e.d.Queue.Get(m.Card)
-	if !ok {
-		return true
-	}
-	switch c.Status {
-	case queue.StatusPending, queue.StatusAuto, queue.StatusOrphaned:
-		return false
+	for _, c := range e.d.Queue.All() {
+		if c.Kind != queue.KindPatch || c.PatchID != m.ID {
+			continue
+		}
+		switch c.Status {
+		case queue.StatusPending, queue.StatusAuto, queue.StatusOrphaned:
+			return false
+		}
 	}
 	return true
 }

@@ -32,6 +32,7 @@ type drafter struct {
 	msg  string
 	err  error
 	gate chan struct{} // optional: draft runs block until closed
+	deaf bool          // a backend that ignores its context while gated
 	reqs []backend.Request
 }
 
@@ -46,10 +47,14 @@ func (f *drafter) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		return backend.Result{Verdict: backend.Verdict{Severity: "info"}}, nil
 	}
 	if gate != nil {
-		select {
-		case <-gate:
-		case <-ctx.Done():
-			return backend.Result{}, ctx.Err()
+		if f.deaf {
+			<-gate
+		} else {
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return backend.Result{}, ctx.Err()
+			}
 		}
 	}
 	if err != nil {
@@ -141,6 +146,7 @@ func writeDot(name string) dots.Dot {
 type draftOpts struct {
 	cfg    func(*config.Config)
 	before func(p *patchstore.Store, wts string, g worktree.Git, repo string) // runs before the engine starts
+	deps   func(d *Deps)                                                      // adjusts the engine Deps (the queue is real)
 }
 
 type draftRig struct {
@@ -171,6 +177,9 @@ func newDraftRig(t *testing.T, o draftOpts, ds ...dots.Dot) *draftRig {
 		}
 		d.Patches, d.WorktreesDir, d.Git = dr.patches, dr.wts, dr.g
 		d.Memory = dr.mem
+		if o.deps != nil {
+			o.deps(d)
+		}
 		d.ResolveProject = func(string) (memory.Project, error) { return memory.Project{ID: testProject, Name: "repo"}, nil }
 	}, ds...)
 	dr.srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusIdle, Cwd: dr.repo,

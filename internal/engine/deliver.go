@@ -49,8 +49,11 @@ func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
 			// Only cards the developer approved are accepted findings; inject
 			// deliveries were never approved.
 			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil && c.Approved {
-				e.spawnOutcome(c, memory.OutcomeSent)
-				e.patchSent(c)
+				if c.Kind == queue.KindPatch {
+					e.patchSent(c) // marks the patch sent and records the outcome
+				} else {
+					e.spawnOutcome(c, memory.OutcomeSent)
+				}
 			}
 		case c.Status == queue.StatusPending:
 			_ = e.d.Queue.SetStatus(c.ID, queue.StatusAuto)
@@ -166,6 +169,9 @@ func (e *Engine) poll() {
 }
 
 func (e *Engine) dropPane(paneID string) {
+	// First: a draft running for this pane ends without a card or a charge,
+	// even if the pane id is reused by a new attachment.
+	e.abandonDrafts(paneID, "")
 	e.abandonCouncil(paneID) // a closed pane gets no council card
 	e.unwatch(paneID)
 	// Orphan cards first: the attachment disappearing is the visible signal that
