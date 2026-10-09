@@ -28,6 +28,9 @@ const (
 	StatusApplied  = "applied"  // applied to the working tree
 	StatusSent     = "sent"     // the "Patch ready" message went to the agent
 	StatusRejected = "rejected" // failed validation (Reason says why); no patch file
+	// StatusDropPending: resolved, but deleting its snapshot ref failed. The
+	// record stays only so the next sweep retries; it goes once the ref does.
+	StatusDropPending = "drop-pending"
 )
 
 var (

@@ -292,7 +292,9 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 	// record the next engine start cleans up. It is deleted last (this defer
 	// runs after the ref and worktree cleanups below) unless it is kept as a
 	// ready or rejected patch.
-	crashed, keepRecord := false, false
+	// A ref that could not be dropped keeps its record (as drop-pending, or
+	// as the rejected record it already is) so the next sweep retries.
+	crashed, keepRecord, refStuck := false, false, false
 	meta := patchstore.Meta{ID: id, Dot: d.Slug, Pane: att.PaneID, Repo: repo, Status: patchstore.StatusDrafting}
 	if err := e.d.Patches.Put(meta); err != nil {
 		fail(err)
@@ -300,6 +302,12 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 	}
 	defer func() {
 		if keepRecord || e.stopBefore(&crashed, "record") {
+			return
+		}
+		if refStuck {
+			if _, err := e.d.Patches.Update(id, func(m *patchstore.Meta) { m.Status = patchstore.StatusDropPending }); err != nil {
+				e.d.Logf("draft %s: keep record for the ref retry: %v", id, err)
+			}
 			return
 		}
 		if err := e.d.Patches.Delete(id); err != nil {
@@ -314,7 +322,8 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 			return
 		}
 		if err := worktree.DropSnapshot(context.Background(), g, repo, id); err != nil {
-			e.d.Logf("draft %s: drop snapshot ref: %v", id, err)
+			refStuck = true
+			e.d.Logf("draft %s: drop snapshot ref (retried by the next sweep): %v", id, err)
 		}
 	}()
 	s, err := worktree.TakeSnapshot(ctx, g, repo, id, maxSnapshotIndex)
@@ -570,17 +579,23 @@ func (e *Engine) DiscardPatch(cardID string) error {
 		return err
 	}
 	oc := c
+	stuck := false
 	if m, err := e.d.Patches.Get(c.PatchID); err == nil {
 		if s := memorySummary(m); s != "" {
 			oc.Body = s
 		}
 		if m.Repo != "" {
 			if err := worktree.DropSnapshot(e.ctx, e.d.Git, m.Repo, c.PatchID); err != nil {
-				e.d.Logf("patch %s: drop snapshot ref: %v", c.PatchID, err)
+				stuck = true
+				e.d.Logf("patch %s: drop snapshot ref (retried by the next sweep): %v", c.PatchID, err)
 			}
 		}
 	}
-	if err := e.d.Patches.Delete(c.PatchID); err != nil {
+	if stuck { // the record stays so the sweep can find and drop the ref
+		if _, err := e.d.Patches.Update(c.PatchID, func(m *patchstore.Meta) { m.Status = patchstore.StatusDropPending }); err != nil {
+			e.d.Logf("patch %s: %v", c.PatchID, err)
+		}
+	} else if err := e.d.Patches.Delete(c.PatchID); err != nil {
 		e.d.Logf("patch %s: %v", c.PatchID, err)
 	}
 	e.spawnOutcome(oc, memory.OutcomeDiscarded)
