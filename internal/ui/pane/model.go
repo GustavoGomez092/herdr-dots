@@ -401,6 +401,18 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "e":
 		if c, ok := m.selectedCard(); ok && sendable(c) {
+			if m.unseen(c) {
+				// Editing reads the card: never on a digest whose parts
+				// weren't shown at their current count (ruling P8-R9).
+				grew := m.opened[c.ID] > 0
+				m.expand(c)
+				if grew {
+					m.status = "digest has new parts: e again to edit it"
+				} else {
+					m.status = "digest expanded: e again to edit it"
+				}
+				return m, nil
+			}
 			m.editing, m.editID = true, c.ID
 			m.editor.SetValue(c.Body)
 			m.editor.CursorEnd()
