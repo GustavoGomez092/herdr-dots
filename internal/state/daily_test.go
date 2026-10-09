@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/platform/platformtest"
 )
 
@@ -166,6 +167,71 @@ func TestDailyLoadsOldFloatOnlyFile(t *testing.T) {
 	day, err := d.Today(now)
 	if err != nil || day.Count("a", RunResearch) != 3 || day.CostUSD != 0.40 {
 		t.Fatalf("%+v %v", day, err)
+	}
+}
+
+// If the blocked record cannot be written, the corrupt file must stay in
+// place and the call must error: an unblocked empty day would be unlimited.
+func TestDailyCorruptWriteFailureNeverUnblocks(t *testing.T) {
+	d, p := dailyAt(t)
+	bad := []byte("{not json")
+	_ = os.WriteFile(p, bad, 0o600)
+	d.writeFile = func(string, []byte, os.FileMode) error { return errors.New("ENOSPC") }
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	for i := 0; i < 2; i++ {
+		if day, err := d.Today(now); err == nil {
+			t.Fatalf("call %d: day %+v err %v, want an error", i, day, err)
+		}
+		if got, _ := os.ReadFile(p); !bytes.Equal(got, bad) {
+			t.Fatalf("call %d: corrupt file replaced or removed: %q", i, got)
+		}
+	}
+	if err := d.Add("x", RunResearch, 0.1, now); err == nil {
+		t.Fatal("Add on an unwritable corrupt file must error")
+	}
+	// Once writes work again the day is blocked, not empty.
+	d.writeFile = fsutil.WriteFileAtomic
+	if day, err := d.Today(now); err != nil || !day.Blocked {
+		t.Fatalf("after recovery: %+v %v", day, err)
+	}
+}
+
+// A stored day that is not a valid YYYY-MM-DD date is as bad as corrupt JSON.
+func TestDailyBadStoredDateBlocksToday(t *testing.T) {
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	for _, content := range []string{
+		`{"version":1,"day":"garbage","runs":{},"cost_usd":0.2}`,
+		`{}`, `null`, `{"version":1,"day":""}`,
+	} {
+		d, p := dailyAt(t)
+		_ = os.WriteFile(p, []byte(content), 0o600)
+		var logged int
+		d.Logf = func(string, ...any) { logged++ }
+		day, err := d.Today(now)
+		if err != nil || !day.Blocked || day.Date != "2026-10-21" || logged != 1 {
+			t.Fatalf("%s: day %+v err %v logged %d", content, day, err, logged)
+		}
+		if m, _ := filepath.Glob(p + ".corrupt-*"); len(m) != 1 {
+			t.Fatalf("%s: moved aside: %v", content, m)
+		}
+		next, err := d.Today(now.AddDate(0, 0, 1))
+		if err != nil || next.Blocked || next.Total() != 0 {
+			t.Fatalf("%s: next day %+v %v", content, next, err)
+		}
+	}
+}
+
+func TestDailyHugeCostIsClamped(t *testing.T) {
+	d, _ := dailyAt(t)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	for _, c := range []float64{1e300, math.MaxFloat64, math.Inf(1)} {
+		if err := d.Add("x", RunResearch, c, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	day, err := d.Today(now)
+	if err != nil || day.CostUSD < 0 || day.CostUSD > 4e6 {
+		t.Fatalf("cost %v err %v, want clamped and never negative", day.CostUSD, err)
 	}
 }
 
