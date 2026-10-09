@@ -821,7 +821,7 @@ func TestBudgetToastSaysHowItResets(t *testing.T) {
 	r := budgetRig(t)
 	eventually(t, "budget toast", func() bool { return len(r.srv.Calls("notification.show")) == 1 })
 	body, _ := r.srv.Calls("notification.show")[0].Params["body"].(string)
-	if body != "budget reached; resets on a new agent session or press r" {
+	if body != "dot call budget reached (1 call); resets on a new agent session or press r" {
 		t.Fatalf("toast %q", body)
 	}
 }
