@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -142,12 +144,20 @@ func PlanRemove(c Client, env Env) (Plan, error) {
 			Commands: []Command{{Args: claudeRemoveArgs()}},
 			Verify:   []string{"claude", "mcp", "list"},
 			Preview:  "Claude Code removes the \"" + ServerName + "\" entry from " + env.ClaudeConfigPath() + ".\n"}
+		if _, found := readClaudeEntry(p.Config); !found {
+			// `claude mcp remove` would exit 1 ("No MCP server named …").
+			return Plan{Client: c, Remove: true, Config: p.Config, Nothing: true,
+				Preview: "not installed in " + p.Config + "\n"}, nil
+		}
 		if exists(p.Config) {
 			p.Backups = []string{p.Config}
 		}
 		return p, nil
 	case ClientCodex:
 		path := env.CodexConfigPath()
+		if err := checkNotDangling(path); err != nil {
+			return Plan{}, err
+		}
 		before, err := readOptional(path)
 		if err != nil {
 			return Plan{}, err
@@ -186,6 +196,11 @@ func planClaudeInstall(env Env, bin, configDir, stateDir string) Plan {
 	p := Plan{Client: ClientClaude, Config: env.ClaudeConfigPath(),
 		Commands: []Command{{Args: claudeRemoveArgs(), MayFail: true}, {Args: add}},
 		Verify:   []string{"claude", "mcp", "get", ServerName}}
+	if e, found := readClaudeEntry(p.Config); found && claudeEntryMatches(e, bin, configDir, stateDir) {
+		// Already as planned: no commands and no backup of a multi-MB file.
+		return Plan{Client: ClientClaude, Config: p.Config, Nothing: true, Verify: p.Verify,
+			Preview: "already installed in " + p.Config + "\n"}
+	}
 	if exists(p.Config) {
 		p.Backups = []string{p.Config}
 	}
@@ -208,8 +223,60 @@ func claudeEnv() map[string]string {
 	return m
 }
 
+// claudeEntry is the part of an mcpServers entry the installer compares.
+type claudeEntry struct {
+	Type    string            `json:"type"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+}
+
+// readClaudeEntry reads (never writes) the user-scope entry from Claude's
+// config. found is true when the entry exists, and also when the file can't
+// be parsed: then the claude CLI decides.
+func readClaudeEntry(path string) (claudeEntry, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return claudeEntry{}, false
+	}
+	var f struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(b, &f) != nil {
+		return claudeEntry{}, true
+	}
+	raw, ok := f.MCPServers[ServerName]
+	if !ok {
+		return claudeEntry{}, false
+	}
+	var e claudeEntry
+	_ = json.Unmarshal(raw, &e)
+	return e, true
+}
+
+func claudeEntryMatches(e claudeEntry, bin, configDir, stateDir string) bool {
+	return (e.Type == "stdio" || e.Type == "") && e.Command == bin &&
+		slices.Equal(e.Args, ServerArgs(configDir, stateDir)) && maps.Equal(e.Env, claudeEnv())
+}
+
+// checkNotDangling refuses a symlink whose target is missing: writing would
+// replace the link with a regular file.
+func checkNotDangling(path string) error {
+	st, err := os.Lstat(path)
+	if err != nil || st.Mode()&os.ModeSymlink == 0 {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("%s is a dangling symlink; fix the link first, nothing changed", path)
+	}
+	return nil
+}
+
 func planCodexInstall(env Env, bin, configDir, stateDir string) (Plan, error) {
 	path := env.CodexConfigPath()
+	if err := checkNotDangling(path); err != nil {
+		return Plan{}, err
+	}
 	before, err := readOptional(path)
 	if err != nil {
 		return Plan{}, err
@@ -314,6 +381,9 @@ func backup(path string, now time.Time) (string, error) {
 // writeKeepingMode writes atomically through a dotfiles symlink, keeping the
 // file's mode (0600 for a new file).
 func writeKeepingMode(path, content string) error {
+	if err := checkNotDangling(path); err != nil {
+		return err
+	}
 	if real, err := filepath.EvalSymlinks(path); err == nil {
 		path = real
 	}

@@ -288,3 +288,156 @@ func TestDiffShowsChangesWithContext(t *testing.T) {
 		t.Fatalf("diff:\n%s", d)
 	}
 }
+
+func claudeEntryJSON(t *testing.T, env Env, entry string) {
+	t.Helper()
+	writeFile(t, env.ClaudeConfigPath(), `{"numStartups": 3, "mcpServers": {"other": {"type": "stdio", "command": "x"}, "herdr-dots": `+entry+`}}`)
+}
+
+func TestClaudeRemoveIsNothingWhenNotInstalled(t *testing.T) {
+	env := tempEnv(t)
+	for name, setup := range map[string]func(){
+		"missing file": func() {},
+		"no entry":     func() { writeFile(t, env.ClaudeConfigPath(), `{"mcpServers": {"other": {}}}`) },
+	} {
+		setup()
+		p, err := PlanRemove(ClientClaude, env)
+		if err != nil || !p.Nothing || len(p.Commands) != 0 || len(p.Backups) != 0 {
+			t.Errorf("%s: %+v %v", name, p, err)
+		}
+	}
+}
+
+func TestClaudeRemoveWhenInstalledRunsTheCLIAfterABackup(t *testing.T) {
+	env := tempEnv(t)
+	claudeEntryJSON(t, env, `{"type": "stdio"}`)
+	p, err := PlanRemove(ClientClaude, env)
+	if err != nil || p.Nothing || len(p.Commands) != 1 || p.Commands[0].MayFail ||
+		!slices.Equal(p.Commands[0].Args, []string{"claude", "mcp", "remove", "--scope", "user", "herdr-dots"}) ||
+		!slices.Equal(p.Backups, []string{env.ClaudeConfigPath()}) {
+		t.Fatalf("%+v %v", p, err)
+	}
+}
+
+func TestClaudeInstallIsNothingWhenTheEntryAlreadyMatches(t *testing.T) {
+	env := tempEnv(t)
+	entry := `{"type":"stdio","command":"` + tBin + `","args":["mcp","--config-dir","` + tCfg + `","--state-dir","` + tState + `"],"env":{"HERDR_PANE_ID":"${HERDR_PANE_ID:-}","HERDR_SOCKET_PATH":"${HERDR_SOCKET_PATH:-}"}}`
+	claudeEntryJSON(t, env, entry)
+	p, err := PlanInstall(ClientClaude, env, tBin, tCfg, tState)
+	if err != nil || !p.Nothing || len(p.Backups) != 0 || len(p.Commands) != 0 {
+		t.Fatalf("a matching entry is a no-op with no backup: %+v %v", p, err)
+	}
+	claudeEntryJSON(t, env, strings.Replace(entry, tBin, "/old/herdr-dots", 1))
+	p, err = PlanInstall(ClientClaude, env, tBin, tCfg, tState)
+	if err != nil || p.Nothing || len(p.Backups) != 1 {
+		t.Fatalf("a different entry is replaced: %+v %v", p, err)
+	}
+}
+
+func TestCodexNoTrailingNewlineRoundTrips(t *testing.T) {
+	before := "model = \"x\""
+	after, err := UpsertCodexBlock(before, tBin, tCfg, tState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, found, err := RemoveCodexBlock(after)
+	if err != nil || !found || back != before {
+		t.Fatalf("got %q %v %v", back, found, err)
+	}
+}
+
+func TestCodexCRLFFilesGetACRLFBlockAndRoundTrip(t *testing.T) {
+	for _, before := range []string{"model = \"x\"\r\n[a]\r\nk = 1\r\n", "model = \"x\"\r\n[a]\r\nk = 1"} {
+		after, err := UpsertCodexBlock(before, tBin, tCfg, tState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(after, "\n") != strings.Count(after, "\r\n") {
+			t.Fatalf("bare LF in a CRLF file: %q", after)
+		}
+		back, found, err := RemoveCodexBlock(after)
+		if err != nil || !found || back != before {
+			t.Fatalf("got %q want %q (%v %v)", back, before, found, err)
+		}
+	}
+}
+
+func TestCodexMarkersInsideAStringAreRefused(t *testing.T) {
+	before := "note = '''\n" + BlockBegin + "\n[mcp_servers.herdr-dots]\ncommand = \"x\"\n" + BlockEnd + "\n'''\n"
+	if _, _, err := RemoveCodexBlock(before); !errors.Is(err, ErrUnsafeEdit) {
+		t.Errorf("remove: %v", err)
+	}
+	if _, err := UpsertCodexBlock(before, tBin, tCfg, tState); !errors.Is(err, ErrUnsafeEdit) {
+		t.Errorf("install: %v", err)
+	}
+	onlyBegin := "note = '''\n" + BlockBegin + "\n'''\n"
+	_, err := UpsertCodexBlock(onlyBegin, tBin, tCfg, tState)
+	if !errors.Is(err, ErrUnsafeEdit) || !strings.Contains(err.Error(), "string") {
+		t.Errorf("begin marker only in a string: %v", err)
+	}
+}
+
+func TestCodexRefusalMessagesNameTheForm(t *testing.T) {
+	for want, before := range map[string]string{
+		"array of tables": "[[mcp_servers.herdr-dots]]\ncommand = \"x\"\n",
+		"inline table":    "[mcp_servers]\nherdr-dots = { command = \"x\" }\n",
+	} {
+		_, err := UpsertCodexBlock(before, tBin, tCfg, tState)
+		if !errors.Is(err, ErrUnsafeEdit) || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", want, err)
+		}
+	}
+	quoted := "[\"mcp_servers\".\"herdr-dots\"]\ncommand = \"/old\"\n"
+	after, err := UpsertCodexBlock(quoted, tBin, tCfg, tState)
+	if err != nil || after != wantBlock {
+		t.Fatalf("a quoted-key header is replaced in place: %q %v", after, err)
+	}
+}
+
+func TestDanglingSymlinkConfigIsRefused(t *testing.T) {
+	env := tempEnv(t)
+	path := env.CodexConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "nope.toml"), path); err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range []func() (Plan, error){
+		func() (Plan, error) { return PlanInstall(ClientCodex, env, tBin, tCfg, tState) },
+		func() (Plan, error) { return PlanRemove(ClientCodex, env) },
+	} {
+		if _, err := plan(); err == nil || !strings.Contains(err.Error(), "dangling") {
+			t.Fatalf("got %v", err)
+		}
+	}
+	if st, err := os.Lstat(path); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the link must stay a link")
+	}
+}
+
+func TestSymlinkedConfigIsEditedThroughTheLink(t *testing.T) {
+	env := tempEnv(t)
+	target := filepath.Join(t.TempDir(), "dotfiles", "codex.toml")
+	writeFile(t, target, userCodex)
+	path := env.CodexConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	p, err := PlanInstall(ClientCodex, env, tBin, tCfg, tState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(p, noRun(t), tNow); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Lstat(path); st.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the link was replaced")
+	}
+	if got := readFile(t, target); got != userCodex+"\n"+wantBlock {
+		t.Fatalf("target:\n%s", got)
+	}
+}

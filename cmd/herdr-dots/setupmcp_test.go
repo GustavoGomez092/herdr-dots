@@ -135,6 +135,77 @@ func TestSetupMCPRefusesGoRunBinaries(t *testing.T) {
 	}
 }
 
+func (r *mcpSetupRig) claudeHasEntry(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(r.io.env.ClaudeConfigPath(), []byte(`{"mcpServers": {"herdr-dots": {"type": "stdio"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetupMCPRemoveBothContinuesPastAFailingClaude(t *testing.T) {
+	r := newMCPSetupRig(t, "claude", "codex")
+	if err := setupMCP([]string{"--client", "codex", "--yes"}, r.io); err != nil {
+		t.Fatal(err)
+	}
+	r.claudeHasEntry(t)
+	path := mcpinstall.RecordPath(r.p.ConfigDir)
+	rs, _ := mcpinstall.LoadRecords(path)
+	if err := mcpinstall.SaveRecords(path, mcpinstall.WithRecord(rs, mcpinstall.Record{Client: mcpinstall.ClientClaude, Scope: "user"})); err != nil {
+		t.Fatal(err)
+	}
+	r.io.run = func(a []string) (string, error) {
+		if len(a) > 2 && a[0] == "claude" && a[2] == "remove" {
+			return "boom\n", errors.New("exit status 1")
+		}
+		return "ok\n", nil
+	}
+	err := setupMCP([]string{"--remove", "--yes"}, r.io)
+	if err == nil || !strings.Contains(err.Error(), "Claude Code") {
+		t.Fatalf("a real failure must be reported: %v", err)
+	}
+	if b, _ := os.ReadFile(r.codexConfig()); len(b) != 0 {
+		t.Fatalf("codex must still be removed: %q", b)
+	}
+	if got := mcpinstall.StatusLine(r.p.ConfigDir); got != "MCP: installed for Claude Code" {
+		t.Fatalf("status %q: the failed client keeps its record, the removed one loses it", got)
+	}
+}
+
+func TestSetupMCPRemoveWithNothingInstalledForClaudeIsQuiet(t *testing.T) {
+	r := newMCPSetupRig(t, "claude", "codex")
+	if err := setupMCP([]string{"--client", "codex", "--yes"}, r.io); err != nil {
+		t.Fatal(err)
+	}
+	r.ran = nil
+	if err := setupMCP([]string{"--remove", "--yes"}, r.io); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range r.ran {
+		if a[0] == "claude" {
+			t.Fatalf("claude must not be called when nothing is installed: %v", r.ran)
+		}
+	}
+	if got := mcpinstall.StatusLine(r.p.ConfigDir); got != "MCP: not installed (run herdr-dots setup-mcp)" {
+		t.Fatalf("status %q", got)
+	}
+}
+
+func TestSetupMCPInstallBothKeepsCodexWhenClaudeFails(t *testing.T) {
+	r := newMCPSetupRig(t, "claude", "codex")
+	r.io.run = func(a []string) (string, error) {
+		if len(a) > 2 && a[0] == "claude" && a[2] == "add" {
+			return "", errors.New("exit status 1")
+		}
+		return "ok\n", nil
+	}
+	if err := setupMCP([]string{"--yes"}, r.io); err == nil {
+		t.Fatal("the failed add must be reported")
+	}
+	if got := mcpinstall.StatusLine(r.p.ConfigDir); got != "MCP: installed for Codex" {
+		t.Fatalf("status %q", got)
+	}
+}
+
 func TestSetupMCPRejectsAnUnknownClient(t *testing.T) {
 	r := newMCPSetupRig(t, "claude")
 	if err := setupMCP([]string{"--client", "cursor"}, r.io); err == nil {

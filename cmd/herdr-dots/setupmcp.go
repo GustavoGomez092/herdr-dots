@@ -115,9 +115,12 @@ func setupMCP(args []string, s setupIO) error {
 			return nil
 		}
 	}
-	backups := map[mcpinstall.Client][]string{}
+	// Every client is handled on its own: one client's failure can't block
+	// another's change or record update.
+	var errs []error
 	for _, pl := range plans {
 		if pl.Nothing {
+			errs = append(errs, s.saveRecords(p, []mcpinstall.Plan{pl}, nil, *remove))
 			continue
 		}
 		bs, err := mcpinstall.Apply(pl, func(c mcpinstall.Command) error {
@@ -131,12 +134,13 @@ func setupMCP(args []string, s setupIO) error {
 			fmt.Fprintf(s.out, "Backup: %s\n", b)
 		}
 		if err != nil {
-			return fmt.Errorf("%s: %w", pl.Client.Title(), err)
+			errs = append(errs, fmt.Errorf("%s: %w", pl.Client.Title(), err))
+			continue
 		}
-		backups[pl.Client] = bs
 		s.verify(pl)
+		errs = append(errs, s.saveRecords(p, []mcpinstall.Plan{pl}, map[mcpinstall.Client][]string{pl.Client: bs}, *remove))
 	}
-	if err := s.saveRecords(p, plans, backups, *remove); err != nil {
+	if err := errors.Join(errs...); err != nil {
 		return err
 	}
 	if *remove {
