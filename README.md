@@ -1,10 +1,12 @@
 # Herdr Dots
 
-> **Status: 0.7.0, in development (scaffold, not done).** It is not finished and not ready for
-> general use. New in 0.7.0: write-capable dots can draft fixes in isolated git worktrees for you
-> to review and apply; this is built and unit-tested but has **not been run end to end inside
-> Herdr** by the developer yet. Windows support (0.6.0) has not been run on Windows yet. Phase 2
-> (dot memory) stays the VITAL part. See the [Roadmap](#roadmap) for what's missing.
+> **Status: 0.8.0, in development (scaffold, not done).** It is not finished and not ready for
+> general use. New in 0.8.0: proactive dots (opt-in, read-only) can research while you are away,
+> run on a schedule while Herdr runs and review new commits, under a daily dollar budget; this is
+> built, unit-tested and soak-tested once in an isolated Herdr session on macOS (driven by a test
+> client, not by hand). Write-capable dots (0.7.0) have **not been run end to end inside Herdr**
+> yet, and Windows support (0.6.0) has not been run on Windows yet. Phase 2 (dot memory) stays
+> the VITAL part. See the [Roadmap](#roadmap) for what's missing.
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**: specialist agents (security,
 frontend, backend, copywriter, ...) that join a Claude Code or Codex session running in a Herdr
@@ -368,12 +370,112 @@ CI, your editor, git or a package script starts.
 Memory: an applied patch becomes a finding ("Applied patch: …") that keeps the dot from repeating
 the advice; a discarded one leaves only a ledger line.
 
+### Proactive dots (0.8.0)
+
+Dots can keep working when you stop typing. Everything here is **off by default** for every dot,
+read-only (even for a write-capable dot: background runs never draft), and capped by a daily dollar
+budget shared by every Herdr session. Turn it on per dot in the editor (`prefix+d`, then `e`) or in
+the dot's file. `proactive_enabled` in `config.toml` switches all of it off at once; a malformed
+`config.toml` switches it off too, until you fix the file.
+
+- **Idle research.** With `[research] enabled = true`, a dot looks into the open questions it noted
+  earlier, its standing `topics` and the files touched in the last turns once the agent pane has been
+  idle for `idle_minutes` (default 10), at most once per idle period and `max_runs_per_day` times a day
+  across every Herdr session (default 6). "Idle" means no new turn or agent session, the agent idle or
+  done (not working), and the pane not refocused: Herdr has no keyboard-activity signal. Relevant
+  results wait while you are away and become **one** card per pane per idle period, a `☾ Away` card
+  labeled `N dots · M min`, when you come back (your next turn, the agent working again, or focusing
+  the pane). A critical result makes that card at once while you are away, and later results from the
+  same idle period join it while it is unsent. `space` expands it into each dot's answer. `⏎` on a
+  digest you haven't expanded expands it first (a second `⏎` sends it), `a` skips digests you haven't
+  expanded, and the engine refuses to send a digest that changed since you read it. Observe-mode dots
+  research for their memory only and never make a card. Research can write `research` and `question`
+  memory entries (dot scope; project scope stays a proposal until you approve it), and you can add a
+  question yourself to steer the next pass:
+  `herdr-dots memory add --scope dot --dot <slug> --kind question "…"`.
+- **Web research.** `[research] web = true` gives research passes web tools: search and fetch for
+  `claude-cli` and `anthropic-api` dots, hosted search for `openai-api` dots. Other backends research
+  without the web (the editor says so). **With web on, research sends search queries to that
+  provider's search service, and the queries are derived from your code and conversation.** The dot
+  is told never to put code, secrets or private names in a query, but that is an instruction to a
+  model, not a filter. Results are treated as untrusted data. `anthropic-api` and `openai-api` runs
+  stop at 5 paid web uses (searches and fetches) per run, and web searches are counted in the cost
+  ($0.01 per Anthropic search, $0.025 per OpenAI call, an upper bound). `claude-cli` web use has no
+  per-run cap in the plugin; its cost comes from Claude Code's `total_cost_usd` like any other run.
+- **Schedules.** `[schedule] cron = "0 9 * * 1-5"` with a `task` runs the dot on its projects
+  (`projects = ["attached"]`, the default, means the projects the dot was attached to in the last 14
+  days, most recent first; or absolute paths; at most 10 projects per slot). Schedules run **only
+  while Herdr is running**: there is no system scheduler and no background daemon. A cron that fires
+  more often than every 15 minutes is refused, and a dot gets at most 96 scheduled runs a day. A slot
+  missed while Herdr was closed runs once at the next start if it is within `catch_up_hours` (default
+  12); older misses are skipped and logged, and a laptop that slept through several slots runs only
+  the latest. A brand-new schedule starts with its next slot, and slots that pass while proactive work
+  or memory is switched off never run. Two Herdr sessions don't run the same slot twice: the slot is
+  claimed in the project's memory, so schedules need memory turned on. A claim dated in the future
+  (left by a clock that ran ahead) expires and is overwritten, so a clock correction can cause one
+  repeat run. Cron is local time: a slot in the hour skipped by a daylight-saving change doesn't run
+  that day, and a slot in a repeated hour runs once. A project that isn't on this machine is skipped,
+  with one toast a day. The result goes to a pane on the project (one where the dot is attached
+  first); when no pane on the project is open, it waits in an inbox (with a toast) and shows up in the
+  queue the next time a pane with dots is attached there. Scheduled results are always cards you send
+  yourself (a `suggest` dot's stay suggestions), never typed into the agent.
+- **Commit reviews.** `[trigger] on_commit = true` reviews new commits in the attached pane's repo.
+  There are no hooks: the engine polls `HEAD` every `commit_poll_seconds` (default 15, 5-600). The
+  review gets the commit message, the stat and the patch (the patch capped at 20,000 characters),
+  quoted as data. There is one review per new `HEAD`: a burst of commits, a reset or a branch switch is
+  one review of the commit `HEAD` points at. The first `HEAD` seen after the engine starts or the dot
+  is attached is only recorded, going back to a `HEAD` already seen is not reviewed again, and commits
+  made while proactive work is off are never reviewed later. A dot gets at most 24 commit reviews a
+  day. Reviews go through the dot's turn filter (pause, cooldown, `file_globs` matched against the
+  commit's files, call and dollar budgets) and arrive like a turn review, in the dot's delivery mode.
+  Nothing is installed in your repository: git runs with hooks, fsmonitor, external diff and textconv
+  drivers off, submodule diffs kept short and every transport refused, so a repository's own config
+  can't make a read-only dot run a program. Commit reviews need git 2.31 or newer; with an older git
+  the review fails and `engine.log` says why.
+
+```toml
+# in a dot file
+[research]
+enabled          = true
+idle_minutes     = 10
+max_runs_per_day = 6
+web              = false
+topics           = ["dependency advisories for packages in package.json"]
+
+[schedule]
+cron           = "0 9 * * 1-5"
+task           = "Review commits since the last run for security issues."
+projects       = ["attached"]
+catch_up_hours = 12
+
+[trigger]
+on_commit = true
+
+# in config.toml
+proactive_enabled   = true   # kill switch (on by default); a malformed config.toml turns it off
+daily_budget_usd    = 1.00   # every background run, every session, per local day; always a cap
+commit_poll_seconds = 15
+```
+
+The roster shows what is next (`research in 6m`, `scheduled Mon 09:00`, `paused · daily budget`) and
+what is running (`◌ researching…`, `◌ scheduled run…`, `◌ reviewing commit…`); background runs go
+one at a time per engine. The pane header shows `today $0.37/1.00` once anything ran today. A
+background run on a pane also counts toward the dot's and the pane's session budgets, and a run with
+an unknown cost counts as one run and $0. When the budget is reached, background work stops until
+local midnight and each Herdr session toasts once. A run already going can take the day slightly over
+the cap. If `daily.json` is corrupt, it is set aside (`daily.json.corrupt-<time>`) and background
+work stops for the rest of that local day; while it can't be read or written, nothing runs. The
+budget never becomes unlimited.
+
 ## Files
 
 - Dots: `$(herdr plugin config-dir herdr-dots)/dots/<slug>.toml` (hand-editable)
 - Settings: `$(herdr plugin config-dir herdr-dots)/config.toml`
 - Runtime state and `engine.log`: the plugin state dir, under a per-session folder
 - Memory: the plugin state dir, under `memory/<project-id>/` (shared by every Herdr session; `0600` files)
+- `daily.json` in the plugin state dir: today's background runs and cost, shared by every session (proactive dots).
+- `inbox.json` in the plugin state dir: scheduled results waiting for a pane on their project.
+- `memory/<project-id>/schedule.json` in the plugin state dir: the last slot each scheduled dot ran on that project.
 
 ## Windows (beta)
 
@@ -466,6 +568,12 @@ Linux, but it has not been run on Windows yet.
   clears those.
 - Memory text is stripped of control characters (terminal escape sequences) when it is written and
   when it is read, like the feed.
+- Proactive dots are opt-in per dot and read-only, even when the dot is write-capable: research,
+  scheduled runs and commit reviews never draft. With `[research] web = true`, research sends search
+  queries derived from your code to the backend's web search provider. Background spend is capped by
+  `daily_budget_usd` (default $1.00) across every Herdr session.
+- Commit reviews never install git hooks; they only read `HEAD` and `git log`/`git show` output, with
+  the repository's hooks, fsmonitor, diff drivers and transports disabled.
 
 ## Known gaps in this scaffold
 
@@ -498,6 +606,13 @@ Linux, but it has not been run on Windows yet.
   has not been run on this machine, and on Windows drafts are compile-checked and unit-tested only.
 - `codex-cli` dots can't draft (Codex has no verified way to run without a shell).
 - Drafts can't run tests or builds: write-capable dots get no shell.
+- Proactive dots (0.8.0) are unit-tested on macOS only, with a fake clock and real git, and were
+  soak-tested once in an isolated Herdr session on macOS with `claude-cli` haiku dots (results in
+  `docs/superpowers/notes/2026-10-08-phase-8-verification.md`). The soak drove the engine with a
+  test client: the Dots pane was not used by hand, the daily budget was checked by lowering it, and
+  a non-critical "away, then one card when you come back" digest was not seen live (every research
+  result in the soak was critical). Web research was not part of the soak; Codex and OpenAI web
+  search are not live-verified. Schedules run only while Herdr runs.
 
 ## Roadmap
 
@@ -510,6 +625,7 @@ Linux, but it has not been run on Windows yet.
 | 5 | Dots MCP server so the main agent can consult dots itself: ask a dot, convene a council, read the queue and memory, propose memory (in this scaffold since 0.5.0) |
 | 6 | Windows support: named pipes, Job Objects, ACL privacy, `.cmd` shims (in this scaffold since 0.6.0; built and unit-tested, **not run on Windows yet**) |
 | 7 | Write-capable dots (0.7.0): drafts in isolated git worktrees, patch cards, a diff viewer, apply to the working tree only. Built and unit-tested; **not run end to end in Herdr yet** |
-| 8–10 | Proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
+| 8 | Proactive dots (0.8.0): idle research with a while-you-were-away digest, cron schedules while Herdr runs (with catch-up), commit reviews, a daily dollar budget. Built and unit-tested; soak-tested once in an isolated Herdr session on macOS |
+| 9–10 | Profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
 
 See the draft roadmap for Phases 2–10.
