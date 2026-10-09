@@ -332,6 +332,26 @@ func TestMemoryEditRemovesItsTempDirectory(t *testing.T) {
 	}
 }
 
+// Final review minor 9: a skipped import entry is named by its number, never
+// its text (it may be a secret).
+func TestMemoryImportSkipNamesTheEntryNotItsText(t *testing.T) {
+	c, out, errOut := newMemCLI(t)
+	long := "PRIVATEMARKER " + strings.Repeat("word ", 120)
+	f := importFile(t, "version = 1\n"+
+		"[[entry]]\nscope = \"dot\"\ndot = \"security\"\nkind = \"note\"\nstatus = \"active\"\ntext = \"Use zod for validation\"\n"+
+		"[[entry]]\nscope = \"dot\"\ndot = \"security\"\nkind = \"note\"\nstatus = \"active\"\ntext = \""+long+"\"\n")
+	mustRun(t, c, "import", f)
+	if strings.Contains(errOut.String(), "PRIVATEMARKER") {
+		t.Fatalf("the skip message prints the entry text: %q", errOut)
+	}
+	if !strings.Contains(errOut.String(), "entry 2") || !strings.Contains(errOut.String(), "too long") {
+		t.Fatalf("the skip message must name entry 2 and the error: %q", errOut)
+	}
+	if !strings.Contains(out.String(), "imported 1 entries") {
+		t.Fatalf("%s", out)
+	}
+}
+
 // rewriteOnRead simulates a model rewriting the proposal while the developer
 // reads the approve prompt, then answers.
 type rewriteOnRead struct {

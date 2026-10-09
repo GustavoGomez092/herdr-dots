@@ -573,7 +573,7 @@ func (c *memCLI) importFile(args []string) error {
 	}
 	pr, perr := c.project(f.project)
 	n := 0
-	for _, e := range es {
+	for i, e := range es {
 		pid := ""
 		if e.Scope != memory.ScopeGlobal {
 			if perr != nil {
@@ -583,7 +583,8 @@ func (c *memCLI) importFile(args []string) error {
 		}
 		e.ID, e.Source = "", memory.SourceImport
 		if _, err := c.store.Add(pid, e); err != nil {
-			fmt.Fprintf(c.errOut, "skipped %q: %v\n", e.Text, err)
+			// The entry number only: the text may be a secret.
+			fmt.Fprintf(c.errOut, "skipped entry %d: %v\n", i+1, err)
 			continue
 		}
 		n++
