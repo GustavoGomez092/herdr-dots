@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -642,13 +643,21 @@ func (e *Engine) deliverScheduled(j bgJob, v backend.Verdict) {
 		e.d.Logf("dot %s: %s result dropped: no pane on the project and no inbox", j.dot.Slug, j.label)
 		return
 	}
-	if err := e.d.Inbox.Put(c); err != nil {
-		e.d.Logf("inbox: %v", err)
-		return
-	}
 	name := j.projectName
 	if name == "" {
 		name = j.project
+	}
+	if err := e.d.Inbox.Put(c); err != nil {
+		if errors.Is(err, queue.ErrInboxVersion) {
+			// A newer herdr-dots owns the inbox now: this version must not
+			// rewrite it, so the result can't be filed. Say so, never drop it
+			// silently.
+			e.d.Logf("dot %s: %s result for %s not filed: %v", j.dot.Slug, j.label, name, err)
+			e.notify(j.dot, fmt.Sprintf("%s (scheduled) has a finding for %s, but a newer herdr-dots wrote the inbox: upgrade to see it", j.dot.Name, name))
+			return
+		}
+		e.d.Logf("inbox: %v", err)
+		return
 	}
 	e.notify(j.dot, fmt.Sprintf("%s (scheduled) has a finding for %s", j.dot.Name, name))
 }
