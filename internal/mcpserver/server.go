@@ -32,6 +32,7 @@ const (
 	defaultMemoryLimit    = 20
 	maxMemoryLimit        = 50
 	minMessageChars       = 200 // results shrink a message no further than this
+	lookupTimeout         = 30 * time.Second
 )
 
 // NotInHerdr is every tool's error outside a Herdr pane (and inside a dot's
@@ -218,6 +219,8 @@ func (t *tools) listDots(ctx context.Context, _ *mcp.CallToolRequest, _ ListDots
 	if err := t.guard("list_dots"); err != nil {
 		return nil, ListDotsOut{}, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
 	res, err := t.d.Engine.ListDots(ctx)
 	if err != nil {
 		return nil, ListDotsOut{}, t.fail("list_dots", err)
@@ -289,8 +292,15 @@ func (t *tools) askCouncil(ctx context.Context, _ *mcp.CallToolRequest, in AskCo
 		out.Note = res.Note + ". " + advisory
 	}
 	text := renderCouncil(out)
-	for !t.fits(text, out) && utf8.RuneCountInString(out.Digest) > minMessageChars {
-		out.Digest = clip(out.Digest, utf8.RuneCountInString(out.Digest)/2)
+	for !t.fits(text, out) {
+		switch {
+		case utf8.RuneCountInString(out.Digest) > minMessageChars:
+			out.Digest = clip(out.Digest, utf8.RuneCountInString(out.Digest)/2)
+		case len(out.Members) > 0:
+			out.Members = out.Members[:len(out.Members)-1]
+		default:
+			return textResult(text), out, nil
+		}
 		text = renderCouncil(out)
 	}
 	return textResult(text), out, nil
@@ -307,6 +317,8 @@ func (t *tools) listQueue(ctx context.Context, _ *mcp.CallToolRequest, in ListQu
 	if status != ipc.QueuePending && status != ipc.QueueAll {
 		return nil, ListQueueOut{}, fmt.Errorf("status %q: want pending or all", in.Status)
 	}
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
 	res, err := t.d.Engine.ListQueue(ctx, status)
 	if err != nil {
 		return nil, ListQueueOut{}, t.fail("list_queue", err)
@@ -329,7 +341,7 @@ func (t *tools) readMemory(ctx context.Context, _ *mcp.CallToolRequest, in ReadM
 	}
 	pid, err := t.project(ctx)
 	if err != nil {
-		return nil, ReadMemoryOut{}, err
+		return nil, ReadMemoryOut{}, t.fail("read_memory", err)
 	}
 	f := memory.Filter{Statuses: []memory.Status{memory.StatusActive}, Query: strings.TrimSpace(in.Query)}
 	switch strings.TrimSpace(in.Scope) {
@@ -358,7 +370,9 @@ func (t *tools) readMemory(ctx context.Context, _ *mcp.CallToolRequest, in ReadM
 		if len(entries) == 0 {
 			return nil, ReadMemoryOut{}, t.fail("read_memory", err)
 		}
-		out.Note = "Some memory could not be read: " + err.Error()
+		msg := credentials.Redact(err.Error())
+		t.d.Logf("read_memory: partial read: %s", msg)
+		out.Note = "Some memory could not be read: " + msg
 	}
 	for _, e := range entries[:min(len(entries), limit)] {
 		out.Entries = append(out.Entries, MemoryItem{ID: e.Ref().String(), Scope: string(e.Scope), Dot: e.Dot,
@@ -389,7 +403,7 @@ func (t *tools) proposeMemory(ctx context.Context, _ *mcp.CallToolRequest, in Pr
 	}
 	pid, err := t.project(ctx)
 	if err != nil {
-		return nil, ProposeMemoryOut{}, err
+		return nil, ProposeMemoryOut{}, t.fail("propose_memory", err)
 	}
 	e, err := t.d.Memory.Propose(pid, memory.Entry{Kind: kind, Text: text, Paths: in.Paths, Evidence: memory.Evidence{Pane: t.d.PaneID}})
 	if errors.Is(err, memory.ErrSecret) {
@@ -416,6 +430,8 @@ func (t *tools) project(ctx context.Context) (string, error) {
 	if t.d.Memory == nil {
 		return "", errors.New("dot memory is turned off (memory_enabled = false in config.toml)")
 	}
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
 	res, err := t.d.Engine.ListDots(ctx)
 	if err != nil {
 		return "", err

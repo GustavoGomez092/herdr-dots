@@ -18,51 +18,85 @@ type ipcEngine struct {
 	paneID string
 	ensure func() error
 
-	mu    sync.Mutex
-	ready bool
+	mu       sync.Mutex
+	ready    bool
+	starting chan struct{} // non-nil while ensure runs; closed when it ends
+	lastErr  error         // result of the last ensure
 }
 
 // NewIPCEngine talks to the engine over its socket, scoped to paneID. ensure
 // starts the engine; it runs on the first call (never at server start, which
-// must stay fast) and again once when a call can't connect.
+// must stay fast) and again once when a call can't connect. Callers wait for a
+// start in progress but stop waiting when their context ends.
 func NewIPCEngine(c ipc.Client, paneID string, ensure func() error) EngineAPI {
 	return &ipcEngine{c: c, paneID: paneID, ensure: ensure}
 }
 
-func (e *ipcEngine) up(force bool) error {
+// up makes sure the engine has been started. Concurrent callers share one
+// start (singleflight); the lock is never held while ensure runs.
+func (e *ipcEngine) up(ctx context.Context, force bool) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.ready && !force {
+		e.mu.Unlock()
 		return nil
 	}
-	if e.ensure != nil {
-		if err := e.ensure(); err != nil {
-			return fmt.Errorf("%w (%v)", ErrEngineDown, err)
-		}
+	ch := e.starting
+	if ch == nil {
+		ch = make(chan struct{})
+		e.starting = ch
+		e.ready = false
+		go func() {
+			var err error
+			if e.ensure != nil {
+				err = e.ensure()
+			}
+			e.mu.Lock()
+			e.ready = err == nil
+			e.lastErr = err
+			e.starting = nil
+			e.mu.Unlock()
+			close(ch)
+		}()
 	}
-	e.ready = true
+	e.mu.Unlock()
+	select {
+	case <-ch:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	e.mu.Lock()
+	err := e.lastErr
+	e.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("%w (%v)", ErrEngineDown, err)
+	}
 	return nil
 }
 
 func (e *ipcEngine) query(ctx context.Context, cmd string, args, out any) error {
-	if err := e.up(false); err != nil {
+	if err := e.up(ctx, false); err != nil {
 		return err
 	}
 	err := e.c.Query(ctx, cmd, args, out)
-	if !dialFailed(err) {
+	if !dialFailed(ctx, err) {
 		return err
 	}
-	if err := e.up(true); err != nil {
+	if err := e.up(ctx, true); err != nil {
 		return err
 	}
 	err = e.c.Query(ctx, cmd, args, out)
-	if dialFailed(err) {
+	if dialFailed(ctx, err) {
 		return ErrEngineDown
 	}
 	return err
 }
 
-func dialFailed(err error) bool {
+// dialFailed reports a failed dial. A dial that failed because the caller's
+// own context ended says nothing about the engine.
+func dialFailed(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
 	var op *net.OpError
 	return errors.As(err, &op) && op.Op == "dial"
 }
@@ -92,7 +126,7 @@ func (e *ipcEngine) ListQueue(ctx context.Context, status string) (ipc.QueueResu
 }
 
 func (e *ipcEngine) MemoryChanged(ctx context.Context) error {
-	if err := e.up(false); err != nil {
+	if err := e.up(ctx, false); err != nil {
 		return err
 	}
 	return e.c.Call(ctx, ipc.CmdMemoryChanged, nil)

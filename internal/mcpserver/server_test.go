@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -379,5 +380,103 @@ func TestMemoryToolsNeedMemoryAndAProject(t *testing.T) {
 	d.Memory = memStore(t)
 	if text, _, _ := call(t, connect(t, d), "propose_memory", map[string]any{"kind": "note", "text": "x"}); !strings.Contains(text, "project is unknown") {
 		t.Fatalf("no project: %q", text)
+	}
+}
+
+// Fix round 1: project-lookup errors cross the same boundary as every other.
+func TestMemoryToolsRedactProjectLookupErrors(t *testing.T) {
+	fe := &fakeEngine{err: errors.New("engine said 401 Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123")}
+	d := inPane(fe)
+	d.Memory = memStore(t)
+	var logged []string
+	d.Logf = func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
+	cs := connect(t, d)
+	for tool, args := range map[string]map[string]any{
+		"read_memory":    {},
+		"propose_memory": {"kind": "note", "text": "x"},
+	} {
+		text, _, isErr := call(t, cs, tool, args)
+		if !isErr || strings.Contains(text, "abcdefghijklmnop") || !strings.Contains(text, "401") {
+			t.Errorf("%s: isError=%v text=%q", tool, isErr, text)
+		}
+	}
+	if len(logged) != 2 || strings.Contains(strings.Join(logged, "\n"), "abcdefghijklmnop") {
+		t.Fatalf("log %q", logged)
+	}
+	fe.err = context.DeadlineExceeded
+	if text, _, _ := call(t, cs, "read_memory", map[string]any{}); !strings.Contains(text, "no answer in time") {
+		t.Fatalf("deadline text %q", text)
+	}
+}
+
+func TestExtraPaneIDArgumentIsRejected(t *testing.T) {
+	fe := &fakeEngine{}
+	cs := connect(t, inPane(fe))
+	if _, _, isErr := call(t, cs, "ask_dot", map[string]any{"slug": "security", "question": "q", "pane_id": "w9:p9"}); !isErr {
+		t.Fatal("pane_id accepted")
+	}
+	if len(fe.asks) != 0 {
+		t.Fatalf("engine called: %+v", fe.asks)
+	}
+}
+
+func TestExplicitEmptyToolsRegistersNothing(t *testing.T) {
+	d := inPane(&fakeEngine{})
+	d.Tools = []string{}
+	res, err := connect(t, d).ListTools(context.Background(), nil)
+	if err != nil || len(res.Tools) != 0 {
+		t.Fatalf("tools %v (%v)", res, err)
+	}
+}
+
+type blockingEngine struct {
+	fakeEngine
+	started chan struct{}
+	ended   chan error
+}
+
+func (b *blockingEngine) Ask(ctx context.Context, _, _ string, _ bool) (ipc.AskResult, error) {
+	close(b.started)
+	<-ctx.Done()
+	b.ended <- ctx.Err()
+	return ipc.AskResult{}, ctx.Err()
+}
+
+func TestClientCancelReachesTheEngine(t *testing.T) {
+	be := &blockingEngine{started: make(chan struct{}), ended: make(chan error, 1)}
+	cs := connect(t, inPane(be))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = cs.CallTool(ctx, &mcp.CallToolParams{Name: "ask_dot", Arguments: map[string]any{"slug": "security", "question": "q"}})
+	}()
+	<-be.started
+	cancel()
+	select {
+	case err := <-be.ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("engine ctx ended with %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the engine's context was never cancelled")
+	}
+	<-done
+}
+
+func TestCouncilResultStaysWithinMaxResultChars(t *testing.T) {
+	var members []ipc.CouncilMember
+	for i := range 40 {
+		members = append(members, ipc.CouncilMember{Slug: fmt.Sprintf("dot-%d", i), Stance: strings.Repeat("s", 500)})
+	}
+	fe := &fakeEngine{council: ipc.CouncilResult{Digest: strings.Repeat("d", 100), Members: members}}
+	d := inPane(fe)
+	d.MaxResultChars = 3000
+	text, js, isErr := call(t, connect(t, d), "ask_council", map[string]any{"question": "q"})
+	if isErr {
+		t.Fatal(text)
+	}
+	if n := utf8.RuneCountInString(text) + utf8.RuneCount(js); n > 3000 {
+		t.Fatalf("council result is %d characters", n)
 	}
 }

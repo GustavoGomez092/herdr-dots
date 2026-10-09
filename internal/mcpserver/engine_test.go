@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/view"
@@ -79,6 +80,35 @@ func TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies(t *testing.T) {
 		t.Fatalf("after the engine died: %v (ensures %d)", err, ensures)
 	}
 	stop()
+}
+
+// A caller's cancel is not "the engine is down".
+func TestIPCEngineCancelIsNotEngineDown(t *testing.T) {
+	e := NewIPCEngine(ipc.Client{Path: shortSock(t)}, "w1:p1", func() error { return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := e.ListDots(ctx); errors.Is(err, ErrEngineDown) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err %v", err)
+	}
+}
+
+// A client cancel stops the wait for a slow engine start.
+func TestIPCEngineStartWaitFollowsContext(t *testing.T) {
+	release := make(chan struct{})
+	e := NewIPCEngine(ipc.Client{Path: shortSock(t)}, "w1:p1", func() error { <-release; return nil })
+	defer close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := e.ListDots(ctx); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the wait for the engine start ignored the context")
+	}
 }
 
 func TestIPCEngineReportsAnEngineThatWontStart(t *testing.T) {
