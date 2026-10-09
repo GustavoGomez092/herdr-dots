@@ -496,7 +496,8 @@ summary; plain tuning hints ("Mostly dismissed", "Rarely speaks", "Your most exp
 repeating dismissed advice", "Fails often"); and its recent history (`enter` shows the full
 message). The same data is available from the shell: `herdr-dots dots profile <slug>`.
 
-There are 14 built-in templates (`t` in the library), all with every risky feature off.
+There are 14 built-in templates (`t` in the library). In every template, write, research, web,
+schedules and commit reviews are off; MCP asks from your agent are allowed (your own dots).
 
 **Share a dot** as one `.dotpack.toml` file (a dotpack): `x` in the profile, `I` in the library to
 import, or

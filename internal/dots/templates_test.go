@@ -1,6 +1,10 @@
 package dots
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"unicode"
 )
@@ -24,6 +28,37 @@ func TestFromTemplate(t *testing.T) {
 	}
 	if _, err := FromTemplate("nope"); err == nil {
 		t.Fatal("unknown template must error")
+	}
+}
+
+// P9-R16: templates are your own dots, so MCP asks from your agent are
+// allowed; every other risky capability is off. The exact defaults are
+// pinned here and the README says the same, so the two can't drift.
+func TestTemplateCapabilitiesMatchTheREADME(t *testing.T) {
+	want := CapabilitySpec{Write: false, WriteTimeoutSeconds: 600, MaxPatchBytes: 200000, MaxFiles: 50, MCP: true}
+	for _, d := range Templates() {
+		if d.Capabilities != want {
+			t.Errorf("%s: capabilities %+v, want %+v", d.Slug, d.Capabilities, want)
+		}
+		if d.Research.Enabled || d.Research.Web || d.Schedule.Cron != "" || d.Trigger.OnCommit {
+			t.Errorf("%s: research %+v schedule %q on_commit %v", d.Slug, d.Research, d.Schedule.Cron, d.Trigger.OnCommit)
+		}
+	}
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := strings.Join(strings.Fields(string(readme)), " ") // lines wrap anywhere
+	for _, s := range []string{
+		fmt.Sprintf("There are %d built-in templates", len(Templates())),
+		"write, research, web, schedules and commit reviews are off; MCP asks from your agent are allowed (your own dots)",
+	} {
+		if !strings.Contains(r, s) {
+			t.Errorf("README doesn't say %q", s)
+		}
+	}
+	if strings.Contains(r, "all with every risky feature off") {
+		t.Error("README still says templates have every risky feature off (MCP is on)")
 	}
 }
 
