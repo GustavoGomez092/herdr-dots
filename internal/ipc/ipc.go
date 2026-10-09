@@ -39,6 +39,20 @@ type RememberArgs struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// Council commands (Phase 3).
+const (
+	CmdCouncil          = "council"           // CouncilArgs: convene a council (runs in the background)
+	CmdCouncilPreflight = "council_preflight" // CouncilArgs: publish a preflight in the pane's snapshot
+)
+
+// CouncilArgs convenes (or preflights) a council on a main pane. Empty Slugs
+// means every eligible attached dot.
+type CouncilArgs struct {
+	PaneID   string   `json:"pane_id"`
+	Question string   `json:"question,omitempty"`
+	Slugs    []string `json:"slugs,omitempty"`
+}
+
 type AttachArgs struct {
 	PaneID string   `json:"pane_id"`
 	Slugs  []string `json:"slugs"`

@@ -112,3 +112,26 @@ func TestCallFailsFastWithoutServer(t *testing.T) {
 		t.Fatal("want dial error")
 	}
 }
+
+func TestCouncilArgsRoundTrip(t *testing.T) {
+	h, c := serve(t)
+	want := CouncilArgs{PaneID: "w1:p1", Question: "Ready to merge?", Slugs: []string{"security", "copy"}}
+	if err := c.Call(context.Background(), CmdCouncil, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Call(context.Background(), CmdCouncilPreflight, CouncilArgs{PaneID: "w1:p1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.got) != 2 || h.got[0] != "council" || h.got[1] != "council_preflight" {
+		t.Fatalf("commands %v", h.got)
+	}
+	var got CouncilArgs
+	if err := json.Unmarshal(h.args[0], &got); err != nil || got.PaneID != want.PaneID || got.Question != want.Question || len(got.Slugs) != 2 {
+		t.Fatalf("args %s: %+v %v", h.args[0], got, err)
+	}
+	if string(h.args[1]) != `{"pane_id":"w1:p1"}` {
+		t.Fatalf("empty question and slugs are omitted: %s", h.args[1])
+	}
+}
