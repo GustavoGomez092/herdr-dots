@@ -139,7 +139,7 @@ func New(d Deps) Model {
 		views = []scopeView{viewProject, viewAll}
 	}
 	m := Model{d: d, views: views, input: textinput.New(), status: d.Notice}
-	for i, ph := range []string{"one sentence", "convention | decision | finding | dismissed | preference | note", "globs, comma-separated (optional)"} {
+	for i, ph := range []string{"one sentence", "convention | decision | finding | dismissed | preference | note | research | question", "globs, comma-separated (optional)"} {
 		m.fields[i] = textinput.New()
 		m.fields[i].Placeholder = ph
 		m.fields[i].CharLimit = 600
