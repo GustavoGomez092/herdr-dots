@@ -6,6 +6,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"herdr-dots/internal/textutil"
 )
 
 const (
@@ -48,6 +50,7 @@ func OpenFeed(path string) (*Feed, error) {
 		for sc.Scan() {
 			var e FeedEntry
 			if json.Unmarshal(sc.Bytes(), &e) == nil {
+				e.Detail = textutil.SanitizeModelText(e.Detail)
 				f.remember(e)
 			}
 		}
@@ -56,6 +59,7 @@ func OpenFeed(path string) (*Feed, error) {
 	return f, nil
 }
 
+// remember keeps e in memory; e.Detail must already be sanitized.
 func (f *Feed) remember(e FeedEntry) {
 	list := append(f.recent[e.PaneID], e)
 	if len(list) > feedKeep {
@@ -64,7 +68,10 @@ func (f *Feed) remember(e FeedEntry) {
 	f.recent[e.PaneID] = list
 }
 
+// Append stores e. Detail often carries model or CLI output (error text), so
+// control characters are stripped before it is kept, written or rendered.
 func (f *Feed) Append(e FeedEntry) error {
+	e.Detail = textutil.SanitizeModelText(e.Detail)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.remember(e)

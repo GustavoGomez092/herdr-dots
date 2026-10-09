@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"herdr-dots/internal/textutil"
 )
 
 var ErrMalformed = errors.New("malformed verdict")
@@ -29,7 +31,7 @@ func ParseVerdict(text string) (Verdict, error) {
 	if raw.Relevant == nil {
 		return Verdict{}, fmt.Errorf("%w: missing \"relevant\"", ErrMalformed)
 	}
-	v := Verdict{Relevant: *raw.Relevant, Message: strings.TrimSpace(raw.Message)}
+	v := Verdict{Relevant: *raw.Relevant, Message: strings.TrimSpace(textutil.SanitizeModelText(raw.Message))}
 	switch strings.ToLower(strings.TrimSpace(raw.Severity)) {
 	case "critical":
 		v.Severity = "critical"

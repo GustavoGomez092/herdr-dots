@@ -2,6 +2,7 @@ package backend
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,14 @@ func TestParseVerdict(t *testing.T) {
 		if err != nil || got != c.want {
 			t.Errorf("ParseVerdict(%q) = %+v, %v; want %+v", c.in, got, err, c.want)
 		}
+	}
+	// Control characters (OSC 52 clipboard write, C1 CSI) arrive JSON-escaped.
+	got, err := ParseVerdict(`{"relevant":true,"severity":"warn","message":"use \u001b]52;c;ZXZpbA==\u0007cookies\u009b2J\nnow"}`)
+	if err != nil || strings.ContainsAny(got.Message, "\u001b\u0007\u009b") || got.Message != "use ]52;c;ZXZpbA==cookies2J\nnow" {
+		t.Errorf("control characters must be stripped: %q, %v", got.Message, err)
+	}
+	if _, err := ParseVerdict(`{"relevant":true,"message":"\u001b\u0007"}`); !errors.Is(err, ErrMalformed) {
+		t.Errorf("a message that is only control characters is empty: %v", err)
 	}
 	bad := []string{
 		``,
