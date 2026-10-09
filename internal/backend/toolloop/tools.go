@@ -115,6 +115,23 @@ func Unavailable(root string) bool {
 			}
 		}
 	}
+	// A root can also contain home under another name: /System/Volumes/Data
+	// reaches /Users/u through a firmlink, a bind mount can do the same. For
+	// every trailing part of home's path (Users/u, u, ...), check whether
+	// root/<part> is home itself.
+	for _, h := range []string{home, evalOr(home)} {
+		homeInfo, err := os.Stat(h)
+		if err != nil {
+			continue
+		}
+		parts := strings.Split(strings.Trim(filepath.ToSlash(h), "/"), "/")
+		for i := range parts {
+			cand := filepath.Join(append([]string{rr}, parts[i:]...)...)
+			if fi, err := os.Stat(cand); err == nil && os.SameFile(homeInfo, fi) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
