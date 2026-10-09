@@ -35,6 +35,7 @@ func TestParseCodex(t *testing.T) {
 }
 
 func TestResolveCodexPath(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	home := t.TempDir()
 	dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "08")
 	os.MkdirAll(dir, 0o700)
@@ -45,5 +46,22 @@ func TestResolveCodexPath(t *testing.T) {
 	}
 	if _, err := ResolveCodexPath(home, "id", "nope"); err == nil {
 		t.Fatal("missing must error")
+	}
+}
+
+func TestResolveCodexPathHonoursCodexHome(t *testing.T) {
+	home := t.TempDir()
+	codexHome := filepath.Join(t.TempDir(), "my codex")
+	t.Setenv("CODEX_HOME", codexHome)
+	dir := filepath.Join(codexHome, "sessions", "2026", "10", "08")
+	os.MkdirAll(dir, 0o700)
+	f := filepath.Join(dir, "rollout-2026-10-08T10-00-00-c2.jsonl")
+	os.WriteFile(f, []byte(codexSample), 0o600)
+	if p, err := ResolveCodexPath(home, "id", "c2"); err != nil || p != f {
+		t.Fatalf("CODEX_HOME not used: %q %v", p, err)
+	}
+	t.Setenv("CODEX_HOME", "")
+	if _, err := ResolveCodexPath(home, "id", "c2"); err == nil {
+		t.Fatal("without CODEX_HOME the session lives elsewhere and must not be found under home")
 	}
 }

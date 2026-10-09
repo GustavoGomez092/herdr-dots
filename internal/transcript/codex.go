@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"herdr-dots/internal/platform"
 )
 
 // Codex rollout files (~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl).
@@ -92,6 +94,15 @@ func (r CodexReader) Turns(context.Context) ([]Turn, error) {
 	return ParseCodex(f)
 }
 
+// codexSessionsDir is $CODEX_HOME/sessions when CODEX_HOME is set (as Codex,
+// mcpinstall and the codex backend resolve it), else <home>/.codex/sessions.
+func codexSessionsDir(home string) string {
+	if d := os.Getenv("CODEX_HOME"); d != "" {
+		return filepath.Join(d, "sessions")
+	}
+	return platform.CodexSessionsDir(home)
+}
+
 func ResolveCodexPath(home, kind, value string) (string, error) {
 	switch kind {
 	case "path":
@@ -103,7 +114,7 @@ func ResolveCodexPath(home, kind, value string) (string, error) {
 		if value == "" || strings.ContainsAny(value, `/\*?[]`) || strings.Contains(value, "..") {
 			return "", fmt.Errorf("invalid codex session id %q", value)
 		}
-		matches, _ := filepath.Glob(filepath.Join(home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+value+".jsonl"))
+		matches, _ := filepath.Glob(filepath.Join(codexSessionsDir(home), "*", "*", "*", "rollout-*-"+value+".jsonl"))
 		if len(matches) == 0 {
 			return "", fmt.Errorf("no transcript for codex session %s", value)
 		}

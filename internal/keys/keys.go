@@ -13,6 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/platform"
 )
 
 type Binding struct {
@@ -46,14 +47,11 @@ var BuiltinPrefixKeys = func() []string {
 	return ks
 }()
 
+// ConfigPath is Herdr's config.toml (platform.HerdrConfigPath: on Windows
+// %APPDATA%\herdr\config.toml unless HERDR_CONFIG_PATH or XDG_CONFIG_HOME
+// says otherwise).
 func ConfigPath(getenv func(string) string, home string) string {
-	if p := getenv("HERDR_CONFIG_PATH"); p != "" {
-		return p
-	}
-	if x := getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "herdr", "config.toml")
-	}
-	return filepath.Join(home, ".config", "herdr", "config.toml")
+	return platform.HerdrConfigPath(getenv, home)
 }
 
 // Existing maps every bound key in the user's config to what it triggers.

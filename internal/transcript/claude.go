@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"herdr-dots/internal/platform"
 )
 
 type claudeRecord struct {
@@ -151,7 +153,9 @@ func (r ClaudeReader) Turns(context.Context) ([]Turn, error) {
 }
 
 // ResolveClaudePath finds the transcript for a Herdr-reported session: a
-// direct path, or <home>/.claude/projects/*/<id>.jsonl.
+// direct path, or <home>/.claude/projects/*/<id>.jsonl. The glob covers every
+// project folder, so it doesn't depend on how Claude Code encodes a cwd
+// (C:\Users\x\repo becomes C--Users-x-repo on Windows).
 func ResolveClaudePath(home, kind, value string) (string, error) {
 	switch kind {
 	case "path":
@@ -163,7 +167,7 @@ func ResolveClaudePath(home, kind, value string) (string, error) {
 		if value == "" || strings.ContainsAny(value, `/\*?[]`) || strings.Contains(value, "..") {
 			return "", fmt.Errorf("invalid claude session id %q", value)
 		}
-		matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", value+".jsonl"))
+		matches, _ := filepath.Glob(filepath.Join(platform.ClaudeProjectsDir(home), "*", value+".jsonl"))
 		if len(matches) == 0 {
 			return "", fmt.Errorf("no transcript for claude session %s", value)
 		}

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"herdr-dots/internal/platform/platformtest"
 )
 
 func TestWriteFileAtomicCreatesWithPerm(t *testing.T) {
@@ -16,13 +18,9 @@ func TestWriteFileAtomicCreatesWithPerm(t *testing.T) {
 	if string(got) != "hello" {
 		t.Fatalf("content = %q", got)
 	}
-	st, _ := os.Stat(p)
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("perm = %v", st.Mode().Perm())
-	}
-	dst, _ := os.Stat(filepath.Dir(p))
-	if dst.Mode().Perm() != 0o700 {
-		t.Fatalf("dir perm = %v", dst.Mode().Perm())
+	platformtest.AssertPrivateFile(t, p)
+	if st, _ := os.Stat(filepath.Dir(p)); !st.IsDir() {
+		t.Fatal("parent dir not created")
 	}
 }
 
@@ -38,5 +36,27 @@ func TestWriteFileAtomicReplacesAndLeavesNoTemp(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 {
 		t.Fatalf("leftover files: %v", entries)
+	}
+}
+
+// The temp file must be private before it holds any secret byte: restrict runs
+// right after creation, while the file is still empty.
+func TestWriteFileAtomicRestrictsBeforeWriting(t *testing.T) {
+	var size int64 = -1
+	old := restrictFn
+	restrictFn = func(path string, perm os.FileMode) error {
+		st, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		size = st.Size()
+		return old(path, perm)
+	}
+	defer func() { restrictFn = old }()
+	if err := WriteFileAtomic(filepath.Join(t.TempDir(), "f"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if size != 0 {
+		t.Fatalf("restrict ran when the temp file held %d bytes, want 0", size)
 	}
 }
