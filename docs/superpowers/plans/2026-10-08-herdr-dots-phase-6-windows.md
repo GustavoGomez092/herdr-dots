@@ -11,9 +11,11 @@
 **Spec:** `docs/superpowers/specs/2026-10-08-herdr-dots-phase-6-windows-design.md` (approved with the amendments in `docs/superpowers/decisions/2026-10-08-phase-decisions.md`: ruling 4 puts Windows here, before Phases 7–9; the release-gate amendment says this macOS machine can only cross-compile and unit-test Windows, so a real Windows run is a user gate). This plan replaces the outline `docs/superpowers/plans/drafts/2026-10-08-herdr-dots-phase-6-windows-outline.md`.
 
 **Preconditions (check before Task 1; stop and report if any fails):**
-- Phases 2, 3, 4 and 5 are merged into the base branch: `internal/memory`, `internal/council` (or Phase 3's equivalent), `internal/credentials`, `internal/backend/toolloop`, `internal/backend/ollama`, `internal/mcpinstall` and `cmd/herdr-dots/setupmcp.go` exist, and `internal/version/version.go` says `0.5.0`.
-- `go.mod` says `go 1.25.0` and lists `golang.org/x/sys` (Phase 4 put it at `v0.47.0`).
+- Phases 2, 3, 4 and 5 are merged into the base branch: `internal/memory`, `internal/council`, `internal/credentials`, `internal/backend/toolloop`, `internal/backend/ollama`, `internal/mcpinstall`, `internal/mcpserver` and `cmd/herdr-dots/setupmcp.go` exist, and `internal/version/version.go` says `0.5.0`.
+- `go.mod` says `go 1.25.0` and lists `golang.org/x/sys` (Phase 4 put it at `v0.47.0`, still `// indirect`).
 - `GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local go vet ./...` passes on the base (darwin).
+
+**Reconciled against the merged code (2026-10-09).** This plan was first written against v1 + Phase 2 and the *plans* of Phases 3–5. It has since been replayed task by task, in wave order, on `feat/dots-v1` at `5863171` (Phases 2–5 merged, 0.5.0) and then again at `a47427d` (the same plus the Phase 5 final fix wave): every code block below was applied as written, darwin `go test -race ./...` and `go vet ./...` passed, `gofmt -l internal cmd` printed nothing, `GOOS=linux go build ./... && go vet ./...` and `GOOS=windows go build ./... && go vet ./...` were clean, `GOOS=windows go test -c ./...` compiled every package's Windows test binary, and `make cross` passed. Every diff is a real `git diff` against `a47427d` and applies there with plain `git apply`. Decisions added by the reconcile are marked "(reconciled)" (Plan decisions 24–34). The base for Wave 1 is therefore `a47427d` or later.
 
 ## Global Constraints
 
@@ -25,7 +27,7 @@ Phase 6 constraints:
 - Windows privacy: an owner-only DACL (current user, SYSTEM, Administrators; inheritance off) for credentials, memory, config and session state; `CheckPrivate` refuses any DACL entry for anyone else. Never request elevation.
 - Every dot child process on Windows runs in a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, started suspended so no grandchild escapes.
 - The engine IPC endpoint on Windows is the named pipe `\\.\pipe\herdr-dots-<SessionKey>` with security descriptor `O:<user SID>D:P(A;;GA;;;<user SID>)`; clients refuse a pipe owned by anyone else.
-- Every task's verification runs, from the repo root: `gofmt -l .` (prints nothing), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...` (darwin), `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...`, and `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c` for the packages it touches. Windows-only behavior is covered by `//go:build windows` tests that compile here and run in CI or on a Windows machine (user gate).
+- Every task's verification runs, from the repo root: `gofmt -l internal cmd` (prints nothing), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...` (darwin), `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...`, and `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c` for the packages it touches. Windows-only behavior is covered by `//go:build windows` tests that compile here and run in CI or on a Windows machine (user gate).
 - The CI file (`.github/workflows/ci.yml`) is written and committed, never pushed. No `git push`, no tags (release-gate amendment).
 - Tests never touch the user's real Herdr session, `STATE_DIR` or `CONFIG_DIR`; use `t.TempDir()`. Run every `go` command with `GOTOOLCHAIN=local`.
 
@@ -45,19 +47,30 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 8. **Detached engine (W5).** `platform.StartDetached(cmd) (*os.Process, error)` replaces the spec's `Detach(cmd)`. Windows flags are `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`, first with `CREATE_BREAKAWAY_FROM_JOB` and, if a job forbids breakaway (access denied), again without it. `DETACHED_PROCESS` is dropped: Windows ignores `CREATE_NO_WINDOW` alongside it, and a console-less engine would make every console child (claude, git) open a visible window. A hidden console is inherited by every child. `platform.HideWindow` is still applied to dot runs and git calls.
 9. **Engine pipe security.** The spec's DACL gains an explicit owner (`O:<SID>`), and `ipc.Dial` calls `platform.CheckPipeOwner`, refusing a pipe another user created first under the engine's name (Unix gets this from the 0700 directory). An Administrators owner is accepted when this process's token belongs to Administrators. go-winio creates the first instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a second engine (or a squatter) can't share the name.
 10. **DACL privacy rules (W10).** `SecureDir`/`SecureFile` write `D:P(A;OICI;FA;;;<SID>)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)` (no `OICI` on files) and skip paths that are already private, so `paths.Ensure` (run by every command) doesn't re-propagate ACLs. `CheckPrivate` allows the current user, the owner, SYSTEM, Administrators and OWNER RIGHTS; ignores deny and inherit-only entries; treats a missing DACL and object/callback entries as not private. `fsutil.WriteFileAtomic` applies `SecureFile` to every write with a private perm (no group/other bits) on Windows, and a failure fails the write; that is the spec's "ACL setup fails → refuse to write credentials", applied to all state.
-11. **Credentials (Phase 4).** `platform.CheckPrivate` replaces the mode-bit and uid checks. `ErrInsecurePerms` keeps its identity (`errors.Is` unchanged) but its text becomes "credentials.toml is readable by others" plus the OS fix from `platform.FixPrivateHint` (Unix: `run: chmod 600 "<path>"`; Windows: an `icacls` command or "delete it and set it again").
+11. **Credentials (Phase 4).** `platform.CheckPrivateFile` (on the opened file; see decision 25) replaces the mode-bit and uid checks. `ErrInsecurePerms` keeps its identity (`errors.Is` unchanged) but its text becomes "credentials.toml is readable by others" plus the OS fix from `platform.FixPrivateHint` (Unix: `run: chmod 600 "<path>"`; Windows: an `icacls` command or "delete it and set it again").
 12. **File replacement on Windows.** Go opens files without `FILE_SHARE_DELETE`, so renaming over a file another process is reading fails briefly. `fsutil` retries the rename up to 40 × 25 ms on access-denied, sharing and lock violations. Unix calls `os.Rename` once, as before.
 13. **Locks (W4).** `LockFileEx` exclusive + fail-immediately on one byte at offset 2^62 (so the lock never blocks reading or rewriting the pid), on a handle opened with `FILE_SHARE_DELETE`. Memory `Purge` now removes everything except `memory.lock` while holding the lock and removes the lock file and directory after release, because Windows can't delete a file another handle has open.
 14. **Environment names.** `platform.EnvKey` upper-cases names on Windows and leaves them alone on Unix; `backend.CleanEnv` and Phase 2's `memory.gitEnv` compare in that form.
-15. **Paths (W12, V3, V5, V6).** Herdr's config path follows Herdr's source (`src/config/io.rs`): `HERDR_CONFIG_PATH`, then `XDG_CONFIG_HOME\herdr`, then `%APPDATA%\herdr`, then `%USERPROFILE%\AppData\Roaming\herdr`, then `~/.config/herdr`. Claude and Codex keep their folders under the user's home on every OS. The spec's `ClaudeProjectKey` and `platform.Home` are dropped (YAGNI): transcripts are found by globbing every project folder, which doesn't depend on how Claude Code encodes `C:\Users\x\repo`, and `os.UserHomeDir` already returns `%USERPROFILE%`. `CODEX_HOME` stays unsupported on every OS (Unix byte-identical).
+15. **Paths (W12, V3, V5, V6).** Herdr's config path follows Herdr's source (`src/config/io.rs`): `HERDR_CONFIG_PATH`, then `XDG_CONFIG_HOME\herdr`, then `%APPDATA%\herdr`, then `%USERPROFILE%\AppData\Roaming\herdr`, then `~/.config/herdr`. Claude and Codex keep their folders under the user's home on every OS. The spec's `ClaudeProjectKey` and `platform.Home` are dropped (YAGNI): transcripts are found by globbing every project folder, which doesn't depend on how Claude Code encodes `C:\Users\x\repo`, and `os.UserHomeDir` already returns `%USERPROFILE%`. `CODEX_HOME` stays unsupported on every OS (Unix byte-identical). (Superseded by decision 29: Phase 5 honors `CODEX_HOME`.)
 16. **UI (V7).** Herdr 0.9.1's changelog says Windows input "preserves Alt combinations, Ctrl+S". So no `ctrl+w` save fallback (it would also break the textarea's delete-word). ASCII glyphs only with `HERDR_DOTS_ASCII=1` (ruling O4 b).
 17. **`min_herdr_version` stays `0.8.0`.** The manifest has one global minimum; raising it would block Unix users on 0.8.x. The README says Windows needs Herdr ≥ 0.9.1 (Windows plugin panes resolve relative commands from the plugin root since 0.9.0; Ctrl+S since 0.9.1).
-18. **Tool jail hardening (Phase 4).** `toolloop.Denied` matches case-insensitively on every OS (".ENV" opens ".env" on Windows and on default macOS volumes), and `platform.ReservedPathName` denies Windows alternate data streams (`.env::$DATA`), device names (`NUL`, `COM1.txt`) and names ending in a dot or space. `toolloop` opens files with `platform.OpenNoFollow` (Windows: `Lstat` refuses symlinks and reparse points, then `os.Open`; the jail already resolved symlinks).
-19. **Portability guard.** Task 10 adds `TestProductCodeHasNoUnixOnlyCalls`, which fails on Unix-only calls, OS branches, hard-coded client paths and raw `claude`/`codex` execs in untagged product code. It keeps Phases 7–9 portable without a Windows machine.
+18. **Tool jail hardening (Phase 4).** `toolloop.Denied` matches case-insensitively on every OS (".ENV" opens ".env" on Windows and on default macOS volumes; Phase 4 already ships this with full Unicode folding and an exact on-disk-name check, see decision 27), and `platform.ReservedPathName` denies Windows alternate data streams (`.env::$DATA`), device names (`NUL`, `COM1.txt`) and names ending in a dot or space. `toolloop` opens files with `platform.OpenNoFollow` (Windows: `Lstat` refuses symlinks and reparse points, then `os.Open`; the jail already resolved symlinks, and Phase 4's `openVerified` re-checks the opened file after the open).
+19. **Portability guard.** Task 10 adds `TestProductCodeHasNoUnixOnlyCalls`, which fails on Unix-only calls, OS branches, hard-coded client paths, `sh` execs, the literal `"HOME"` and raw `claude`/`codex` execs in untagged product code. It keeps Phases 7–9 portable without a Windows machine.
 20. **Dependencies.** go-winio `v0.6.2` (`v0.6.3` needs Go 1.26). It adds two `go.sum` lines and no other module. Only Task 3 edits `go.mod`/`go.sum`; tasks that import `golang.org/x/sys/windows` earlier in the same wave build fine because the module is already listed.
-21. **Windows build status during the port.** Wave 1 and Wave 2 tasks branch from bases where some packages still fail to compile for Windows (they belong to sibling tasks). Each task's Windows `go build ./...` / `go vet ./...` must print only packages from that wave's "may still fail" list (table below) and never a package the task touches; its own packages must pass `GOOS=windows go vet`. From Wave 3 on, the Windows build and vet of `./...` print nothing.
+21. **Windows build status during the port.** Wave 1 and Wave 2 tasks branch from bases where some packages still fail to compile for Windows (they belong to sibling tasks). Each task's Windows `go build ./...` / `go vet ./...` must print only packages from that wave's "may still fail" list (table below) and never a package the task touches; its own packages must pass `GOOS=windows go vet` (except where a package imports a sibling's failing package, as the task's gate says). From Wave 3 on, the Windows build and vet of `./...` print nothing. (Reconciled: at `a47427d` only `internal/lockfile`, `internal/backend` and `internal/backend/toolloop` fail to compile for Windows; `internal/credentials` compiles through Phase 4's `open_other.go` but refuses every file there, and every Phase 5 package compiles.)
 22. **Line endings.** `.gitattributes` forces LF in every checkout, so `gofmt -l .` and byte-comparing tests behave the same on Windows CI.
 23. **What "tested" means here.** On this macOS machine: darwin `-race` tests, Linux and Windows cross-builds, Windows `go vet`, and compiled (not run) Windows test binaries. Everything every `//go:build windows` test asserts runs only in CI or on a Windows machine; the README and notes say so, and the real run is a user gate.
+24. **(reconciled) The real Phase 5 files, not a guard-driven search.** Task 10 no longer "lets a test find the lines": it carries concrete diffs for every Phase 5 file that needs a port (`mcpinstall` config paths, `setup-mcp`'s child commands, the codex dot run's `-c mcp_servers…` config lookup, the MCP and engine tests' sockets), plus the Phase 2 memory editor the guard's new `exec.Command("sh"` pattern found. The guard still runs and passes on the result. Task 6 already switches Phase 5's `mcp.go` (and its test) to `EngineEndpoint`, because `EngineSock` no longer exists on Windows.
+25. **(reconciled) Credentials keep Phase 4's open-then-check order.** Phase 4 opens `credentials.toml` first (`O_NOFOLLOW|O_NONBLOCK`) and checks the descriptor (`fstat`), so the file checked is the file read. Task 3 adds `platform.CheckPrivateFile(f *os.File) error` (Unix: `fstat` mode bits and uid; Windows: owner and DACL read through the handle with `GetSecurityInfo`) beside `CheckPrivate(path)`, and Task 8 uses it. `open_unix.go` changes its constraint from `darwin || linux` to `unix` and loses `ownedByMe`; Phase 4's `open_other.go` becomes `open_windows.go`: `Lstat` refuses a symlink or reparse point, then the file is opened and the handle's own FileInfo returned. The `Lstat`→open gap on Windows is the documented fallback (no `O_NOFOLLOW` there): exploiting it needs write access to CONFIG_DIR, which is owner-only, and the privacy check runs on the handle that is read.
+26. **(reconciled) Connection refused keeps its identity through httpx on Windows.** Phase 4 checks `syscall.ECONNREFUSED` in `backend.Unreachable`, the OpenAI and Anthropic adapters, Ollama, and keeps it as a sentinel when `httpx` scrubs an error (the providers screen's save check, ruling P4-R8, treats it as "unreachable"). Windows reports `WSAECONNREFUSED`, which that sentinel never matches. Task 2 adds `platform.ErrConnRefused` (`syscall.ECONNREFUSED` on Unix, `windows.WSAECONNREFUSED` on Windows); Task 8 makes every check `platform.ConnRefused(err)` and lets httpx keep `platform.ErrConnRefused` when `platform.ConnRefused` matches. Unix keeps exactly the v1 error identity.
+27. **(reconciled) Phase 4's jail already folds case.** `toolloop.Denied` uses full Unicode case folding and `ResolveInRoot` requires exact on-disk names (Phase 4 fix waves, tests `TestDeniedIsCaseInsensitive` and `TestDeniedUsesFullUnicodeCaseFolding`), so Task 8 drops its `strings.ToLower` hunk and its `TestDeniedIgnoresCase` test. Task 8 still adds `platform.ReservedPathName` (streams, devices, trailing dots/spaces) before the deny check, switches `openVerified` to `platform.OpenNoFollow` (which gains `O_NONBLOCK` on Unix so Phase 4's FIFO guard stays), makes `Unavailable` refuse any file-system root (`filepath.Dir(rr) == rr`: `/`, `C:\`, a `\\server\share\` root; ruling P4-R5) instead of only `/`, and folds env names in the jail's `gitEnv` with `platform.EnvKey`. A `\\?\` root that `EvalSymlinks` can't resolve already fails closed (every tool reports "project root" errors).
+28. **(reconciled) Tests that set `HOME` set `USERPROFILE` too.** `os.UserHomeDir` reads `USERPROFILE` on Windows, so the jail's home tests use a `setHome` helper (Task 8), and the codex MCP tests build the variable from `platform.HomeEnv` (Task 10).
+29. **(reconciled) `platform.HomeEnv` and the codex config lookup.** Phase 5's `codexConfigPath` reads `HOME` from a dot run's environment to find `~/.codex/config.toml`. Task 2 adds `platform.HomeEnv` (`HOME`; `USERPROFILE` on Windows) and Task 10 compares names in `platform.EnvKey` form and builds the path with `platform.CodexConfig`. Decision 15's "CODEX_HOME stays unsupported" is superseded: Phase 5 honors `CODEX_HOME` in `mcpinstall` and in this lookup, and Phase 6 keeps that on every OS.
+30. **(reconciled) The memory editor runs without `sh` on Windows.** Phase 2's `herdr-dots memory edit` runs `sh -c '<editor> "$1"'`. Task 10 adds `platform.EditorCommand(editor, file string) *exec.Cmd` (Unix: exactly that; Windows: `%ComSpec% /d /s /c "<editor> "<file>""`, the file being herdr-dots' own private temp path) and gives the temp directory `platform.SecureDir` (an owner-only DACL on Windows; `chmod 0700` on Unix, which `MkdirTemp` already did). The three `sh`-script editor tests move to `memory_unix_test.go`; the Windows behavior is tested in `internal/platform`.
+31. **(reconciled) Test endpoints.** Task 3 adds `platformtest.Endpoint(t testing.TB) string` (a short unix socket path, or a unique named pipe), used by Phase 5's engine and MCP tests (Task 10). `internal/ipc` keeps its own `testEndpoint` (Task 6), which also checks unix-socket details.
+32. **(reconciled) Phase 5's `engineEnv` folds name case.** The detached engine's environment replaces `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_STATE_DIR` and `HERDR_SOCKET_PATH`; on Windows a variable spelled in another case would survive next to the new one. Task 6 compares names with `platform.EnvKey`.
+33. **(reconciled) Version test.** Phase 5 pins the version in `cmd/herdr-dots/memwire_test.go` (`TestVersionIsPhaseFive`). Task 12 renames it `TestVersionIsPhaseSix`, expecting `0.6.0`, and changes it before the version (test first).
+34. **(reconciled) Phase 5 final fix wave.** Merged at `a47427d` while this plan was reconciled; the plan was replayed again on it. Its `engineEnv` also drops `HERDR_PANE_ID`, `CLAUDECODE` and session `CLAUDE_CODE_*` markers: Task 6 folds the name once with `platform.EnvKey`, so `claudeProviderSetting` sees the upper-case name on Windows. Its new `TestUnreadableClaudeConfigIsRefused` makes a file unreadable with `chmod 000`, which Windows ignores (it only sets the read-only attribute), so Task 10 moves it to `internal/mcpinstall/final_unix_test.go`; the refusal code is the same on every OS, and a real ACL-denied file on Windows is a user gate. Its other new tests (`final_*_test.go` in `cmd/herdr-dots`, `internal/engine`, `internal/mcpserver`, `internal/memory/proposal_cap_test.go`) need no port.
 
 ## Confirmed while planning (2026-10-08)
 
@@ -80,7 +93,7 @@ The five inputs the spec implies but its test list doesn't exercise, most likely
 2. **`claude.cmd` instead of `claude.exe`.** Expect purpose text full of `" & | % ^ < > !` never to reach cmd.exe, unsafe arguments refused before anything starts, and an over-long line refused with a hint naming `claude.exe`. Tests: `TestCommandPassesShimArgumentsLiterally`, `TestCommandRefusesUnsafeShimArguments` (Task 2), `TestShimGetsPromptAndSettingsAsFiles`, `TestClaudeThroughACmdShimKeepsThePromptOffTheCommandLine`, `TestRunReportsShimPreflightErrorsVerbatim` (Task 9).
 3. **A timeout with grandchildren** (node under a shim, `cmd /c ping`). Expect the whole tree dead within 2 s, and leftovers killed when the run ends. Tests: `TestTreeKillEndsGrandchildren`, `TestTreeCloseKillsWhatIsLeft`, `TestExecRunnerKillsTheJobOnTimeout` (Task 2).
 4. **Two Herdr sessions of one user, or a pipe name taken first.** Expect two engines on two pipes with no cross-talk, a second listener refused, and a client that refuses a pipe it doesn't own. Tests: `TestTwoEndpointsNeverCrossTalk`, `TestEngineEndpointIsPerSession`, `TestListenRefusesANameThatIsAlreadyServed` (Task 6), `TestPipeRoundTripOwnerCheckAndNoSecondListener` (Task 3).
-5. **A `credentials.toml` copied from another machine with permissive inherited ACLs.** Expect reads and writes refused with `ErrInsecurePerms` and a fix-it hint, the key never quoted. Tests: `TestPermissiveFileIsRefusedWithoutReadingIt`, `TestInheritedUsersAccessIsRefusedAndSetFixesNothingSilently` (Task 8), `TestCheckPrivateRefusesReadAccessForOthers` (Task 3).
+5. **A `credentials.toml` copied from another machine with permissive inherited ACLs.** Expect reads and writes refused with `ErrInsecurePerms` and a fix-it hint, the key never quoted. Tests: `TestPermissiveFileIsRefusedWithoutReadingIt`, `TestInheritedUsersAccessIsRefusedAndSetFixesNothingSilently` (Task 8), `TestCheckPrivateRefusesReadAccessForOthers`, `TestCheckPrivateFileReadsTheHandlesDACL` (Task 3).
 
 ---
 
@@ -97,9 +110,9 @@ Each task runs in its own git worktree branched from the wave's base (the base b
 | 5 | ASCII glyph fallback | — | 1 |
 | 6 | Transports: Herdr pipe dial, engine endpoint, detached engine | Task 2, Task 3 | 2 |
 | 7 | Files, client paths and git: `fsutil`, transcripts, setup-keys, memory git | Task 2, Task 3 | 2 |
-| 8 | Phase 4 ports: credentials, tool jail, Ollama | Task 2, Task 3 | 2 |
+| 8 | Phase 4 ports: credentials, tool jail, connection-refused checks | Task 2, Task 3 | 2 |
 | 9 | CLI backends: system prompt off argv (W7), shims (W8) | Task 2, Task 3 | 2 |
-| 10 | Phase 5 ports and the portability guard | Tasks 6–9 | 3 |
+| 10 | Phase 5 ports, the memory editor and the portability guard | Tasks 2–9 | 3 |
 | 11 | Test-suite portability | Tasks 2–9 | 3 |
 | 12 | Manifest, `build.ps1`, CI matrix, `.gitattributes`, version 0.6.0 | Tasks 2–9 | 3 |
 | 13 | README, roadmap and notes (still not done) | all | 4 |
@@ -112,41 +125,41 @@ Each task runs in its own git worktree branched from the wave's base (the base b
 - Task 3: `internal/platform/security.go`, `security_unix.go`, `security_windows.go`, `names.go`, `pipe.go`, `pipe_windows.go`, `security_test.go`, `security_unix_test.go`, `security_windows_test.go`; `internal/platform/platformtest/platformtest.go`, `platformtest_unix.go`, `platformtest_windows.go`; `go.mod`, `go.sum`.
 - Task 4: `internal/lockfile/lockfile.go`, `lockfile_unix.go`, `lockfile_windows.go`, `xproc_test.go`; `internal/memory/store.go`, `purge_test.go`.
 - Task 5: `internal/ui/style/style.go`, `style_test.go`; `internal/ui/pane/model.go`.
-- Task 6: `internal/herdr/client.go`, `client_test.go`, `dial_unix.go`, `dial_windows.go`; `internal/herdr/herdrtest/fake.go`, `listen_unix.go`, `listen_windows.go`; `internal/ipc/ipc.go`, `ipc_test.go`, `endpoint_unix.go`, `endpoint_windows.go`, `endpoint_unix_test.go`, `endpoint_windows_test.go`; `internal/paths/paths.go`, `paths_test.go`, `endpoint_unix.go`, `endpoint_windows.go`, `paths_unix_test.go`, `paths_windows_test.go`; `cmd/herdr-dots/engine.go`, `engine_test.go`, `ui.go`, `action.go`, and any other non-test file that calls `EngineSock()` (Phase 5's MCP entry point).
+- Task 6: `internal/herdr/client.go`, `client_test.go`, `dial_unix.go`, `dial_windows.go`; `internal/herdr/herdrtest/fake.go`, `listen_unix.go`, `listen_windows.go`; `internal/ipc/ipc.go`, `ipc_test.go`, `query_test.go`, `endpoint_unix.go`, `endpoint_windows.go`, `endpoint_unix_test.go`, `endpoint_windows_test.go`; `internal/paths/paths.go`, `paths_test.go`, `endpoint_unix.go`, `endpoint_windows.go`, `paths_unix_test.go`, `paths_windows_test.go`; `cmd/herdr-dots/engine.go`, `engine_test.go`, `ui.go`, `action.go`, `mcp.go`, `mcp_test.go`.
 - Task 7: `internal/fsutil/atomic.go`, `atomic_test.go`, `atomic_unix_test.go`, `atomic_windows_test.go`, `private_unix.go`, `private_windows.go`; `internal/transcript/claude.go`, `codex.go`, `claude_test.go`; `internal/keys/keys.go`, `keys_test.go`; `internal/memory/project.go`, `project_test.go`.
-- Task 8: `internal/credentials/credentials.go`, `credentials_test.go`, `perms_unix_test.go`, `perms_windows_test.go`; `internal/backend/toolloop/jail.go`, `tools.go`, `tools_test.go`, `jail_windows_test.go`; `internal/backend/ollama/ollama.go`, `connrefused_test.go`.
+- Task 8: `internal/credentials/credentials.go`, `credentials_test.go`, `hardening_test.go`, `open_unix.go`, `open_other.go` (renamed to `open_windows.go`), `perms_unix_test.go`, `perms_windows_test.go`; `internal/backend/toolloop/jail.go`, `tools.go`, `tools_test.go`, `fix1_test.go`, `fix2_test.go`, `final_test.go`, `jail_windows_test.go`; `internal/backend/ollama/ollama.go`, `connrefused_test.go`; `internal/backend/api.go`; `internal/backend/openaiapi/openai.go`; `internal/backend/anthropicapi/anthropic.go`; `internal/backend/httpx/httpx.go`, `final_test.go`.
 - Task 9: `internal/backend/claude.go`, `codex.go`, `runfiles.go`, `runfiles_test.go`, `runfiles_windows_test.go`.
-- Task 10: `internal/platform/portability_test.go`; Phase 5 files the guard flags (`internal/mcpinstall/*`, `internal/mcpserver/*`, `cmd/herdr-dots/mcp.go`, `cmd/herdr-dots/setupmcp.go` and their tests); the Task 1 notes file (Phase 5 section).
-- Task 11: `internal/memory/store_test.go`, `internal/paths/memory_test.go`, `internal/state/state_test.go`, `internal/queue/queue_test.go`, `internal/dots/store_test.go`, and Phase 3–4 test files the audit commands list (never a file Task 10 or Task 12 owns).
-- Task 12: `herdr-plugin.toml`, `internal/version/version.go`, `scripts/build.ps1`, `cmd/herdr-dots/platform_manifest_test.go`, `.github/workflows/ci.yml`, `.gitattributes`, `Makefile`.
+- Task 10: `internal/platform/portability_test.go`, `editor_unix.go`, `editor_windows.go`, `editor_unix_test.go`, `editor_windows_test.go`; `internal/mcpinstall/install.go`, `install_test.go`, `final_test.go`, `final_unix_test.go`; `internal/backend/codex_mcp.go`, `codex_mcp_test.go`; `internal/mcpserver/engine_test.go`; `internal/engine/ask_test.go`; `cmd/herdr-dots/setupmcp.go`, `setupmcp_test.go`, `memory.go`, `memory_test.go`, `memory_unix_test.go`; the Task 1 notes file (Phase 5 section).
+- Task 11: `internal/memory/store_test.go`, `internal/paths/memory_test.go`, `internal/paths/providers_test.go`, `internal/state/state_test.go`, `internal/queue/queue_test.go`, `internal/dots/store_test.go`, `cmd/herdr-dots/keys_test.go`.
+- Task 12: `herdr-plugin.toml`, `internal/version/version.go`, `scripts/build.ps1`, `cmd/herdr-dots/platform_manifest_test.go`, `cmd/herdr-dots/memwire_test.go`, `.github/workflows/ci.yml`, `.gitattributes`, `Makefile`.
 - Task 13: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, the Task 1 notes file (wrap-up section).
 
-**Windows build status (Plan decision 21).** A Wave 1 or Wave 2 task's Windows `go build ./...` and `go vet ./...` may print only these packages (minus the ones the task itself ports), plus any Phase 5 package that Task 1's baseline recorded:
+**Windows build status (Plan decision 21).** A Wave 1 or Wave 2 task's Windows `go build ./...` and `go vet ./...` may print only these packages (minus the ones the task itself ports). The baseline at `a47427d` (and `5863171`) is `# herdr-dots/internal/backend`, `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/lockfile` (vet also prints `# herdr-dots/internal/backend [herdr-dots/internal/credentials.test]`); no Phase 5 package fails.
 
 | Wave | May still fail for Windows | Ported by |
 |---|---|---|
-| 1 | `herdr-dots/internal/lockfile`, `herdr-dots/internal/backend`, `herdr-dots/internal/backend/toolloop`, `herdr-dots/internal/credentials`, `herdr-dots/cmd/herdr-dots` | Tasks 4, 2, 8, 8, 6 |
-| 2 | `herdr-dots/internal/backend/toolloop`, `herdr-dots/internal/credentials`, `herdr-dots/cmd/herdr-dots` | Tasks 8, 8, 6 |
-| 3 | only Phase 5 packages from Task 1's baseline (for Tasks 11 and 12; Task 10 ports them) | Task 10 |
+| 1 | `herdr-dots/internal/lockfile`, `herdr-dots/internal/backend`, `herdr-dots/internal/backend/toolloop`, and, once its imports compile, `herdr-dots/cmd/herdr-dots` (`unknown field Setsid` in `engine.go`) | Tasks 4, 2, 8, 6 |
+| 2 | `herdr-dots/internal/backend/toolloop`, `herdr-dots/cmd/herdr-dots` (each until its task merges; a package that imports a failing one shows up after it) | Tasks 8, 6 |
+| 3 | none | — |
 | 4 | none | — |
 
 (`go build` doesn't compile packages that import a failing package, so a dependent may appear only once its dependency is fixed.)
 
-**Gate after Wave 2:** after merging Tasks 6–9, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...` must succeed except for Phase 5 packages listed in the Task 1 baseline. If anything else fails, fix it before Wave 3.
+**Gate after Wave 2:** after merging Tasks 6–9, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...` must print nothing. If anything fails, fix it before Wave 3. (The replay reached this state as soon as Task 8 merged.)
 
 **Gate after Wave 3:** the Windows build and vet of `./...` succeed, `make cross` succeeds, and `go test -race ./...` passes on darwin.
 
-**Test-name hygiene:** helpers added here: Task 2 `envMap`, `echoShim`, `pingTree`; Task 3 `setSDDL`, `daclString`, `mySID`; Task 4 none; Task 5 none; Task 6 `testEndpoint`, `pipeSeq`; Task 7 none; Task 8 `readableByOthers`, `symlinkOrSkip` (package `credentials`), `symlinkOrSkip` (package `toolloop`), `setDACL`, `me`; Task 9 `withBin`, `longReq`, `fileRunner`, `runDirs`, `errRunner`; Task 10 `moduleRoot`, `osSpecific`, `itoa`; Task 12 `platformManifest`, `readPlatformManifest`. Phase 3's `manifest` type in `cmd/herdr-dots` is untouched. Before adding a helper, run `grep -rn "func <name>\b" <package dir>`; if Phases 2–5 already define it, add the suffix `P6`.
+**Test-name hygiene:** helpers added here: Task 2 `envMap`, `echoShim`, `pingTree`; Task 3 `setSDDL`, `daclString`, `mySID`; Task 4 none; Task 5 none; Task 3 also `endpoint`, `endpointSeq` (package `platformtest`); Task 6 `testEndpoint`, `pipeSeq`; Task 7 none; Task 8 `readableByOthers`, `symlinkOrSkip` (package `credentials`), `symlinkOrSkip`, `setHome` (package `toolloop`), `setDACL`, `me`; Task 9 `withBin`, `longReq`, `fileRunner`, `runDirs`, `errRunner`; Task 10 `moduleRoot`, `osSpecific`, `itoa`, and `symlinkOrSkip` plus the `tRoot` variable (package `mcpinstall`); Task 12 `platformManifest`, `readPlatformManifest`. Phase 3's `manifest` type in `cmd/herdr-dots` is untouched. Before adding a helper, run `grep -rn "func <name>\b" <package dir>`; if Phases 2–5 already define it, add the suffix `P6`.
 
 ### Shared files with Phases 2–5
 
-Phases 2–5 merge before Phase 6, so these files already carry their changes. The diffs below are against v1 plus Phase 2 (and, for Phase 4 files, against the code in the Phase 4 plan). Where a hunk doesn't apply because a Phase 3–5 line moved, make the same edit by hand: every hunk shows the exact lines to remove and add.
+Phases 2–5 are merged, so these files already carry their changes. Every diff below is a `git diff` against `a47427d` (Phases 2–5 and the Phase 5 final fix wave merged; reconciled 2026-10-09). Where a hunk doesn't apply because a later commit moved a line, make the same edit by hand: every hunk shows the exact lines to remove and add.
 
 | File | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 task |
 |---|---|---|---|---|---|
-| `cmd/herdr-dots/engine.go` | memory deps | council | backend set | `ensureEngine` reuse | 6 |
+| `cmd/herdr-dots/engine.go` | memory deps | council | backend set | `ensureEngine` reuse, `engineEnv` | 6 |
 | `cmd/herdr-dots/ui.go`, `action.go` | memory | council popup | manage deps | — | 6 |
-| `internal/ipc/ipc.go`, `ipc_test.go` | `CmdRemember` | council cmds | — | `Query`, `Data` | 6 |
+| `internal/ipc/ipc.go`, `ipc_test.go`, `query_test.go` | `CmdRemember` | council cmds | — | `Query`, `Data` (`query_test.go` created) | 6 |
 | `internal/backend/exec.go` | — | — | — | — | 2 |
 | `internal/backend/claude.go` | `parseClaude(out, pass)` | — | cache tokens | — | 9 |
 | `internal/backend/codex.go` | `parseCodex(out, pass)` | — | — | `-c mcp_servers.herdr-dots.enabled=false` | 9 |
@@ -154,9 +167,12 @@ Phases 2–5 merge before Phase 6, so these files already carry their changes. T
 | `internal/memory/project.go` | (created) | — | — | — | 7 |
 | `internal/keys/keys.go`, `keys_test.go` | — | council key | — | — | 7 |
 | `internal/ui/pane/model.go` | learning status | council card | cost display | — | 5 |
-| `internal/credentials/*`, `internal/backend/toolloop/*`, `internal/backend/ollama/ollama.go` | — | — | (created) | — | 8 |
-| `internal/mcpinstall/*`, `cmd/herdr-dots/mcp.go`, `setupmcp.go` | — | — | — | (created) | 6 (EngineSock), 10 |
-| `herdr-plugin.toml`, `internal/version/version.go` | 0.2.0 | 0.3.0, council | 0.4.0 | 0.5.0 | 12 |
+| `internal/credentials/*`, `internal/backend/toolloop/*`, `internal/backend/ollama/ollama.go`, `internal/backend/api.go`, `openaiapi/openai.go`, `anthropicapi/anthropic.go`, `httpx/httpx.go` | — | — | (created) | — | 8 |
+| `cmd/herdr-dots/mcp.go`, `mcp_test.go` | — | — | — | (created) | 6 (EngineSock) |
+| `internal/mcpinstall/*`, `internal/mcpserver/engine_test.go`, `internal/engine/ask_test.go`, `internal/backend/codex_mcp.go`, `cmd/herdr-dots/setupmcp.go` | — | — | — | (created) | 10 |
+| `cmd/herdr-dots/memory.go`, `memory_test.go` | (created) | — | — | — | 10 |
+| `cmd/herdr-dots/keys_test.go`, `internal/paths/providers_test.go` | — | — | (created) | — | 11 |
+| `herdr-plugin.toml`, `internal/version/version.go`, `cmd/herdr-dots/memwire_test.go` | 0.2.0 | 0.3.0, council | 0.4.0 | 0.5.0 | 12 |
 | `README.md`, roadmap | memory | council | API backends | MCP | 13 |
 
 ## File Structure
@@ -164,15 +180,16 @@ Phases 2–5 merge before Phase 6, so these files already carry their changes. T
 ```
 internal/platform/platform.go            (new)  package doc, ErrCmdTooLong, ErrUnsafeBatchArg, MaxInlinePrompt, MaxBatchCmdLine, HerdrConfigPath, client paths
 internal/platform/cmdline.go             (new)  IsBatchFile, BatchCmdLine (cmd.exe quoting), findExecutable
-internal/platform/platform_unix.go       (new)  DevNull, EnvKey, LookPath, Command(Context), HideWindow, StartDetached, Tree (process group), ConnRefused
+internal/platform/platform_unix.go       (new)  DevNull, HomeEnv, EnvKey, LookPath, Command(Context), HideWindow, StartDetached, Tree (process group), ErrConnRefused, ConnRefused
 internal/platform/platform_windows.go    (new)  the same for Windows: NUL, upper-case env names, .exe-first LookPath, cmd.exe shims, Job Objects, breakaway detach
 internal/platform/security.go            (new)  ErrNotPrivate, ErrNotOwner
-internal/platform/security_unix.go       (new)  SecureDir/SecureFile (chmod), CheckPrivate (mode bits, uid), FixPrivateHint, OpenNoFollow, ReservedPathName
-internal/platform/security_windows.go    (new)  owner-only DACLs, DACL check, icacls hint, reparse-safe open, Windows reserved names
+internal/platform/security_unix.go       (new)  SecureDir/SecureFile (chmod), CheckPrivate/CheckPrivateFile (mode bits, uid), FixPrivateHint, OpenNoFollow, ReservedPathName
+internal/platform/security_windows.go    (new)  owner-only DACLs, DACL check by path or handle, icacls hint, reparse-safe open, Windows reserved names
 internal/platform/names.go               (new)  windowsReservedName (OS-neutral rule, testable everywhere)
 internal/platform/pipe.go                (new)  PipePrefix, PipeName
 internal/platform/pipe_windows.go        (new)  PipeSDDL, ListenPipe, DialPipe, CheckPipeOwner (go-winio)
-internal/platform/platformtest/          (new)  Abs, AssertPrivateFile, AssertPrivateDir
+internal/platform/platformtest/          (new)  Abs, Endpoint, AssertPrivateFile, AssertPrivateDir
+internal/platform/editor_*.go            (new)  EditorCommand: sh -c on Unix, cmd.exe on Windows (Task 10)
 internal/platform/portability_test.go    (new)  the portability guard (Task 10)
 internal/backend/exec.go                 (mod)  ExecRunner via platform.Command/StartTree; CleanEnv via EnvKey; Cmd.Cleanup/Close; Preflight
 internal/backend/runfiles.go             (new)  resolveBin, writeRunFiles (private temp files for W7)
@@ -187,12 +204,15 @@ internal/paths/paths.go, endpoint_*.go   (mod/new) EngineEndpoint; Ensure via Se
 internal/fsutil/atomic.go, private_*.go  (mod/new) Windows DACL for private writes, rename retry
 internal/transcript/claude.go, codex.go  (mod)  platform client dirs
 internal/keys/keys.go                    (mod)  ConfigPath = platform.HerdrConfigPath
-internal/credentials/credentials.go      (mod)  CheckPrivate (Phase 4 file)
-internal/backend/toolloop/jail.go, tools.go (mod) case-insensitive deny, reserved names, OpenNoFollow, DevNull (Phase 4 files)
-internal/backend/ollama/ollama.go        (mod)  platform.ConnRefused (Phase 4 file)
+internal/credentials/credentials.go, open_*.go (mod/renamed) CheckPrivateFile on the opened file; open_windows.go (Phase 4 files)
+internal/backend/toolloop/jail.go, tools.go (mod) reserved names, OpenNoFollow, any file-system root refused, DevNull, EnvKey (Phase 4 files)
+internal/backend/{api.go,ollama,openaiapi,anthropicapi,httpx} (mod) platform.ConnRefused / ErrConnRefused (Phase 4 files)
+internal/backend/codex_mcp.go            (mod)  HomeEnv + CodexConfig for the codex run's config lookup (Phase 5 file)
+internal/mcpinstall/install.go           (mod)  platform.ClaudeUserConfig / CodexConfig (Phase 5 file)
 internal/ui/style/style.go               (mod)  ASCII(), Sym()
 internal/ui/pane/model.go                (mod)  learning status through style.Sym
-cmd/herdr-dots/engine.go, ui.go, action.go (mod) StartDetached, EngineEndpoint, ipc.Listen/Dial
+cmd/herdr-dots/engine.go, ui.go, action.go, mcp.go (mod) StartDetached, EngineEndpoint, ipc.Listen/Dial, engineEnv via EnvKey
+cmd/herdr-dots/setupmcp.go, memory.go    (mod)  platform.Command/LookPath for claude/codex; EditorCommand + SecureDir for memory edit
 cmd/herdr-dots/platform_manifest_test.go (new)  manifest per-platform build and shared runtime commands
 herdr-plugin.toml                        (mod)  windows platform, Windows [[build]], 0.6.0
 scripts/build.ps1                        (new)  Windows build
@@ -203,12 +223,12 @@ internal/version/version.go              (mod)  0.6.0
 README.md, roadmap, notes                (mod/new) Windows docs, still not done, not run-verified here
 ```
 
-**Conventions for code steps.** New files are given in full. Changes to existing files are unified diffs: save the block to a file (for example `/tmp/p6-task.patch`) and run `git apply /tmp/p6-task.patch` from the repo root. If a hunk doesn't apply because a neighboring line changed in Phases 3–5, make the same edit by hand (every hunk shows the exact lines), then run `gofmt -w` on the touched files. Every code block below was compiled while planning against v1 + Phase 2 (and the Phase 4 plan's `credentials` and `toolloop` code), for darwin, linux/amd64 and windows/amd64, and its darwin tests ran green with `go test -race` (Go 1.25.7). The Windows-only tests compiled (`GOOS=windows go test -c`) but could not run here.
+**Conventions for code steps.** New files are given in full. Changes to existing files are unified diffs: save the block to a file (for example `/tmp/p6-task.patch`) and run `git apply /tmp/p6-task.patch` from the repo root (the replay used `git apply --recount`, which tolerates shifted line numbers). If a hunk doesn't apply because a neighboring line changed after `a47427d`, make the same edit by hand (every hunk shows the exact lines), then run `gofmt -w` on the touched files. A file moved with `git mv` is named in its step. Every code block below was replayed against `a47427d` (Phases 2–5 and the Phase 5 final fix wave merged) in wave order, for darwin, linux/amd64 and windows/amd64, and its darwin tests ran green with `go test -race` (Go 1.25.7). The Windows-only tests compiled (`GOOS=windows go test -c`) but could not run here.
 
 **The cross-OS gate** (each task's verification step spells it out with that task's packages):
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -238,7 +258,7 @@ This task produces **findings, not product code**. V1–V8 were answered while p
 Run:
 
 ```bash
-ls internal/memory internal/credentials internal/backend/toolloop internal/backend/ollama internal/mcpinstall cmd/herdr-dots/setupmcp.go >/dev/null && echo phases-present
+ls internal/memory internal/council internal/credentials internal/backend/toolloop internal/backend/ollama internal/mcpinstall internal/mcpserver cmd/herdr-dots/setupmcp.go >/dev/null && echo phases-present
 grep -n 'const Version' internal/version/version.go
 grep -n '^go \|golang.org/x/sys' go.mod
 GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... >/dev/null && echo base-green
@@ -256,7 +276,7 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-d
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep -v '^#' | head -40
 ```
 
-Expected: the first two commands print a subset of `# herdr-dots/internal/lockfile`, `# herdr-dots/internal/backend`, `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/credentials`, `# herdr-dots/cmd/herdr-dots`, plus any Phase 5 package. The third shows the errors (`undefined: syscall.Flock`, `unknown field Setpgid`, `undefined: syscall.O_NOFOLLOW`, `undefined: syscall.Stat_t`, ...). Any package outside the five named above is a **Phase 5 package for Plan decision 21**: list it in the notes (Step 3) so Tasks 6–12 know it may still fail until Task 10.
+Expected (replayed at `5863171` and `a47427d`): the first command prints `# herdr-dots/internal/backend`, `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/lockfile`; the second prints the same three plus `# herdr-dots/internal/backend [herdr-dots/internal/credentials.test]`. The third shows the errors: `undefined: syscall.Flock` / `LOCK_EX` / `LOCK_NB` / `LOCK_UN` (lockfile.go), `undefined: syscall.O_NOFOLLOW` (toolloop/jail.go), `unknown field Setpgid` and `undefined: syscall.Kill` (backend/exec.go). `internal/credentials` compiles (Phase 4's `open_other.go`) but its mode-bit check refuses every file on Windows, where Go reports `0666`; Task 8 ports it. No Phase 5 package fails to compile; Task 10 ports their behavior. If anything else shows up (a commit after `a47427d`), list it in the notes (Step 3) and in the wave table's "may still fail" column before Wave 2.
 
 - [ ] **Step 3: Write the notes**
 
@@ -302,7 +322,7 @@ Create `docs/superpowers/notes/2026-10-08-phase-6-verification.md` with this con
 
 ## V6: Claude Code and Codex on Windows
 
-- **Finding:** Claude Code's user config is `~\.claude.json`; Codex's is `~\.codex\config.toml` (`CODEX_HOME` overrides it; Herdr Dots doesn't honor `CODEX_HOME` on any OS). `claude` is `claude.exe` (native installer, `%USERPROFILE%\.local\bin`) or `claude.cmd` (npm); `codex` from npm is `codex.cmd`. `platform.LookPath` prefers an `.exe`; `platform.Command` runs a `.cmd` safely.
+- **Finding:** Claude Code's user config is `~\.claude.json`; Codex's is `~\.codex\config.toml` (`CODEX_HOME` overrides it; Phase 5's installer and the codex dot run honor `CODEX_HOME` on every OS). `claude` is `claude.exe` (native installer, `%USERPROFILE%\.local\bin`) or `claude.cmd` (npm); `codex` from npm is `codex.cmd`. `platform.LookPath` prefers an `.exe`; `platform.Command` runs a `.cmd` safely.
 - **Assumption holds:** not live-verified, handled by design.
 
 ## V7: glyphs and ctrl+s in Herdr's ConPTY panes
@@ -330,7 +350,9 @@ Packages failing `GOOS=windows GOARCH=amd64 go vet ./...`:
 (paste Step 2's second command output here)
 ```
 
-Phase 5 packages among them (Plan decision 21; ported by Task 10): list each one here, or write "none".
+Phase 5 packages among them (Plan decision 21): none at `a47427d`; list any that a later commit adds.
+
+Compiles but behaves wrongly on Windows (ported in this phase): `internal/credentials` (mode bits refuse every file; Task 8), Phase 5's `mcpinstall` config paths, `setup-mcp` child commands, the codex run's `HOME` lookup (Task 10), Phase 2's `memory edit` (`sh -c`; Task 10), and every `syscall.ECONNREFUSED` check (Task 8).
 
 ## User gates: what only a real Windows machine can confirm
 
@@ -344,8 +366,14 @@ Run on Windows 10 1809+ or Windows 11 with the Herdr Windows beta (preview chann
 - [ ] The pane's transcript source is Claude's file (not scrollback) when Herdr reports the session.
 - [ ] A dot with `run_timeout_seconds = 5` and a slow prompt times out and leaves no `node.exe`/`claude.exe` behind (Task Manager).
 - [ ] No console window flashes during dot runs or memory git calls.
-- [ ] Council, MCP ask (`herdr-dots setup-mcp --client both`), the memory screen, and `herdr-dots keys set anthropic`.
+- [ ] Council, MCP ask (`herdr-dots setup-mcp --client both`, with npm's `claude.cmd` and `codex.cmd`; the MCP client starts `bin\herdr-dots.exe mcp` and the engine starts detached), the memory screen, and `herdr-dots keys set anthropic` (no echo while typing).
+- [ ] `herdr-dots memory edit` opens `%EDITOR%` (for example `notepad`, or `code --wait`) through cmd.exe and applies the edit; the temp folder is gone afterwards.
 - [ ] `icacls` on `credentials.toml`, the memory dir and the session dir shows only the user, SYSTEM and Administrators.
+- [ ] A `credentials.toml` given `icacls credentials.toml /grant Users:R` is refused with the `icacls` fix, and `herdr-dots keys list` never prints a key.
+- [ ] An API dot in a pane at `C:\`, at `%USERPROFILE%` or at a drive root such as `D:\` gets no repo tools ("REPO TOOLS: unavailable"); in a project below the home it reads files but not `.env`, `.ENV`, `.env::$DATA` or `NUL`.
+- [ ] A codex dot run with the Dots MCP server installed for Codex (`%USERPROFILE%\.codex\config.toml`) gets `-c mcp_servers.herdr-dots.enabled=false`.
+- [ ] A stopped Ollama shows "Ollama isn't running" (Windows reports `WSAECONNREFUSED`), and the providers screen still saves with a network warning.
+- [ ] A second Windows user (or a pipe pre-created under `\\.\pipe\herdr-dots-<key>` by another account) can't reach the engine: the UI refuses the pipe instead of talking to it.
 - [ ] Glyphs render in Windows Terminal; otherwise `HERDR_DOTS_ASCII=1` gives readable ASCII.
 ````
 
@@ -375,11 +403,11 @@ git commit -m "docs: Phase 6 verification notes, Windows baseline and user gates
   - `func HerdrConfigPath(getenv func(string) string, home string) string`
   - `func ClaudeProjectsDir(home string) string`, `func CodexSessionsDir(home string) string`, `func ClaudeUserConfig(home string) string`, `func CodexConfig(home string) string`
   - `func IsBatchFile(path string) bool`; `func BatchCmdLine(comspec, script string, args []string) (string, error)`
-  - `const DevNull` (`/dev/null` or `NUL`); `func EnvKey(name string) string`; `func LookPath(name string) (string, error)`
+  - `const DevNull` (`/dev/null` or `NUL`); `const HomeEnv` (`HOME` or `USERPROFILE`; Plan decision 29); `func EnvKey(name string) string`; `func LookPath(name string) (string, error)`
   - `func Command(name string, args []string) (*exec.Cmd, error)`; `func CommandContext(ctx context.Context, name string, args []string) (*exec.Cmd, error)`
   - `func HideWindow(cmd *exec.Cmd)`; `func StartDetached(cmd *exec.Cmd) (*os.Process, error)`
   - `type Tree`; `func StartTree(cmd *exec.Cmd) (*Tree, error)`; `func (*Tree) Kill() error`; `func (*Tree) Close() error`
-  - `func ConnRefused(err error) bool`
+  - `var ErrConnRefused error` (`syscall.ECONNREFUSED` or `windows.WSAECONNREFUSED`; Plan decision 26); `func ConnRefused(err error) bool`
 - Produces (package `backend`): `Cmd.Cleanup func()`; `func (c Cmd) Close()`; `func Preflight(err error) bool`; `ExecRunner.Run` keeps its signature and now kills the whole tree on both OSes; `CleanEnv` compares names in `platform.EnvKey` form.
 
 - [ ] **Step 1: Write the failing tests**
@@ -391,6 +419,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -522,6 +551,9 @@ func TestConnRefusedRecognisesAClosedPort(t *testing.T) {
 	if ConnRefused(errors.New("timeout")) {
 		t.Fatal("other errors are not refusals")
 	}
+	if !ConnRefused(fmt.Errorf("kept: %w", ErrConnRefused)) {
+		t.Fatal("ErrConnRefused must count as a refusal")
+	}
 }
 ```
 
@@ -541,7 +573,7 @@ import (
 )
 
 func TestUnixConstants(t *testing.T) {
-	if DevNull != "/dev/null" || EnvKey("Herdr_Pane_Id") != "Herdr_Pane_Id" {
+	if DevNull != "/dev/null" || EnvKey("Herdr_Pane_Id") != "Herdr_Pane_Id" || HomeEnv != "HOME" {
 		t.Fatalf("DevNull %q, EnvKey must keep case on Unix", DevNull)
 	}
 }
@@ -621,7 +653,7 @@ import (
 )
 
 func TestWindowsConstants(t *testing.T) {
-	if DevNull != "NUL" || EnvKey("Herdr_Pane_Id") != "HERDR_PANE_ID" {
+	if DevNull != "NUL" || EnvKey("Herdr_Pane_Id") != "HERDR_PANE_ID" || HomeEnv != "USERPROFILE" {
 		t.Fatalf("DevNull %q; EnvKey must fold case on Windows", DevNull)
 	}
 }
@@ -800,7 +832,7 @@ func TestCommandContextRunsAShimUnderTheContext(t *testing.T) {
  )
  
  func TestCleanEnvStripsHerdrAndClaudeVars(t *testing.T) {
-@@ -25,30 +27,32 @@
+@@ -25,30 +27,32 @@ func TestCleanEnvNeverReturnsNil(t *testing.T) {
  	}
  }
  
@@ -1154,6 +1186,10 @@ import (
 // DevNull is the null device, for git's -c core.hooksPath.
 const DevNull = "/dev/null"
 
+// HomeEnv is the variable that names the user's home directory, the one
+// os.UserHomeDir and child CLIs (codex) read.
+const HomeEnv = "HOME"
+
 func herdrConfigDir(_ func(string) string, home string) string { return unixHerdrConfigDir(home) }
 
 // EnvKey is the form environment variable names are compared in: as-is on
@@ -1203,6 +1239,10 @@ func (t *Tree) Kill() error { return syscall.Kill(-t.pid, syscall.SIGKILL) }
 // Close releases the tree. Unix: nothing to release.
 func (t *Tree) Close() error { return nil }
 
+// ErrConnRefused is the error a refused dial carries on this OS, for code
+// that keeps an error's identity while dropping its text (httpx scrubbing).
+var ErrConnRefused error = syscall.ECONNREFUSED
+
 // ConnRefused reports whether a dial failed because nothing listens there.
 func ConnRefused(err error) bool { return errors.Is(err, syscall.ECONNREFUSED) }
 ```
@@ -1230,6 +1270,10 @@ import (
 
 // DevNull is the null device, for git's -c core.hooksPath.
 const DevNull = "NUL"
+
+// HomeEnv is the variable that names the user's home directory, the one
+// os.UserHomeDir and child CLIs (codex) read.
+const HomeEnv = "USERPROFILE"
 
 func herdrConfigDir(getenv func(string) string, home string) string {
 	return windowsHerdrConfigDir(getenv, home)
@@ -1405,6 +1449,10 @@ func (t *Tree) Kill() error { return windows.TerminateJobObject(t.job, 1) }
 // Close closes the job handle; KILL_ON_JOB_CLOSE ends anything still running.
 func (t *Tree) Close() error { return windows.CloseHandle(t.job) }
 
+// ErrConnRefused is the error a refused dial carries on this OS, for code
+// that keeps an error's identity while dropping its text (httpx scrubbing).
+var ErrConnRefused error = windows.WSAECONNREFUSED
+
 // ConnRefused reports whether a dial failed because nothing listens there
 // (Winsock's WSAECONNREFUSED, which syscall.ECONNREFUSED doesn't match).
 func ConnRefused(err error) bool {
@@ -1417,7 +1465,7 @@ func ConnRefused(err error) bool {
 ```diff
 --- a/internal/backend/exec.go
 +++ b/internal/backend/exec.go
-@@ -3,12 +3,12 @@
+@@ -3,12 +3,12 @@ package backend
  import (
  	"bytes"
  	"context"
@@ -1432,7 +1480,7 @@ func ConnRefused(err error) bool {
  )
  
  type Cmd struct {
-@@ -17,49 +17,74 @@
+@@ -17,49 +17,74 @@ type Cmd struct {
  	Dir   string
  	Env   []string
  	Stdin string
@@ -1491,14 +1539,14 @@ func ConnRefused(err error) bool {
  		<-done
  		return out.Bytes(), errb.Bytes(), ctx.Err()
  	}
-+}
-+
+ }
+ 
 +// Preflight reports whether err stopped a command before it started (a
 +// Windows .cmd shim argument or length problem); its message is the fix.
 +func Preflight(err error) bool {
 +	return errors.Is(err, platform.ErrCmdTooLong) || errors.Is(err, platform.ErrUnsafeBatchArg)
- }
- 
++}
++
  // CleanEnv drops variables that would make a dot's CLI talk to Herdr or think
  // it runs nested inside another Claude Code session. Drops HERDR_*, CLAUDECODE,
  // CLAUDE_CODE_ENTRYPOINT, and CLAUDE_CODE_CHILD_SESSION, but preserves other
@@ -1519,12 +1567,12 @@ func ConnRefused(err error) bool {
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `gofmt -w internal/platform internal/backend && GOTOOLCHAIN=local go test -race ./internal/platform/ ./internal/backend/ -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected: PASS, including `TestHerdrConfigPathOverridesThenDefault`, `TestWindowsHerdrConfigDirRules`, `TestBatchCmdLineQuotesEveryArgument`, `TestBatchCmdLineRefusesCharactersCmdCantCarry`, `TestBatchCmdLineRefusesOverLongLinesWithAHint`, `TestConnRefusedRecognisesAClosedPort`, `TestTreeKillEndsTheWholeProcessGroup`, `TestCommandContextIsBoundToTheContext`, `TestCleanEnvFoldsCaseWhereTheOSDoes`, `TestExecRunnerKillsProcessGroupOnTimeout` and every existing backend test.
+Expected: PASS, including `TestHerdrConfigPathOverridesThenDefault`, `TestWindowsHerdrConfigDirRules`, `TestBatchCmdLineQuotesEveryArgument`, `TestBatchCmdLineRefusesCharactersCmdCantCarry`, `TestBatchCmdLineRefusesOverLongLinesWithAHint`, `TestConnRefusedRecognisesAClosedPort` (it also checks `ErrConnRefused`), `TestUnixConstants` (with `HomeEnv`), `TestTreeKillEndsTheWholeProcessGroup`, `TestCommandContextIsBoundToTheContext`, `TestCleanEnvFoldsCaseWhereTheOSDoes`, `TestExecRunnerKillsProcessGroupOnTimeout` and every existing backend test.
 
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -1534,7 +1582,7 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five commands succeed (`platform.test.exe` and `backend.test.exe` appear in `$TMPDIR/p6-win`); the last two print only lines from Wave 1's list without `internal/backend` (on a base with Phases 2–5: `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/credentials`, `# herdr-dots/internal/lockfile`, possibly `# herdr-dots/cmd/herdr-dots`, plus Task 1's Phase 5 packages).
+Expected: `gofmt` prints nothing; the next five commands succeed (`platform.test.exe` and `backend.test.exe` appear in `$TMPDIR/p6-win`); the last two print only lines from Wave 1's list without `internal/backend` (replayed: `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/lockfile`).
 
 - [ ] **Step 6: Commit**
 
@@ -1557,9 +1605,9 @@ git commit -m "feat(platform): OS helpers, process trees and cmd.exe-safe comman
 
 **Interfaces:**
 - Consumes: `github.com/Microsoft/go-winio v0.6.2` (added here), `golang.org/x/sys/windows`.
-- Produces (package `platform`, every OS): `var ErrNotPrivate, ErrNotOwner error`; `func SecureDir(path string) error`; `func SecureFile(path string) error`; `func CheckPrivate(path string) error`; `func FixPrivateHint(path string) string`; `func OpenNoFollow(path string) (*os.File, error)`; `func ReservedPathName(rel string) bool`; `const PipePrefix` (the string `\\.\pipe\`); `func PipeName(socketPath string) string`.
+- Produces (package `platform`, every OS): `var ErrNotPrivate, ErrNotOwner error`; `func SecureDir(path string) error`; `func SecureFile(path string) error`; `func CheckPrivate(path string) error`; `func CheckPrivateFile(f *os.File) error` (the same rules for an open file: `fstat` on Unix, the handle's owner and DACL on Windows; Plan decision 25); `func FixPrivateHint(path string) string`; `func OpenNoFollow(path string) (*os.File, error)` (Unix: `O_NOFOLLOW|O_NONBLOCK`, so a FIFO never blocks the open); `func ReservedPathName(rel string) bool`; `const PipePrefix` (the string `\\.\pipe\`); `func PipeName(socketPath string) string`.
 - Produces (package `platform`, Windows only): `func PipeSDDL() (string, error)`; `func ListenPipe(name string) (net.Listener, error)`; `func DialPipe(ctx context.Context, name string) (net.Conn, error)`; `func CheckPipeOwner(conn net.Conn) error`.
-- Produces (package `platformtest`): `func Abs(parts ...string) string`; `func AssertPrivateFile(t testing.TB, path string)`; `func AssertPrivateDir(t testing.TB, path string)`.
+- Produces (package `platformtest`): `func Abs(parts ...string) string`; `func Endpoint(t testing.TB) string` (a fresh engine endpoint: a short unix socket path whose directory the test removes, or a unique `\\.\pipe\herdr-dots-test-<pid>-<n>`; Plan decision 31); `func AssertPrivateFile(t testing.TB, path string)`; `func AssertPrivateDir(t testing.TB, path string)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1637,6 +1685,27 @@ func TestCheckPrivateReadsModeBits(t *testing.T) {
 	}
 	if st, _ := os.Stat(p); st.Mode().Perm() != 0o600 {
 		t.Fatalf("SecureFile mode %v", st.Mode().Perm())
+	}
+}
+
+func TestCheckPrivateFileChecksTheOpenFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "credentials.toml")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := CheckPrivateFile(f); !errors.Is(err, ErrNotPrivate) {
+		t.Fatalf("0644: %v, want ErrNotPrivate", err)
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckPrivateFile(f); err != nil {
+		t.Fatalf("0600: %v", err)
 	}
 }
 
@@ -1768,6 +1837,24 @@ func TestCheckPrivateRefusesReadAccessForOthers(t *testing.T) {
 	}
 }
 
+func TestCheckPrivateFileReadsTheHandlesDACL(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "credentials.toml")
+	os.WriteFile(p, []byte("x"), 0o600)
+	setSDDL(t, p, fmt.Sprintf("D:P(A;;FA;;;%s)(A;;FR;;;WD)", mySID(t))) // Everyone may read
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := CheckPrivateFile(f); !errors.Is(err, ErrNotPrivate) {
+		t.Fatalf("Everyone read: %v, want ErrNotPrivate", err)
+	}
+	setSDDL(t, p, fmt.Sprintf("D:P(A;;FA;;;%s)(A;;FA;;;SY)", mySID(t)))
+	if err := CheckPrivateFile(f); err != nil {
+		t.Fatalf("owner and SYSTEM: %v", err)
+	}
+}
+
 func TestSecureDirIsInheritedByNewFiles(t *testing.T) {
 	d := filepath.Join(t.TempDir(), "memory")
 	os.Mkdir(d, 0o700)
@@ -1853,7 +1940,7 @@ func TestPipeRoundTripOwnerCheckAndNoSecondListener(t *testing.T) {
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `GOTOOLCHAIN=local go test ./internal/platform/ -run 'PipeName|ReservedName|CheckPrivate|SecureDir|OpenNoFollow'`
-Expected: FAIL to compile (`undefined: PipeName`, `undefined: windowsReservedName`, `undefined: CheckPrivate`, ...).
+Expected: FAIL to compile (`undefined: PipeName`, `undefined: windowsReservedName`, `undefined: CheckPrivate`, `undefined: CheckPrivateFile`, ...).
 
 - [ ] **Step 3: Add go-winio**
 
@@ -1909,6 +1996,21 @@ func CheckPrivate(path string) error {
 	if err != nil {
 		return err
 	}
+	return checkPrivateInfo(st)
+}
+
+// CheckPrivateFile is CheckPrivate for a file already open: it checks the
+// file the descriptor refers to (fstat), so a path swapped after the open
+// can't pass the check.
+func CheckPrivateFile(f *os.File) error {
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	return checkPrivateInfo(st)
+}
+
+func checkPrivateInfo(st os.FileInfo) error {
 	if st.Mode().Perm()&0o077 != 0 {
 		return ErrNotPrivate
 	}
@@ -1922,9 +2024,10 @@ func CheckPrivate(path string) error {
 func FixPrivateHint(path string) string { return fmt.Sprintf("run: chmod 600 %q", path) }
 
 // OpenNoFollow opens path read-only and fails if its last element is a
-// symlink.
+// symlink. O_NONBLOCK keeps a FIFO from hanging the open; callers still
+// require a regular file or a directory.
 func OpenNoFollow(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 }
 
 // ReservedPathName reports whether a project-relative path names something
@@ -2020,6 +2123,22 @@ func CheckPrivate(path string) error {
 	if err != nil {
 		return err
 	}
+	return checkPrivateSD(sd)
+}
+
+// CheckPrivateFile is CheckPrivate for a file already open: it reads the
+// owner and DACL through the handle, so the file checked is the file read.
+func CheckPrivateFile(f *os.File) error {
+	sd, err := windows.GetSecurityInfo(windows.Handle(f.Fd()), windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	return checkPrivateSD(sd)
+}
+
+// checkPrivateSD applies CheckPrivate's rules to a security descriptor.
+func checkPrivateSD(sd *windows.SECURITY_DESCRIPTOR) error {
 	me, err := currentUserSID()
 	if err != nil {
 		return err
@@ -2254,6 +2373,15 @@ import (
 // Use it where a test needs an absolute path that never touches the disk.
 func Abs(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
 
+// Endpoint is a fresh engine IPC endpoint for a test, never served before:
+// a short unix socket path (macOS caps them at 104 bytes) whose directory is
+// removed after the test, or a unique named pipe on Windows. Serve it with
+// ipc.Listen and dial it with ipc.Dial or an ipc.Client.
+func Endpoint(t testing.TB) string {
+	t.Helper()
+	return endpoint(t)
+}
+
 // AssertPrivateFile fails t unless path is a file only its owner can use:
 // mode 0600 on Unix, an owner-only DACL on Windows.
 func AssertPrivateFile(t testing.TB, path string) {
@@ -2278,10 +2406,21 @@ package platformtest
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 const root = "/"
+
+func endpoint(t testing.TB) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "hdep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "e.sock")
+}
 
 func assertPrivate(t testing.TB, path string, dir bool) {
 	t.Helper()
@@ -2307,13 +2446,22 @@ func assertPrivate(t testing.TB, path string, dir bool) {
 package platformtest
 
 import (
+	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"herdr-dots/internal/platform"
 )
 
 const root = `C:\`
+
+var endpointSeq atomic.Int64
+
+func endpoint(t testing.TB) string {
+	t.Helper()
+	return fmt.Sprintf("%sherdr-dots-test-%d-%d", platform.PipePrefix, os.Getpid(), endpointSeq.Add(1))
+}
 
 func assertPrivate(t testing.TB, path string, dir bool) {
 	t.Helper()
@@ -2342,12 +2490,12 @@ Expected `go.mod` diff: `github.com/Microsoft/go-winio v0.6.2` and `golang.org/x
 - [ ] **Step 5: Run the tests to see them pass**
 
 Run: `gofmt -w internal/platform && GOTOOLCHAIN=local go test -race ./internal/platform/... -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected: PASS (`TestPipeName`, `TestWindowsReservedName`, `TestCheckPrivateReadsModeBits`, `TestSecureDirIs0700`, `TestOpenNoFollowRefusesSymlinks`).
+Expected: PASS (`TestPipeName`, `TestWindowsReservedName`, `TestCheckPrivateReadsModeBits`, `TestCheckPrivateFileChecksTheOpenFile`, `TestSecureDirIs0700`, `TestOpenNoFollowRefusesSymlinks`).
 
 - [ ] **Step 6: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -2357,7 +2505,7 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five succeed; the last two print only Wave 1's list (`# herdr-dots/internal/backend`, `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/credentials`, `# herdr-dots/internal/lockfile`, possibly `# herdr-dots/cmd/herdr-dots`, plus Task 1's Phase 5 packages).
+Expected: `gofmt` prints nothing; the next five succeed (`go test -c` also reports `herdr-dots/internal/platform/platformtest [no test files]`); the last two print only Wave 1's list (`# herdr-dots/internal/backend`, `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/lockfile`).
 
 - [ ] **Step 7: Commit**
 
@@ -2376,7 +2524,7 @@ git commit -m "feat(platform): owner-only DACLs, named pipes and private-file te
 - Modify: `internal/lockfile/lockfile.go`
 - Create: `internal/lockfile/lockfile_unix.go`, `internal/lockfile/lockfile_windows.go`
 - Test: `internal/lockfile/xproc_test.go`
-- Modify: `internal/memory/store.go` (`Purge`; Phase 2 file, Phase 5 adds `Propose` elsewhere in it)
+- Modify: `internal/memory/store.go` (`Purge`; Phase 2 file, Phase 5 changed it elsewhere and its final fix wave may move `Purge`: the hunk's `-`/`+` lines are what matters)
 - Test: `internal/memory/purge_test.go`
 
 **Interfaces:**
@@ -2543,7 +2691,7 @@ Expected: the first FAILs to compile (`undefined: removeAllBut`); the second fai
  		return nil, err
  	}
  	_ = f.Truncate(0)
-@@ -31,7 +31,7 @@
+@@ -31,7 +31,7 @@ func TryLock(path string) (*Lock, error) {
  }
  
  func (l *Lock) Release() error {
@@ -2636,7 +2784,7 @@ func unlockFile(f *os.File) error {
 ```diff
 --- a/internal/memory/store.go
 +++ b/internal/memory/store.go
-@@ -945,7 +945,10 @@
+@@ -988,7 +988,10 @@ func (s *Store) FindProject(arg string) (ProjectMeta, bool, error) {
  	return ProjectMeta{}, false, errors.Join(errs...)
  }
  
@@ -2648,7 +2796,7 @@ func unlockFile(f *os.File) error {
  func (s *Store) Purge(p string) error {
  	if !ValidProjectID(p) {
  		return fmt.Errorf("%w: project id %q", ErrInvalid, p)
-@@ -954,7 +957,28 @@
+@@ -997,7 +1000,28 @@ func (s *Store) Purge(p string) error {
  	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
  		return fmt.Errorf("%w: project %s has no memory", ErrNotFound, p)
  	}
@@ -2688,7 +2836,7 @@ Expected: PASS, including `TestLockIsExclusiveAcrossProcesses`, `TestRemoveAllBu
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -2698,7 +2846,7 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five succeed; the last two print only Wave 1's list without `internal/lockfile` (`# herdr-dots/internal/backend`, `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/credentials`, possibly `# herdr-dots/cmd/herdr-dots`, plus Task 1's Phase 5 packages).
+Expected: `gofmt` prints nothing; the next five succeed; the last two print only Wave 1's list without `internal/lockfile` (`# herdr-dots/internal/backend`, `# herdr-dots/internal/backend/toolloop`).
 
 - [ ] **Step 6: Commit**
 
@@ -2789,7 +2937,7 @@ Expected: FAIL to compile (`undefined: Sym`, `undefined: ascii`, `undefined: ASC
  
  var palette = map[string]lipgloss.Color{
  	"red": "1", "green": "2", "yellow": "3", "blue": "4", "magenta": "5", "cyan": "6", "white": "7",
-@@ -22,7 +28,35 @@
+@@ -22,7 +28,35 @@ var (
  )
  
  func Glyph(glyph, color string) string {
@@ -2833,15 +2981,15 @@ Expected: FAIL to compile (`undefined: Sym`, `undefined: ascii`, `undefined: ASC
 ```diff
 --- a/internal/ui/pane/model.go
 +++ b/internal/ui/pane/model.go
-@@ -456,7 +456,7 @@
+@@ -484,7 +484,7 @@ func (m Model) View() string {
  	for i, d := range p.Dots {
  		status := d.Status
  		if d.Learning {
 -			status = "◌ learning…"
 +			status = style.Sym("◌") + " learning" + style.Sym("…")
  		}
- 		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, status)
- 		if m.area == areaRoster && i == m.roster {
+ 		rest := fmt.Sprintf("%-12s %-8s %s", trunc(d.Name, 12), d.Mode, status) + dotCost(d)
+ 		line := style.Glyph(d.Glyph, d.Color) + " " + trunc(rest, max(10, w-2))
 ```
 
 - [ ] **Step 4: Run the tests to see them pass**
@@ -2852,7 +3000,7 @@ Expected: PASS (`TestSymIsIdentityByDefault`, `TestASCIIModeMapsEveryGlyph`, eve
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -2880,13 +3028,13 @@ git commit -m "feat(ui): HERDR_DOTS_ASCII=1 draws ASCII stand-ins for dot glyphs
 **Files:**
 - Modify: `internal/herdr/client.go`, `internal/herdr/client_test.go`, `internal/herdr/herdrtest/fake.go`
 - Create: `internal/herdr/dial_unix.go`, `internal/herdr/dial_windows.go`, `internal/herdr/herdrtest/listen_unix.go`, `internal/herdr/herdrtest/listen_windows.go`
-- Modify: `internal/ipc/ipc.go`, `internal/ipc/ipc_test.go` (Phases 3 and 5 extended both)
+- Modify: `internal/ipc/ipc.go`, `internal/ipc/ipc_test.go` (Phases 3 and 5 extended both), `internal/ipc/query_test.go` (Phase 5)
 - Create: `internal/ipc/endpoint_unix.go`, `internal/ipc/endpoint_windows.go`
 - Test: `internal/ipc/endpoint_unix_test.go`, `internal/ipc/endpoint_windows_test.go`
 - Modify: `internal/paths/paths.go`, `internal/paths/paths_test.go`
 - Create: `internal/paths/endpoint_unix.go`, `internal/paths/endpoint_windows.go`
 - Test: `internal/paths/paths_unix_test.go`, `internal/paths/paths_windows_test.go`
-- Modify: `cmd/herdr-dots/engine.go`, `cmd/herdr-dots/engine_test.go`, `cmd/herdr-dots/ui.go`, `cmd/herdr-dots/action.go`, and every other non-test file that calls `EngineSock()` (Phase 5's `cmd/herdr-dots/mcp.go` or `internal/mcpserver`)
+- Modify: `cmd/herdr-dots/engine.go`, `cmd/herdr-dots/engine_test.go`, `cmd/herdr-dots/ui.go`, `cmd/herdr-dots/action.go`, `cmd/herdr-dots/mcp.go`, `cmd/herdr-dots/mcp_test.go` (Phase 5: the only other `EngineSock()` callers)
 
 **Interfaces:**
 - Consumes: `platform.PipeName(socketPath string) string`, `platform.PipePrefix`, `platform.ListenPipe(name string) (net.Listener, error)`, `platform.DialPipe(ctx context.Context, name string) (net.Conn, error)`, `platform.CheckPipeOwner(conn net.Conn) error`, `platform.SecureDir(path string) error`, `platform.StartDetached(cmd *exec.Cmd) (*os.Process, error)`; `platformtest.AssertPrivateDir`.
@@ -2895,7 +3043,7 @@ git commit -m "feat(ui): HERDR_DOTS_ASCII=1 draws ASCII stand-ins for dot glyphs
   - `func ipc.Dial(ctx context.Context, endpoint string) (net.Conn, error)` (Windows: refuses a pipe owned by another user); `ipc.Client` (and Phase 5's `Client.Query`, which goes through `Client.dial`) uses it
   - `func (paths.Paths) EngineEndpoint() string` (Unix: `EngineSock()`; Windows: `\\.\pipe\herdr-dots-<SessionKey>`). `EngineSock`, `sockFallbackDir`, `maxSockPath` and the fallback-dir creation move to `internal/paths/endpoint_unix.go` and exist only on Unix.
   - `func herdrtest.Listen(path string) (net.Listener, error)` (Windows: marker file plus `\\.\pipe\<path>`, like Herdr); `herdrtest.New` uses it, so every engine test runs against a pipe on Windows
-  - `cmd/herdr-dots`: `waitForEndpoint(endpoint string, d time.Duration) error` replaces `waitForSocket`
+  - `cmd/herdr-dots`: `waitForEndpoint(endpoint string, d time.Duration) error` replaces `waitForSocket`; Phase 5's `engineEnv` compares names in `platform.EnvKey` form (Plan decision 32)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2904,7 +3052,7 @@ git commit -m "feat(ui): HERDR_DOTS_ASCII=1 draws ASCII stand-ins for dot glyphs
 ```diff
 --- a/internal/ipc/ipc_test.go
 +++ b/internal/ipc/ipc_test.go
-@@ -4,8 +4,6 @@
+@@ -4,8 +4,6 @@ import (
  	"context"
  	"encoding/json"
  	"errors"
@@ -2913,7 +3061,7 @@ git commit -m "feat(ui): HERDR_DOTS_ASCII=1 draws ASCII stand-ins for dot glyphs
  	"path/filepath"
  	"sync"
  	"testing"
-@@ -39,10 +37,8 @@
+@@ -39,10 +37,8 @@ func (f *fakeHandler) Watch() (<-chan view.Snapshot, func()) {
  
  func serve(t *testing.T) (*fakeHandler, Client) {
  	t.Helper()
@@ -2926,11 +3074,10 @@ git commit -m "feat(ui): HERDR_DOTS_ASCII=1 draws ASCII stand-ins for dot glyphs
  	if err != nil {
  		t.Fatal(err)
  	}
-@@ -112,3 +108,27 @@
- 		t.Fatal("want dial error")
+@@ -113,6 +109,30 @@ func TestCallFailsFastWithoutServer(t *testing.T) {
  	}
  }
-+
+ 
 +// Review Focus: two Herdr sessions of one user run two engines on two
 +// endpoints; a client of one never reaches the other.
 +func TestTwoEndpointsNeverCrossTalk(t *testing.T) {
@@ -2954,6 +3101,116 @@ git commit -m "feat(ui): HERDR_DOTS_ASCII=1 draws ASCII stand-ins for dot glyphs
 +		t.Fatalf("engine A got %v, engine B got %v", ha.got, hb.got)
 +	}
 +}
++
+ func TestCouncilArgsRoundTrip(t *testing.T) {
+ 	h, c := serve(t)
+ 	want := CouncilArgs{PaneID: "w1:p1", Question: "Ready to merge?", Slugs: []string{"security", "copy"}}
+```
+
+`internal/ipc/query_test.go` (Phase 5's query tests served a raw unix socket and dialed it with `net.Dial`; they now use the same `testEndpoint`, `Listen` and `Dial`, so they run over a pipe on Windows):
+
+```diff
+--- a/internal/ipc/query_test.go
++++ b/internal/ipc/query_test.go
+@@ -6,8 +6,6 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"net"
+-	"os"
+-	"path/filepath"
+ 	"strings"
+ 	"sync/atomic"
+ 	"testing"
+@@ -39,17 +37,12 @@ func (q *queryHandler) Query(ctx context.Context, cmd string, args json.RawMessa
+ 	return q.query(ctx, cmd, args)
+ }
+ 
+-// serveHandler serves h on a short socket path (macOS caps unix socket paths
+-// at 104 bytes, and t.TempDir() is long there).
++// serveHandler serves h on a fresh test endpoint (testEndpoint: a short unix
++// socket path, or a named pipe on Windows).
+ func serveHandler(t *testing.T, h Handler) Client {
+ 	t.Helper()
+-	dir, err := os.MkdirTemp("", "ipcq")
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	t.Cleanup(func() { os.RemoveAll(dir) })
+-	path := filepath.Join(dir, "q.sock")
+-	ln, err := net.Listen("unix", path)
++	path := testEndpoint(t)
++	ln, err := Listen(path)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -80,13 +73,8 @@ func TestServeWaitsForRunningQueriesOnShutdown(t *testing.T) {
+ 		finished.Store(true)
+ 		return nil, ctx.Err()
+ 	})
+-	dir, err := os.MkdirTemp("", "ipcq")
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	defer os.RemoveAll(dir)
+-	path := filepath.Join(dir, "q.sock")
+-	ln, err := net.Listen("unix", path)
++	path := testEndpoint(t)
++	ln, err := Listen(path)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -96,7 +84,7 @@ func TestServeWaitsForRunningQueriesOnShutdown(t *testing.T) {
+ 	go func() { Serve(ctx, ln, h); close(served) }()
+ 	go Client{Path: path}.Query(context.Background(), CmdAsk, AskArgs{PaneID: "w1:p1"}, nil)
+ 	// An idle connection must not keep Serve from returning either.
+-	idle, err := net.Dial("unix", path)
++	idle, err := Dial(context.Background(), path)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -115,7 +103,7 @@ func TestServeWaitsForRunningQueriesOnShutdown(t *testing.T) {
+ 
+ func TestOversizedRequestIsRefused(t *testing.T) {
+ 	_, c := serve(t)
+-	conn, err := net.Dial("unix", c.Path)
++	conn, err := Dial(context.Background(), c.Path)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -129,13 +117,8 @@ func TestOversizedRequestIsRefused(t *testing.T) {
+ }
+ 
+ func TestFailureWithoutTextStillReportsAnError(t *testing.T) {
+-	dir, err := os.MkdirTemp("", "ipcq")
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	defer os.RemoveAll(dir)
+-	path := filepath.Join(dir, "q.sock")
+-	ln, err := net.Listen("unix", path)
++	path := testEndpoint(t)
++	ln, err := Listen(path)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -206,7 +189,7 @@ func TestQueryWithoutQuerierIsRefused(t *testing.T) {
+ 
+ func TestV1ResponsesCarryNoData(t *testing.T) {
+ 	_, c := serve(t)
+-	conn, err := net.Dial("unix", c.Path)
++	conn, err := Dial(context.Background(), c.Path)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -340,7 +323,7 @@ func TestQueryToleratesUnknownFields(t *testing.T) {
+ 		}
+ 		return map[string]any{"project_id": a.PaneID, "dots": []any{}, "future_field": 1}, nil
+ 	}))
+-	conn, err := net.Dial("unix", c.Path)
++	conn, err := Dial(context.Background(), c.Path)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
 ```
 
 `internal/ipc/endpoint_unix_test.go`:
@@ -3056,16 +3313,16 @@ func TestListenRefusesANameThatIsAlreadyServed(t *testing.T) {
  )
  
  func TestSessionKeyStableAndShort(t *testing.T) {
-@@ -27,30 +28,8 @@
+@@ -27,33 +28,11 @@ func TestFilesLiveUnderSessionDir(t *testing.T) {
  			t.Fatalf("%s not under session dir", f)
  		}
  	}
 -	if p.DotsDir() != "/c/dots" || p.ConfigFile() != "/c/config.toml" {
 +	if p.DotsDir() != filepath.Join("/c", "dots") || p.ConfigFile() != filepath.Join("/c", "config.toml") {
  		t.Fatal("config paths wrong")
--	}
--}
--
+ 	}
+ }
+ 
 -// Review Focus 1: macOS caps unix socket paths at 104 bytes.
 -func TestEngineSockFallsBackWhenPathTooLong(t *testing.T) {
 -	long := "/" + strings.Repeat("d", 120)
@@ -3085,10 +3342,13 @@ func TestListenRefusesANameThatIsAlreadyServed(t *testing.T) {
 -	short := New("/c", "/s", "/sock").EngineSock()
 -	if short != filepath.Join(New("/c", "/s", "/sock").SessionDir, "dots.sock") {
 -		t.Fatalf("short path should stay in session dir: %s", short)
- 	}
- }
- 
-@@ -75,42 +54,16 @@
+-	}
+-}
+-
+ func TestFromEnvRequiresHerdr(t *testing.T) {
+ 	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", "")
+ 	if _, err := FromEnv(); err == nil {
+@@ -75,42 +54,16 @@ func TestEnsureCreatesPrivateDirs(t *testing.T) {
  		t.Fatal(err)
  	}
  	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir} {
@@ -3243,7 +3503,7 @@ func TestEngineEndpointIsAPerSessionPipe(t *testing.T) {
 ```diff
 --- a/internal/herdr/client_test.go
 +++ b/internal/herdr/client_test.go
-@@ -159,7 +159,7 @@
+@@ -159,7 +159,7 @@ func TestNewFromEnv(t *testing.T) {
  	}
  }
  
@@ -3252,7 +3512,7 @@ func TestEngineEndpointIsAPerSessionPipe(t *testing.T) {
  func rawListener(t *testing.T, h func(net.Conn)) string {
  	t.Helper()
  	dir, err := os.MkdirTemp("", "hdt")
-@@ -167,7 +167,7 @@
+@@ -167,7 +167,7 @@ func rawListener(t *testing.T, h func(net.Conn)) string {
  		t.Fatal(err)
  	}
  	path := filepath.Join(dir, "h.sock")
@@ -3268,7 +3528,7 @@ func TestEngineEndpointIsAPerSessionPipe(t *testing.T) {
 ```diff
 --- a/cmd/herdr-dots/engine_test.go
 +++ b/cmd/herdr-dots/engine_test.go
-@@ -41,9 +41,10 @@
+@@ -43,9 +43,10 @@ func TestBuildEngineLoadsDotsFromConfigDir(t *testing.T) {
  	}
  }
  
@@ -3286,7 +3546,7 @@ func TestEngineEndpointIsAPerSessionPipe(t *testing.T) {
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `GOTOOLCHAIN=local go test ./internal/ipc/ ./internal/paths/ ./internal/herdr/... ./cmd/herdr-dots/`
-Expected: FAIL to compile (`undefined: testEndpoint` / `undefined: Listen` in `ipc`, `p.EngineEndpoint undefined`, `undefined: herdrtest.Listen`, `undefined: waitForEndpoint`).
+Expected: FAIL to compile (`undefined: testEndpoint` / `undefined: Listen` / `undefined: Dial` in `ipc`, `p.EngineEndpoint undefined`, `undefined: herdrtest.Listen`, `undefined: waitForEndpoint`).
 
 - [ ] **Step 3: Implement the Herdr dial and the fake server**
 
@@ -3295,7 +3555,7 @@ Expected: FAIL to compile (`undefined: testEndpoint` / `undefined: Listen` in `i
 ```diff
 --- a/internal/herdr/client.go
 +++ b/internal/herdr/client.go
-@@ -59,8 +59,7 @@
+@@ -59,8 +59,7 @@ type response struct {
  }
  
  func (c *SocketClient) dial(ctx context.Context) (net.Conn, error) {
@@ -3352,7 +3612,7 @@ func dialSocket(ctx context.Context, path string) (net.Conn, error) {
 ```diff
 --- a/internal/herdr/herdrtest/fake.go
 +++ b/internal/herdr/herdrtest/fake.go
-@@ -44,7 +44,7 @@
+@@ -44,7 +44,7 @@ func New(t testing.TB) *Server {
  		reads: map[string]string{},
  		subs:  map[string][]*json.Encoder{},
  	}
@@ -3416,9 +3676,9 @@ func Listen(path string) (net.Listener, error) {
  package ipc
  
  import (
-@@ -154,12 +155,11 @@
- 	}
- }
+@@ -235,12 +236,11 @@ var callTimeout = 30 * time.Second
+ // maxRequestBytes bounds one request line read by the server.
+ const maxRequestBytes = 1 << 20
  
 +// Client talks to the engine. Path is the engine endpoint
 +// (paths.Paths.EngineEndpoint).
@@ -3505,23 +3765,23 @@ func Dial(ctx context.Context, endpoint string) (net.Conn, error) {
 ```diff
 --- a/internal/paths/paths.go
 +++ b/internal/paths/paths.go
-@@ -8,13 +8,11 @@
+@@ -8,13 +8,11 @@ import (
  	"crypto/sha256"
  	"encoding/hex"
  	"errors"
 -	"fmt"
  	"os"
  	"path/filepath"
-+
-+	"herdr-dots/internal/platform"
- )
--
+-)
+ 
 -// maxSockPath stays under the 104-byte sun_path limit on macOS.
 -const maxSockPath = 100
++	"herdr-dots/internal/platform"
++)
  
  type Paths struct {
  	ConfigDir  string
-@@ -58,49 +56,17 @@
+@@ -58,49 +56,17 @@ func (p Paths) FeedFile() string        { return filepath.Join(p.SessionDir, "fe
  func (p Paths) UsageFile() string       { return filepath.Join(p.SessionDir, "usage.json") }
  func (p Paths) DotsPanesFile() string   { return filepath.Join(p.SessionDir, "dotspanes.json") }
  
@@ -3657,12 +3917,12 @@ func (p Paths) ensureEndpoint() error { return nil }
 
 - [ ] **Step 5: Wire the commands**
 
-`cmd/herdr-dots/engine.go` (post-Phase-5 form: Phases 2, 4 and 5 changed `buildEngine` and may call `ensureEngine` from `mcp.go`; these hunks touch only the imports, `ensureEngine`, `waitForSocket` and the listener in `serveEngine`):
+`cmd/herdr-dots/engine.go` (post-Phase-5 form: Phase 5's `mcp.go` calls `ensureEngine`, and Phase 5 and its fix wave added `engineEnv` with `claudeProviderSetting`; these hunks touch only the imports, `ensureEngine`, `engineEnv`'s name folding, `waitForSocket` and the listener in `serveEngine`):
 
 ```diff
 --- a/cmd/herdr-dots/engine.go
 +++ b/cmd/herdr-dots/engine.go
-@@ -6,7 +6,6 @@
+@@ -6,7 +6,6 @@ import (
  	"flag"
  	"fmt"
  	"log"
@@ -3670,7 +3930,7 @@ func (p Paths) ensureEndpoint() error { return nil }
  	"os"
  	"os/exec"
  	"os/signal"
-@@ -21,6 +20,7 @@
+@@ -21,6 +20,7 @@ import (
  	"herdr-dots/internal/ipc"
  	"herdr-dots/internal/lockfile"
  	"herdr-dots/internal/paths"
@@ -3678,8 +3938,12 @@ func (p Paths) ensureEndpoint() error { return nil }
  	"herdr-dots/internal/queue"
  	"herdr-dots/internal/state"
  	"herdr-dots/internal/transcript"
-@@ -51,7 +51,7 @@
- // already holds the lock, then waits until its socket accepts connections.
+@@ -48,10 +48,10 @@ func runEngine(args []string) error {
+ }
+ 
+ // ensureEngine starts a detached engine for this Herdr session unless one
+-// already holds the lock, then waits until its socket accepts connections.
++// already holds the lock, then waits until its endpoint accepts connections.
  func ensureEngine(p paths.Paths) error {
  	if lockfile.Held(p.EngineLock()) {
 -		return waitForSocket(p.EngineSock(), 3*time.Second)
@@ -3687,7 +3951,7 @@ func (p Paths) ensureEndpoint() error { return nil }
  	}
  	exe, err := os.Executable()
  	if err != nil {
-@@ -70,24 +70,29 @@
+@@ -71,12 +71,14 @@ func ensureEngine(p paths.Paths) error {
  		cmd.Dir = "/"
  	}
  	cmd.Stdout, cmd.Stderr = logf, logf
@@ -3701,13 +3965,32 @@ func (p Paths) ensureEndpoint() error { return nil }
  	}
 -	_ = cmd.Process.Release()
 -	return waitForSocket(p.EngineSock(), 5*time.Second)
--}
--
--func waitForSocket(path string, d time.Duration) error {
 +	_ = proc.Release()
 +	return waitForEndpoint(p.EngineEndpoint(), 5*time.Second)
-+}
-+
+ }
+ 
+ // engineEnv is a detached engine's environment: the caller's, with the
+@@ -94,10 +96,14 @@ func ensureEngine(p paths.Paths) error {
+ // environment (only the variables Codex passes to MCP servers), so API keys
+ // set only in the shell environment may be missing for that engine's whole
+ // life; keys in credentials.toml are unaffected.
++//
++// Names compare in platform.EnvKey form, so a Windows variable spelled in
++// another case is dropped or replaced too.
+ func engineEnv(env []string, p paths.Paths) []string {
+ 	out := make([]string, 0, len(env)+3)
+ 	for _, kv := range env {
+-		k, _, _ := strings.Cut(kv, "=")
++		name, _, _ := strings.Cut(kv, "=")
++		k := platform.EnvKey(name)
+ 		switch {
+ 		case k == "HERDR_PLUGIN_CONFIG_DIR", k == "HERDR_PLUGIN_STATE_DIR", k == "HERDR_SOCKET_PATH",
+ 			k == "HERDR_PANE_ID", k == "CLAUDECODE":
+@@ -118,16 +124,19 @@ func claudeProviderSetting(k string) bool {
+ 		strings.HasPrefix(k, "CLAUDE_CODE_CLIENT_") || k == "CLAUDE_CODE_OAUTH_TOKEN"
+ }
+ 
+-func waitForSocket(path string, d time.Duration) error {
 +// waitForEndpoint polls until the engine accepts connections at endpoint.
 +func waitForEndpoint(endpoint string, d time.Duration) error {
  	deadline := time.Now().Add(d)
@@ -3726,23 +4009,20 @@ func (p Paths) ensureEndpoint() error { return nil }
  		}
  		time.Sleep(50 * time.Millisecond)
  	}
-@@ -172,18 +177,16 @@
+@@ -216,18 +225,16 @@ func serveEngine(p paths.Paths) error {
  	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
  	defer cancel()
  
 -	sock := p.EngineSock()
 -	_ = os.Remove(sock) // stale socket from a dead engine; we hold the lock
 -	ln, err := net.Listen("unix", sock)
--	if err != nil {
--		return err
--	}
--	_ = os.Chmod(sock, 0o600)
--	defer os.Remove(sock)
 +	endpoint := p.EngineEndpoint()
 +	ln, err := ipc.Listen(endpoint) // replaces a stale socket: we hold the lock
-+	if err != nil {
-+		return err
-+	}
+ 	if err != nil {
+ 		return err
+ 	}
+-	_ = os.Chmod(sock, 0o600)
+-	defer os.Remove(sock)
 +	defer ln.Close() // also removes the unix socket file
  
  	e.Start(ctx)
@@ -3759,7 +4039,7 @@ func (p Paths) ensureEndpoint() error { return nil }
 ```diff
 --- a/cmd/herdr-dots/ui.go
 +++ b/cmd/herdr-dots/ui.go
-@@ -70,7 +70,7 @@
+@@ -72,7 +72,7 @@ func uiSetup() (paths.Paths, ipc.Client, error) {
  	if err := ensureEngine(p); err != nil {
  		return p, ipc.Client{}, err
  	}
@@ -3775,7 +4055,7 @@ func (p Paths) ensureEndpoint() error { return nil }
 ```diff
 --- a/cmd/herdr-dots/action.go
 +++ b/cmd/herdr-dots/action.go
-@@ -45,7 +45,7 @@
+@@ -47,7 +47,7 @@ func runAction(args []string) error {
  	case "toggle-pane":
  		err = togglePane(ctx, p, hc, target)
  	case "pause-all":
@@ -3786,25 +4066,99 @@ func (p Paths) ensureEndpoint() error { return nil }
  	}
 ```
 
-Then switch every remaining caller (Phase 3 and Phase 5 code) to the endpoint:
+Phase 5's MCP entry point is the only other `EngineSock()` caller.
 
-```bash
-grep -rn 'EngineSock()' --include='*.go' . | grep -v '^./internal/paths/'
+`cmd/herdr-dots/mcp.go`:
+
+```diff
+--- a/cmd/herdr-dots/mcp.go
++++ b/cmd/herdr-dots/mcp.go
+@@ -74,14 +74,14 @@ func serveMCP(ctx context.Context, args []string, getenv func(string) string, t
+ 		logger.Printf("started outside a Herdr pane (HERDR_PANE_ID %q, HERDR_SOCKET_PATH set: %v): every tool refuses", pane, sock != "")
+ 	} else {
+ 		deps.PaneID = pane
+-		deps.Engine = mcpserver.NewIPCEngine(ipc.Client{Path: p.EngineSock()}, pane, func() error {
++		deps.Engine = mcpserver.NewIPCEngine(ipc.Client{Path: p.EngineEndpoint()}, pane, func() error {
+ 			if err := p.Ensure(); err != nil {
+ 				return err
+ 			}
+ 			return ensure(p)
+ 		})
+ 		deps.Memory = memoryStoreFor(p, cfg, logger.Printf)
+-		logger.Printf("serving pane %s through %s", pane, p.EngineSock())
++		logger.Printf("serving pane %s through %s", pane, p.EngineEndpoint())
+ 	}
+ 	err = mcpserver.New(deps).Run(ctx, t)
+ 	logger.Printf("stopped: %v", err)
 ```
 
-For each non-test hit, replace `.EngineSock()` with `.EngineEndpoint()`. For each test hit outside `internal/paths`, do the same unless the test checks unix-socket behavior; such a test moves into a file with `//go:build unix` at the top. Run the grep again. Expected: no output.
+`cmd/herdr-dots/mcp_test.go` (its fake engine listens through `ipc.Listen` on the endpoint the server will dial; closing the listener removes the unix socket, which replaces the old `os.Remove(p.EngineSock())`):
 
-If Phase 3 or Phase 5 code calls `waitForSocket(` directly, rename those calls to `waitForEndpoint(` as well (`grep -rn 'waitForSocket(' --include='*.go' .` must print nothing).
+```diff
+--- a/cmd/herdr-dots/mcp_test.go
++++ b/cmd/herdr-dots/mcp_test.go
+@@ -6,7 +6,6 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"io"
+-	"net"
+ 	"os"
+ 	"path/filepath"
+ 	"slices"
+@@ -139,7 +138,7 @@ func TestServeMCPNeedsAbsoluteDirs(t *testing.T) {
+ 	}
+ }
+ 
+-// mcpFakeEngine answers queries for one pane on the engine socket.
++// mcpFakeEngine answers queries for one pane on the engine endpoint.
+ type mcpFakeEngine struct{ asked chan ipc.AskArgs }
+ 
+ func (f mcpFakeEngine) Handle(context.Context, string, json.RawMessage) error { return nil }
+@@ -165,13 +164,14 @@ func TestServeMCPAsksThePanesEngine(t *testing.T) {
+ 	ensured := 0
+ 	ensure := func(got paths.Paths) error {
+ 		ensured++
+-		if got.EngineSock() != p.EngineSock() {
+-			t.Errorf("engine socket %s, want %s", got.EngineSock(), p.EngineSock())
++		if got.EngineEndpoint() != p.EngineEndpoint() {
++			t.Errorf("engine endpoint %s, want %s", got.EngineEndpoint(), p.EngineEndpoint())
+ 		}
+-		ln, err := net.Listen("unix", got.EngineSock())
++		ln, err := ipc.Listen(got.EngineEndpoint())
+ 		if err != nil {
+ 			return err
+ 		}
++		t.Cleanup(func() { ln.Close() }) // also removes the unix socket file
+ 		ctx, cancel := context.WithCancel(context.Background())
+ 		t.Cleanup(cancel)
+ 		go ipc.Serve(ctx, ln, fe)
+@@ -188,7 +188,6 @@ func TestServeMCPAsksThePanesEngine(t *testing.T) {
+ 	if ensured != 1 {
+ 		t.Fatalf("ensure ran %d times", ensured)
+ 	}
+-	t.Cleanup(func() { os.Remove(p.EngineSock()) })
+ }
+ 
+ func TestEngineEnvSetsThePluginDirs(t *testing.T) {
+```
+
+Check that nothing else calls the Unix-only names:
+
+```bash
+grep -rn 'EngineSock()\|waitForSocket(' --include='*.go' internal cmd | grep -v '^internal/paths/\|^internal/platform/'
+```
+
+Expected: no output. (If a commit after `a47427d` added a caller, replace `.EngineSock()` with `.EngineEndpoint()` there too; a test that checks unix-socket behavior moves into a file with `//go:build unix` at the top.)
 
 - [ ] **Step 6: Run the tests to see them pass**
 
 Run: `gofmt -w internal cmd && GOTOOLCHAIN=local go test -race ./internal/ipc/ ./internal/paths/ ./internal/herdr/... ./internal/engine/ ./cmd/herdr-dots/ -v 2>&1 | grep -E '^(--- FAIL|ok|FAIL)'`
-Expected: every package `ok`, including `TestTwoEndpointsNeverCrossTalk`, `TestListenReplacesAStaleSocketAndIsPrivate`, `TestEngineEndpointIsPerSession`, `TestEngineEndpointIsTheUnixSocket`, `TestEngineSockFallsBackWhenPathTooLong`, `TestWaitForEndpointTimesOut`, and the whole engine suite over the fake Herdr.
+Expected: every package `ok`, including `TestTwoEndpointsNeverCrossTalk`, `TestListenReplacesAStaleSocketAndIsPrivate`, `TestEngineEndpointIsPerSession`, `TestEngineEndpointIsTheUnixSocket`, `TestEngineSockFallsBackWhenPathTooLong`, `TestWaitForEndpointTimesOut`, Phase 5's `TestServeWaitsForRunningQueriesOnShutdown`, `TestOversizedRequestIsRefused`, `TestServeMCPAsksThePanesEngine`, `TestEngineEnvSetsThePluginDirs`, and the whole engine suite over the fake Herdr.
 
 - [ ] **Step 7: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -3814,7 +4168,7 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five succeed. The `go vet` of `./cmd/herdr-dots/` for Windows needs the Phase 4 packages it imports; if it fails only inside `internal/credentials` or `internal/backend/toolloop` (Task 8, same wave), that is expected. The last two print only Wave 2's list without `cmd/herdr-dots`'s own errors: `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/credentials`, plus Task 1's Phase 5 packages.
+Expected: `gofmt` prints nothing; the next five succeed. The Windows `go vet` and `go test -c` of `./cmd/herdr-dots/` need the Phase 4 packages it imports; if they fail only inside `internal/backend/toolloop` (`undefined: syscall.O_NOFOLLOW`; Task 8, same wave), that is expected. The last two print only Wave 2's list without `cmd/herdr-dots`: `# herdr-dots/internal/backend/toolloop` until Task 8 is merged.
 
 - [ ] **Step 8: Commit**
 
@@ -3823,7 +4177,7 @@ git add internal/herdr internal/ipc internal/paths cmd/herdr-dots
 git commit -m "feat(ipc): named-pipe engine endpoint and Herdr pipe dial on Windows (Phase 6)"
 ```
 
-(If Step 5 changed Phase 5 files outside `cmd/herdr-dots`, add them to the `git add` line.)
+(`cmd/herdr-dots` covers Phase 5's `mcp.go` and `mcp_test.go`.)
 
 ---
 
@@ -3850,7 +4204,7 @@ git commit -m "feat(ipc): named-pipe engine endpoint and Herdr pipe dial on Wind
 ```diff
 --- a/internal/fsutil/atomic_test.go
 +++ b/internal/fsutil/atomic_test.go
-@@ -4,6 +4,8 @@
+@@ -4,6 +4,8 @@ import (
  	"os"
  	"path/filepath"
  	"testing"
@@ -3859,7 +4213,7 @@ git commit -m "feat(ipc): named-pipe engine endpoint and Herdr pipe dial on Wind
  )
  
  func TestWriteFileAtomicCreatesWithPerm(t *testing.T) {
-@@ -16,13 +18,9 @@
+@@ -16,13 +18,9 @@ func TestWriteFileAtomicCreatesWithPerm(t *testing.T) {
  	if string(got) != "hello" {
  		t.Fatalf("content = %q", got)
  	}
@@ -3968,7 +4322,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
 ```diff
 --- a/internal/transcript/claude_test.go
 +++ b/internal/transcript/claude_test.go
-@@ -105,3 +105,34 @@
+@@ -105,3 +105,34 @@ func TestParseClaudeRealFixture(t *testing.T) {
  		}
  	}
  }
@@ -4010,7 +4364,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
 ```diff
 --- a/internal/keys/keys_test.go
 +++ b/internal/keys/keys_test.go
-@@ -3,11 +3,14 @@
+@@ -3,11 +3,14 @@ package keys
  import (
  	"os"
  	"path/filepath"
@@ -4025,7 +4379,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
  )
  
  const userConfig = `onboarding = false
-@@ -29,11 +32,11 @@
+@@ -29,11 +32,11 @@ command = "someone.else.thing"
  func TestConfigPath(t *testing.T) {
  	env := map[string]string{}
  	get := func(k string) string { return env[k] }
@@ -4039,7 +4393,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
  		t.Fatal(p)
  	}
  	env["HERDR_CONFIG_PATH"] = "/custom.toml"
-@@ -83,6 +86,7 @@
+@@ -83,6 +86,7 @@ func TestAppendRefusesWhenResultWouldNotParse(t *testing.T) {
  	dir := t.TempDir()
  	p := filepath.Join(dir, "config.toml")
  	os.WriteFile(p, []byte(inline), 0o640)
@@ -4047,7 +4401,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
  	if _, err := Existing([]byte(inline)); err != nil {
  		t.Fatalf("the inline form is valid TOML on its own: %v", err)
  	}
-@@ -93,8 +97,8 @@
+@@ -93,8 +97,8 @@ func TestAppendRefusesWhenResultWouldNotParse(t *testing.T) {
  	if string(now) != inline {
  		t.Fatalf("file must be untouched, got:\n%s", now)
  	}
@@ -4058,7 +4412,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
  	}
  }
  
-@@ -102,8 +106,12 @@
+@@ -102,8 +106,12 @@ func TestAppendPreservesFileModeAndSymlink(t *testing.T) {
  	dir := t.TempDir()
  	real := filepath.Join(dir, "dotfiles-config.toml")
  	os.WriteFile(real, []byte(userConfig), 0o640)
@@ -4071,7 +4425,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
  		t.Fatal(err)
  	}
  	if _, err := Append(link, Defaults()[2:], time.Now()); err != nil {
-@@ -113,8 +121,8 @@
+@@ -113,8 +121,8 @@ func TestAppendPreservesFileModeAndSymlink(t *testing.T) {
  		t.Fatal("a symlinked config must stay a symlink")
  	}
  	st, _ := os.Stat(real)
@@ -4082,8 +4436,8 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
  	}
  	if data, _ := os.ReadFile(real); !strings.Contains(string(data), "prefix+shift+s") {
  		t.Fatalf("not appended:\n%s", data)
-@@ -149,3 +157,12 @@
- 		t.Fatalf("result must stay valid TOML: %v", err)
+@@ -164,3 +172,12 @@ func TestCouncilKeyIsFreeUnlessTheUserBoundIt(t *testing.T) {
+ 		t.Fatalf("a user binding wins: %v", conflicts)
  	}
  }
 +
@@ -4102,7 +4456,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
 ```diff
 --- a/internal/memory/project_test.go
 +++ b/internal/memory/project_test.go
-@@ -8,6 +8,8 @@
+@@ -8,6 +8,8 @@ import (
  	"strings"
  	"testing"
  	"time"
@@ -4111,7 +4465,7 @@ func TestPrivateWritesGetAnOwnerOnlyDACLEvenInAnOpenDir(t *testing.T) {
  )
  
  // isolateGit keeps the developer's git config (signing, hooks) out of tests.
-@@ -208,3 +210,18 @@
+@@ -208,3 +210,18 @@ func TestGitEnvStripsHerdrAndGitOverrides(t *testing.T) {
  		t.Error("must return a non-nil slice")
  	}
  }
@@ -4144,7 +4498,7 @@ Expected: PASS on darwin. Unix behavior doesn't change in this task, so these te
 ```diff
 --- a/internal/fsutil/atomic.go
 +++ b/internal/fsutil/atomic.go
-@@ -8,7 +8,10 @@
+@@ -8,7 +8,10 @@ import (
  
  // WriteFileAtomic writes data to a temp file in the same directory and renames
  // it over path, so readers never observe a half-written file. The parent
@@ -4156,7 +4510,7 @@ Expected: PASS on darwin. Unix behavior doesn't change in this task, so these te
  func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
  	dir := filepath.Dir(path)
  	if err := os.MkdirAll(dir, 0o700); err != nil {
-@@ -28,6 +31,10 @@
+@@ -28,6 +31,10 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
  		f.Close()
  		return err
  	}
@@ -4167,7 +4521,7 @@ Expected: PASS on darwin. Unix behavior doesn't change in this task, so these te
  	if err := f.Sync(); err != nil {
  		f.Close()
  		return err
-@@ -35,5 +42,5 @@
+@@ -35,5 +42,5 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
  	if err := f.Close(); err != nil {
  		return err
  	}
@@ -4245,7 +4599,7 @@ func busy(err error) bool {
 ```diff
 --- a/internal/transcript/claude.go
 +++ b/internal/transcript/claude.go
-@@ -11,6 +11,8 @@
+@@ -11,6 +11,8 @@ import (
  	"os"
  	"path/filepath"
  	"strings"
@@ -4254,7 +4608,7 @@ func busy(err error) bool {
  )
  
  type claudeRecord struct {
-@@ -151,7 +153,9 @@
+@@ -151,7 +153,9 @@ func (r ClaudeReader) Turns(context.Context) ([]Turn, error) {
  }
  
  // ResolveClaudePath finds the transcript for a Herdr-reported session: a
@@ -4265,7 +4619,7 @@ func busy(err error) bool {
  func ResolveClaudePath(home, kind, value string) (string, error) {
  	switch kind {
  	case "path":
-@@ -163,7 +167,7 @@
+@@ -163,7 +167,7 @@ func ResolveClaudePath(home, kind, value string) (string, error) {
  		if value == "" || strings.ContainsAny(value, `/\*?[]`) || strings.Contains(value, "..") {
  			return "", fmt.Errorf("invalid claude session id %q", value)
  		}
@@ -4281,7 +4635,7 @@ func busy(err error) bool {
 ```diff
 --- a/internal/transcript/codex.go
 +++ b/internal/transcript/codex.go
-@@ -12,6 +12,8 @@
+@@ -12,6 +12,8 @@ import (
  	"path/filepath"
  	"regexp"
  	"strings"
@@ -4290,7 +4644,7 @@ func busy(err error) bool {
  )
  
  // Codex rollout files (~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl).
-@@ -103,7 +105,7 @@
+@@ -103,7 +105,7 @@ func ResolveCodexPath(home, kind, value string) (string, error) {
  		if value == "" || strings.ContainsAny(value, `/\*?[]`) || strings.Contains(value, "..") {
  			return "", fmt.Errorf("invalid codex session id %q", value)
  		}
@@ -4306,7 +4660,7 @@ func busy(err error) bool {
 ```diff
 --- a/internal/keys/keys.go
 +++ b/internal/keys/keys.go
-@@ -13,6 +13,7 @@
+@@ -13,6 +13,7 @@ import (
  	"github.com/BurntSushi/toml"
  
  	"herdr-dots/internal/fsutil"
@@ -4314,7 +4668,7 @@ func busy(err error) bool {
  )
  
  type Binding struct {
-@@ -45,14 +46,11 @@
+@@ -46,14 +47,11 @@ var BuiltinPrefixKeys = func() []string {
  	return ks
  }()
  
@@ -4340,7 +4694,7 @@ func busy(err error) bool {
 ```diff
 --- a/internal/memory/project.go
 +++ b/internal/memory/project.go
-@@ -12,6 +12,8 @@
+@@ -12,6 +12,8 @@ import (
  	"sort"
  	"strings"
  	"time"
@@ -4349,7 +4703,7 @@ func busy(err error) bool {
  )
  
  // Project identifies the repository a pane works in.
-@@ -27,23 +29,28 @@
+@@ -27,23 +29,28 @@ type GitRunner func(ctx context.Context, dir string, args ...string) (string, er
  // gitTimeout bounds one ResolveProject call; tests shorten it.
  var gitTimeout = 5 * time.Second
  
@@ -4392,7 +4746,7 @@ Expected: PASS.
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -4402,7 +4756,7 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five succeed; the last two print only Wave 2's list (`# herdr-dots/cmd/herdr-dots`, `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/credentials`, plus Task 1's Phase 5 packages).
+Expected: `gofmt` prints nothing; the next five succeed; the last two print only Wave 2's list (`# herdr-dots/internal/backend/toolloop`, `# herdr-dots/cmd/herdr-dots`, each until its task merges).
 
 - [ ] **Step 6: Commit**
 
@@ -4413,32 +4767,33 @@ git commit -m "feat(platform): Windows file privacy and replace, client paths, g
 
 ---
 
-### Task 8: Phase 4 ports: credentials, tool jail, Ollama
+### Task 8: Phase 4 ports: credentials, tool jail, connection-refused checks
 
-**Depends on:** Task 2 (`platform.DevNull`, `HideWindow`, `ConnRefused`), Task 3 (`platform.CheckPrivate`, `FixPrivateHint`, `ErrNotPrivate`, `ErrNotOwner`, `OpenNoFollow`, `ReservedPathName`, `platformtest`). Wave 2.
+**Depends on:** Task 2 (`platform.DevNull`, `HideWindow`, `EnvKey`, `ConnRefused`, `ErrConnRefused`), Task 3 (`platform.CheckPrivateFile`, `FixPrivateHint`, `ErrNotPrivate`, `ErrNotOwner`, `OpenNoFollow`, `ReservedPathName`, `platformtest`). Wave 2.
 
-The diffs are against the code in the Phase 4 plan (Tasks 2, 7 and 13). If Phase 4's execution changed a neighboring line, make the same edit by hand.
+The diffs are against the merged Phase 4 code at `a47427d` (reconciled: Plan decisions 25–28). Phase 4 already opens `credentials.toml` with `O_NOFOLLOW` and checks the descriptor, already folds case in the jail's deny-list and already refuses `/` and the home directory; this task keeps all of that and makes it hold on Windows.
 
 **Files:**
-- Modify: `internal/credentials/credentials.go`, `internal/credentials/credentials_test.go`
+- Modify: `internal/credentials/credentials.go`, `internal/credentials/open_unix.go`, `internal/credentials/credentials_test.go`, `internal/credentials/hardening_test.go`
+- Rename: `internal/credentials/open_other.go` → `internal/credentials/open_windows.go` (new content)
 - Test: `internal/credentials/perms_unix_test.go`, `internal/credentials/perms_windows_test.go`
-- Modify: `internal/backend/toolloop/jail.go`, `internal/backend/toolloop/tools.go`, `internal/backend/toolloop/tools_test.go`
+- Modify: `internal/backend/toolloop/jail.go`, `internal/backend/toolloop/tools.go`, `internal/backend/toolloop/tools_test.go`, `fix1_test.go`, `fix2_test.go`, `final_test.go`
 - Test: `internal/backend/toolloop/jail_windows_test.go`
-- Modify: `internal/backend/ollama/ollama.go`
+- Modify: `internal/backend/ollama/ollama.go`, `internal/backend/api.go`, `internal/backend/openaiapi/openai.go`, `internal/backend/anthropicapi/anthropic.go`, `internal/backend/httpx/httpx.go`, `internal/backend/httpx/final_test.go`
 - Test: `internal/backend/ollama/connrefused_test.go`
 
 **Interfaces:**
-- Consumes: `platform.CheckPrivate(path string) error`, `platform.ErrNotPrivate`, `platform.ErrNotOwner`, `platform.FixPrivateHint(path string) string`, `platform.OpenNoFollow(path string) (*os.File, error)`, `platform.ReservedPathName(rel string) bool`, `platform.DevNull`, `platform.HideWindow(cmd *exec.Cmd)`, `platform.ConnRefused(err error) bool`; `platformtest.AssertPrivateFile`.
-- Produces: no new exported symbols. `credentials.ErrInsecurePerms` keeps its identity; its message is now "credentials.toml is readable by others" and the returned error carries the OS fix. `toolloop.Denied` ignores case; `toolloop.ResolveInRoot` denies Windows streams, devices and trailing dots/spaces; `ollama`'s connection-refused hint works on Windows.
+- Consumes: `platform.CheckPrivateFile(f *os.File) error`, `platform.ErrNotPrivate`, `platform.ErrNotOwner`, `platform.FixPrivateHint(path string) string`, `platform.OpenNoFollow(path string) (*os.File, error)`, `platform.ReservedPathName(rel string) bool`, `platform.DevNull`, `platform.HideWindow(cmd *exec.Cmd)`, `platform.EnvKey(name string) string`, `platform.ConnRefused(err error) bool`, `platform.ErrConnRefused`; `platformtest.AssertPrivateFile`.
+- Produces: no new exported symbols. `credentials.ErrInsecurePerms` keeps its identity; its message is now "credentials.toml is readable by others" and the returned error carries the OS's fix. `credentials` checks privacy on the opened file on every OS (`open_unix.go` for every Unix, `open_windows.go` on Windows). `toolloop.ResolveInRoot` denies Windows streams, devices and trailing dots/spaces before touching the disk; `toolloop.Unavailable` refuses any file-system root (`/`, `C:\`, a share root); the jail opens files through `platform.OpenNoFollow` and runs git with the OS null device and no console window. `backend.Unreachable`, the OpenAI, Anthropic and Ollama adapters and `httpx`'s scrubbed errors recognise a refused connection on Windows (`WSAECONNREFUSED`).
 
 - [ ] **Step 1: Write the failing tests**
 
-`internal/credentials/credentials_test.go`:
+`internal/credentials/credentials_test.go` (privacy asserted per OS; the permissive file is made readable by others the OS's way; the error must carry the fix and never the key):
 
 ```diff
 --- a/internal/credentials/credentials_test.go
 +++ b/internal/credentials/credentials_test.go
-@@ -6,6 +6,9 @@
+@@ -6,6 +6,9 @@ import (
  	"path/filepath"
  	"strings"
  	"testing"
@@ -4448,7 +4803,7 @@ The diffs are against the code in the Phase 4 plan (Tasks 2, 7 and 13). If Phase
  )
  
  func envOf(m map[string]string) func(string) string {
-@@ -22,10 +25,7 @@
+@@ -22,10 +25,7 @@ func TestSetWritesOwnerOnlyAndLookupReadsIt(t *testing.T) {
  	if err := f.Set("anthropic", "  sk-ant-api03-abcdefghijklmnop  "); err != nil {
  		t.Fatal(err)
  	}
@@ -4460,7 +4815,7 @@ The diffs are against the code in the Phase 4 plan (Tasks 2, 7 and 13). If Phase
  	key, from, err := f.Lookup("anthropic")
  	if err != nil || key != "sk-ant-api03-abcdefghijklmnop" || from != "file" {
  		t.Fatalf("Lookup = %q %q %v", key, from, err)
-@@ -64,11 +64,16 @@
+@@ -64,11 +64,16 @@ func TestMissingKeyHasAHint(t *testing.T) {
  
  func TestPermissiveFileIsRefusedWithoutReadingIt(t *testing.T) {
  	f := credFile(t)
@@ -4480,7 +4835,7 @@ The diffs are against the code in the Phase 4 plan (Tasks 2, 7 and 13). If Phase
  	}
  	if err := f.Set("openai", "sk-xxxxxxxxxxxxxxxxxxxx"); !errors.Is(err, ErrInsecurePerms) {
  		t.Fatalf("Set err = %v, want ErrInsecurePerms", err)
-@@ -84,9 +89,7 @@
+@@ -84,9 +89,7 @@ func TestSymlinkedCredentialsFileIsRefused(t *testing.T) {
  	if err := os.WriteFile(real, []byte(""), 0o600); err != nil {
  		t.Fatal(err)
  	}
@@ -4491,6 +4846,24 @@ The diffs are against the code in the Phase 4 plan (Tasks 2, 7 and 13). If Phase
  	if _, _, err := f.Lookup("anthropic"); err == nil || !strings.Contains(err.Error(), "regular file") {
  		t.Fatalf("err = %v", err)
  	}
+```
+
+`internal/credentials/hardening_test.go` (Phase 4's symlink test skips where the OS refuses symlinks):
+
+```diff
+--- a/internal/credentials/hardening_test.go
++++ b/internal/credentials/hardening_test.go
+@@ -39,9 +39,7 @@ func TestSymlinkRefusedEvenWhenTargetIsOwnerOnly(t *testing.T) {
+ 	if err := os.WriteFile(real, []byte("[anthropic]\napi_key = \"sk-ant-api03-abcdefghijklmnop\"\n"), 0o600); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if err := os.Symlink(real, f.Path); err != nil {
+-		t.Fatal(err)
+-	}
++	symlinkOrSkip(t, real, f.Path)
+ 	k, _, err := f.Lookup("anthropic")
+ 	if err == nil || k != "" || !strings.Contains(err.Error(), "regular file") {
+ 		t.Fatalf("key %q err %v", k, err)
 ```
 
 `internal/credentials/perms_unix_test.go`:
@@ -4592,12 +4965,12 @@ func TestInheritedUsersAccessIsRefusedAndSetFixesNothingSilently(t *testing.T) {
 }
 ```
 
-`internal/backend/toolloop/tools_test.go`:
+`internal/backend/toolloop/tools_test.go` (symlinks skip where the OS refuses them; `setHome` sets `USERPROFILE` too, Plan decision 28; streams and devices never resolve):
 
 ```diff
 --- a/internal/backend/toolloop/tools_test.go
 +++ b/internal/backend/toolloop/tools_test.go
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,7 @@ import (
  	"os"
  	"os/exec"
  	"path/filepath"
@@ -4605,7 +4978,7 @@ func TestInheritedUsersAccessIsRefusedAndSetFixesNothingSilently(t *testing.T) {
  	"strings"
  	"testing"
  )
-@@ -31,15 +32,9 @@
+@@ -31,15 +32,9 @@ func repoDir(t *testing.T) (root, outside string) {
  	write(root, ".env", "API_KEY=supersecret\n")
  	write(root, "config/secrets/prod.json", `{"token":"x"}`)
  	write(root, "bin/blob.dat", "ab\x00cd")
@@ -4624,10 +4997,29 @@ func TestInheritedUsersAccessIsRefusedAndSetFixesNothingSilently(t *testing.T) {
  	return root, outside
  }
  
-@@ -180,3 +175,35 @@
+@@ -167,9 +162,7 @@ func TestOpenRejectsParentSwappedForSymlink(t *testing.T) {
+ 	if err := os.Rename(filepath.Join(root, "sub"), filepath.Join(root, "sub.old")); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if err := os.Symlink(outside, filepath.Join(root, "sub")); err != nil {
+-		t.Fatal(err)
+-	}
++	symlinkOrSkip(t, outside, filepath.Join(root, "sub"))
+ 	f, err := openVerified(abs)
+ 	if err == nil {
+ 		f.Close()
+@@ -240,3 +233,32 @@ func TestListWithoutGitWalksAndCaps(t *testing.T) {
  		t.Fatalf("list:\n%s\n%v", out, err)
  	}
  }
++
++// setHome points the user's home directory at dir on every OS:
++// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows.
++func setHome(t *testing.T, dir string) {
++	t.Helper()
++	t.Setenv("HOME", dir)
++	t.Setenv("USERPROFILE", dir)
++}
 +
 +// symlinkOrSkip creates a symlink, skipping the test where the OS refuses
 +// (Windows without Developer Mode or admin rights).
@@ -4641,17 +5033,6 @@ func TestInheritedUsersAccessIsRefusedAndSetFixesNothingSilently(t *testing.T) {
 +	}
 +}
 +
-+func TestDeniedIgnoresCase(t *testing.T) {
-+	for _, rel := range []string{".ENV", ".Env.local", "Config/SECRETS/prod.json", "keys/ID_RSA", "server.PEM", ".GIT/config"} {
-+		if !Denied(rel, DefaultDeny) {
-+			t.Errorf("%s must be denied", rel)
-+		}
-+	}
-+	if Denied("src/environment.go", DefaultDeny) {
-+		t.Error("an ordinary file was denied")
-+	}
-+}
-+
 +func TestResolveInRootNeverReachesAStreamOrDevice(t *testing.T) {
 +	root, _ := repoDir(t)
 +	for _, p := range []string{".env::$DATA", "main.go:hidden", "NUL", "web/CON.ts", ".env."} {
@@ -4660,6 +5041,109 @@ func TestInheritedUsersAccessIsRefusedAndSetFixesNothingSilently(t *testing.T) {
 +		}
 +	}
 +}
+```
+
+`internal/backend/toolloop/fix1_test.go` (Phase 4's fix-wave tests use the same two helpers, as do `fix2_test.go` and `final_test.go` below):
+
+```diff
+--- a/internal/backend/toolloop/fix1_test.go
++++ b/internal/backend/toolloop/fix1_test.go
+@@ -131,7 +131,7 @@ func TestNoToolsForHomeOrAboveIt(t *testing.T) {
+ 	if err := os.MkdirAll(proj, 0o700); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	t.Setenv("HOME", home)
++	setHome(t, home)
+ 	for _, r := range []string{home, parent, "/"} {
+ 		if got := RepoTools(r, DefaultLimits()); len(got) != 0 {
+ 			t.Errorf("RepoTools(%q) gave %d tools", r, len(got))
+@@ -151,9 +151,7 @@ func TestNoToolsForHomeOrAboveIt(t *testing.T) {
+ // Minor 4: no existence oracle outside the root.
+ func TestNoExistenceOracleOutsideRoot(t *testing.T) {
+ 	root, outside := repoDir(t)
+-	if err := os.Symlink(filepath.Join(outside, "missing.txt"), filepath.Join(root, "dangling.txt")); err != nil {
+-		t.Fatal(err)
+-	}
++	symlinkOrSkip(t, filepath.Join(outside, "missing.txt"), filepath.Join(root, "dangling.txt"))
+ 	for _, p := range []string{"dangling.txt", "outdir/missing.txt", "outdir/notes.txt"} {
+ 		_, _, err := ResolveInRoot(root, p, DefaultDeny)
+ 		if !errors.Is(err, ErrOutsideRoot) {
+```
+
+`internal/backend/toolloop/fix2_test.go`:
+
+```diff
+--- a/internal/backend/toolloop/fix2_test.go
++++ b/internal/backend/toolloop/fix2_test.go
+@@ -69,9 +69,7 @@ func TestOrdinaryCaseVariantIsNoSuchFile(t *testing.T) {
+ func TestSymlinkTargetSpellingIsExactToo(t *testing.T) {
+ 	root := t.TempDir()
+ 	mustWrite(t, filepath.Join(root, "id_rsa"), "PRIVATE KEY")
+-	if err := os.Symlink("id_rſa", filepath.Join(root, "link.txt")); err != nil {
+-		t.Fatal(err)
+-	}
++	symlinkOrSkip(t, "id_rſa", filepath.Join(root, "link.txt"))
+ 	if _, _, err := ResolveInRoot(root, "link.txt", DefaultDeny); err == nil {
+ 		t.Fatal("a link spelled with a folded name must not resolve")
+ 	}
+@@ -93,9 +91,7 @@ func TestListFiltersStaleIndexEntriesUnderSymlinkedParents(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	mustWrite(t, filepath.Join(outside, "a.go"), "x")
+-	if err := os.Symlink(outside, filepath.Join(root, "real")); err != nil {
+-		t.Fatal(err)
+-	}
++	symlinkOrSkip(t, outside, filepath.Join(root, "real"))
+ 	out, err := run(t, RepoTools(root, DefaultLimits()), "list_files", map[string]any{})
+ 	if err != nil || strings.Contains(out, "real/a.go") {
+ 		t.Fatalf("list leaked via a stale entry:\n%s\n%v", out, err)
+@@ -108,7 +104,7 @@ func TestUnavailableFallsBackWhenHomeIsUnsetAndMatchesCaseVariants(t *testing.T)
+ 	if err := os.MkdirAll(home, 0o700); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	t.Setenv("HOME", home)
++	setHome(t, home)
+ 	variant := filepath.Join(parent, "hOME")
+ 	if _, err := os.Stat(variant); err == nil {
+ 		if !Unavailable(variant) {
+@@ -117,7 +113,7 @@ func TestUnavailableFallsBackWhenHomeIsUnsetAndMatchesCaseVariants(t *testing.T)
+ 	} else {
+ 		t.Log("case-sensitive filesystem: variant check skipped")
+ 	}
+-	t.Setenv("HOME", "")
++	setHome(t, "")
+ 	if h := homeDir(); h == "" {
+ 		t.Error("homeDir must fall back to the user database when HOME is unset")
+ 	}
+@@ -125,7 +121,7 @@ func TestUnavailableFallsBackWhenHomeIsUnsetAndMatchesCaseVariants(t *testing.T)
+ 
+ func TestHomeAnchoredGlobsApplyWhenCwdIsBelowHome(t *testing.T) {
+ 	home := t.TempDir()
+-	t.Setenv("HOME", home)
++	setHome(t, home)
+ 	mustWrite(t, filepath.Join(home, ".config", "gh", "hosts.yml"), "oauth_token: SECRET")
+ 	mustWrite(t, filepath.Join(home, ".config", "ok.txt"), "fine")
+ 	mustWrite(t, filepath.Join(home, ".docker", "config.json"), "SECRET")
+```
+
+`internal/backend/toolloop/final_test.go`:
+
+```diff
+--- a/internal/backend/toolloop/final_test.go
++++ b/internal/backend/toolloop/final_test.go
+@@ -19,10 +19,8 @@ func TestRootReachingHomeThroughASuffixIsUnavailable(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	// data/Users is the same directory as tmp/Users (a firmlink stand-in).
+-	if err := os.Symlink(filepath.Join(tmp, "Users"), filepath.Join(data, "Users")); err != nil {
+-		t.Fatal(err)
+-	}
+-	t.Setenv("HOME", home)
++	symlinkOrSkip(t, filepath.Join(tmp, "Users"), filepath.Join(data, "Users"))
++	setHome(t, home)
+ 	if !Unavailable(data) {
+ 		t.Fatal("a root that reaches home via data/Users/u must be unavailable")
+ 	}
 ```
 
 `internal/backend/toolloop/jail_windows_test.go`:
@@ -4722,25 +5206,48 @@ func TestMapErrNamesAStoppedServer(t *testing.T) {
 }
 ```
 
+`internal/backend/httpx/final_test.go` (a refused dial must stay recognisable after scrubbing on every OS, so the test asks `platform.ConnRefused` instead of matching `syscall.ECONNREFUSED`, which Windows never reports):
+
+```diff
+--- a/internal/backend/httpx/final_test.go
++++ b/internal/backend/httpx/final_test.go
+@@ -6,9 +6,10 @@ import (
+ 	"net/http"
+ 	"net/http/httptest"
+ 	"strings"
+-	"syscall"
+ 	"testing"
+ 	"time"
++
++	"herdr-dots/internal/platform"
+ )
+ 
+ // Final review item 15: a deadline that hits while the body is read stays
+@@ -47,7 +48,7 @@ func TestScrubKeepsConnectionRefused(t *testing.T) {
+ 	url := srv.URL
+ 	srv.Close()
+ 	_, err := (Client{Base: time.Millisecond}).Do(context.Background(), "GET", url, nil, nil)
+-	if !errors.Is(err, syscall.ECONNREFUSED) {
+-		t.Fatalf("err %v: want errors.Is ECONNREFUSED", err)
++	if !platform.ConnRefused(err) {
++		t.Fatalf("err %v: want a connection refusal (platform.ConnRefused)", err)
+ 	}
+ }
+```
+
 - [ ] **Step 2: Run the tests to see them fail**
 
-Run: `GOTOOLCHAIN=local go test ./internal/credentials/ ./internal/backend/toolloop/ ./internal/backend/ollama/ 2>&1 | grep -E '^(--- FAIL|ok|FAIL)'`
-Expected: FAIL: `TestPermissiveFileIsRefusedWithoutReadingIt` (the error lacks the fix hint) and `TestDeniedIgnoresCase` (`.ENV must be denied`). `TestMapErrNamesAStoppedServer` and `TestResolveInRootNeverReachesAStreamOrDevice` already pass on Unix; they guard Windows. `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./internal/credentials/ ./internal/backend/toolloop/` fails with `undefined: syscall.Stat_t` and `undefined: syscall.O_NOFOLLOW`.
+Run: `GOTOOLCHAIN=local go test ./internal/credentials/ ./internal/backend/... 2>&1 | grep -E '^(--- FAIL|ok|FAIL)'; GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./internal/credentials/ ./internal/backend/toolloop/`
+Expected (replayed): `--- FAIL: TestPermissiveFileIsRefusedWithoutReadingIt` (`Lookup err = credentials.toml is readable by others: run chmod 600, want ErrInsecurePerms with the fix`); every other package `ok` (`TestMapErrNamesAStoppedServer`, `TestResolveInRootNeverReachesAStreamOrDevice` and the httpx test already pass on Unix; they guard Windows). The Windows vet fails with `internal/backend/toolloop/jail.go:286:49: undefined: syscall.O_NOFOLLOW`.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement the credentials check**
 
 `internal/credentials/credentials.go`:
 
 ```diff
 --- a/internal/credentials/credentials.go
 +++ b/internal/credentials/credentials.go
-@@ -11,19 +11,21 @@
- 	"io/fs"
- 	"os"
- 	"strings"
--	"syscall"
- 	"unicode"
- 
+@@ -17,13 +17,16 @@ import (
  	"github.com/BurntSushi/toml"
  
  	"herdr-dots/internal/fsutil"
@@ -4759,26 +5266,27 @@ Expected: FAIL: `TestPermissiveFileIsRefusedWithoutReadingIt` (the error lacks t
  	// ErrNotOwner means credentials.toml belongs to another user.
  	ErrNotOwner = errors.New("credentials.toml is owned by another user")
  	// ErrBadKey means a key failed the shape check in Set.
-@@ -106,7 +108,8 @@
+@@ -111,7 +114,9 @@ func (f File) Lookup(provider string) (string, string, error) {
  }
  
  // read loads credentials.toml. A missing file is empty. The file must be a
 -// regular file owned by this user with no group or other permission bits.
 +// regular file owned by this user that no other user can read
-+// (platform.CheckPrivate: mode bits on Unix, the DACL on Windows).
++// (platform.CheckPrivateFile on the opened file: mode bits on Unix, the DACL
++// on Windows).
  func (f File) read() (map[string]entry, error) {
- 	st, err := os.Lstat(f.Path)
+ 	fd, st, err := openChecked(f.Path)
  	if errors.Is(err, fs.ErrNotExist) {
-@@ -118,11 +121,14 @@
- 	if !st.Mode().IsRegular() {
+@@ -126,11 +131,14 @@ func (f File) read() (map[string]entry, error) {
+ 	if fd == nil || !st.Mode().IsRegular() {
  		return nil, fmt.Errorf("credentials.toml must be a regular file (%s)", f.Path)
  	}
 -	if st.Mode().Perm()&0o077 != 0 {
 -		return nil, ErrInsecurePerms
 -	}
--	if sys, ok := st.Sys().(*syscall.Stat_t); ok && int(sys.Uid) != os.Getuid() {
+-	if !ownedByMe(st) {
 -		return nil, ErrNotOwner
-+	if err := platform.CheckPrivate(f.Path); err != nil {
++	if err := platform.CheckPrivateFile(fd); err != nil {
 +		switch {
 +		case errors.Is(err, platform.ErrNotOwner):
 +			return nil, ErrNotOwner
@@ -4787,39 +5295,98 @@ Expected: FAIL: `TestPermissiveFileIsRefusedWithoutReadingIt` (the error lacks t
 +		}
 +		return nil, err
  	}
- 	data, err := os.ReadFile(f.Path)
+ 	data, err := io.ReadAll(io.LimitReader(fd, 1<<20))
  	if err != nil {
 ```
+
+`internal/credentials/open_unix.go` (every Unix, not only darwin and linux; the uid check moves into `platform.CheckPrivateFile`):
+
+```diff
+--- a/internal/credentials/open_unix.go
++++ b/internal/credentials/open_unix.go
+@@ -1,4 +1,4 @@
+-//go:build darwin || linux
++//go:build unix
+ 
+ package credentials
+ 
+@@ -28,9 +28,3 @@ func openChecked(path string) (*os.File, fs.FileInfo, error) {
+ 	}
+ 	return fd, st, nil
+ }
+-
+-// ownedByMe reports whether st belongs to the current user.
+-func ownedByMe(st fs.FileInfo) bool {
+-	sys, ok := st.Sys().(*syscall.Stat_t)
+-	return !ok || int(sys.Uid) == os.Getuid()
+-}
+```
+
+Rename Phase 4's fallback to the Windows file and replace its content:
+
+```bash
+git mv internal/credentials/open_other.go internal/credentials/open_windows.go
+```
+
+`internal/credentials/open_windows.go` (Plan decision 25: the documented `Lstat`→open fallback, privacy checked on the handle):
+
+```go
+//go:build windows
+
+package credentials
+
+import (
+	"io/fs"
+	"os"
+)
+
+// openChecked refuses a symlink or other reparse point at path (Lstat), then
+// opens it and returns the handle's own FileInfo. Windows has no O_NOFOLLOW;
+// the gap between the Lstat and the open needs write access to CONFIG_DIR,
+// which is private to the user (owner-only DACL), and read checks the
+// privacy of the handle it reads (platform.CheckPrivateFile).
+func openChecked(path string) (*os.File, fs.FileInfo, error) {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, st, nil
+	}
+	fd, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	fst, err := fd.Stat()
+	if err != nil {
+		fd.Close()
+		return nil, nil, err
+	}
+	return fd, fst, nil
+}
+```
+
+- [ ] **Step 4: Implement the jail changes**
 
 `internal/backend/toolloop/jail.go`:
 
 ```diff
 --- a/internal/backend/toolloop/jail.go
 +++ b/internal/backend/toolloop/jail.go
-@@ -12,6 +12,8 @@
+@@ -10,10 +10,11 @@ import (
+ 	"os"
+ 	"path/filepath"
  	"strings"
+-	"syscall"
  
  	"github.com/bmatcuk/doublestar/v4"
+ 	"golang.org/x/text/cases"
 +
 +	"herdr-dots/internal/platform"
  )
  
  var (
-@@ -28,9 +30,12 @@
- 
- // Denied reports whether rel (slash-separated, relative to the root) matches a
- // deny glob, at the root or in any subdirectory. Unmatchable globs are skipped.
-+// Matching ignores case: on Windows and default macOS file systems ".ENV"
-+// opens ".env", so a cased name must not slip past the list.
- func Denied(rel string, globs []string) bool {
--	rel = strings.TrimPrefix(filepath.ToSlash(rel), "./")
-+	rel = strings.ToLower(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
- 	for _, g := range globs {
-+		g = strings.ToLower(g)
- 		if ok, _ := doublestar.Match(g, rel); ok {
- 			return true
- 		}
-@@ -91,7 +96,9 @@
+@@ -191,7 +192,9 @@ func (r *resolver) resolve(root, p string, deny []string) (abs, rel string, err
  	if !ok {
  		return "", "", ErrOutsideRoot
  	}
@@ -4830,6 +5397,27 @@ Expected: FAIL: `TestPermissiveFileIsRefusedWithoutReadingIt` (the error lacks t
  		return "", "", ErrDenied
  	}
  	real, err := filepath.EvalSymlinks(joined)
+@@ -277,13 +280,14 @@ func walkInside(rr, rel string) error {
+ }
+ 
+ // openVerified opens abs (a path ResolveInRoot returned) for reading and closes
+-// the check-to-open race: O_NOFOLLOW stops a symlink swapped in for the last
+-// component, and after the open the path must still be its own fully resolved
+-// form (so no parent was swapped for a symlink) and name the very file opened.
+-// O_NONBLOCK keeps a FIFO swapped in from hanging the run; callers must still
+-// require a regular file or directory.
++// the check-to-open race: platform.OpenNoFollow stops a symlink swapped in for
++// the last component (O_NOFOLLOW on Unix; on Windows an Lstat that refuses
++// symlinks and reparse points), and after the open the path must still be its
++// own fully resolved form (so no parent was swapped for a symlink) and name
++// the very file opened. On Unix O_NONBLOCK keeps a FIFO swapped in from
++// hanging the run; callers must still require a regular file or directory.
+ func openVerified(abs string) (*os.File, error) {
+-	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
++	f, err := platform.OpenNoFollow(abs)
+ 	if err != nil {
+ 		return nil, err
+ 	}
 ```
 
 `internal/backend/toolloop/tools.go`:
@@ -4837,11 +5425,8 @@ Expected: FAIL: `TestPermissiveFileIsRefusedWithoutReadingIt` (the error lacks t
 ```diff
 --- a/internal/backend/toolloop/tools.go
 +++ b/internal/backend/toolloop/tools.go
-@@ -15,9 +15,10 @@
- 	"regexp"
- 	"sort"
- 	"strings"
--	"syscall"
+@@ -20,6 +20,8 @@ import (
+ 	"unicode/utf8"
  
  	"github.com/bmatcuk/doublestar/v4"
 +
@@ -4849,45 +5434,159 @@ Expected: FAIL: `TestPermissiveFileIsRefusedWithoutReadingIt` (the error lacks t
  )
  
  // Tool is one read-only tool offered to a model. Schema is a JSON schema
-@@ -135,7 +136,7 @@
- 	if err != nil {
- 		return "", err
- 	}
--	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-+	f, err := platform.OpenNoFollow(abs)
- 	if err != nil {
- 		return "", fmt.Errorf("open %s: %v", rel, errors.Unwrap(err))
- 	}
-@@ -232,7 +233,7 @@
+@@ -83,15 +85,17 @@ func Note(want bool, cwd string, tools bool) string {
+ 	return ""
+ }
  
- // grepFile appends matches and reports whether the match cap was reached.
- func (r repo) grepFile(abs, rel string, re *regexp.Regexp, b *strings.Builder, matches *int) bool {
--	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-+	f, err := platform.OpenNoFollow(abs)
+-// Unavailable reports whether root is too broad for repo tools: "/", the
+-// user's home directory, or any ancestor of it. A pane started in $HOME would
+-// otherwise expose dotfiles and credentials the deny-list can't enumerate.
++// Unavailable reports whether root is too broad for repo tools: a file
++// system root ("/", or on Windows a drive root such as C:\ or a share root),
++// the user's home directory, or any ancestor of it. A pane started in $HOME
++// would otherwise expose dotfiles and credentials the deny-list can't
++// enumerate.
+ func Unavailable(root string) bool {
+ 	rr, err := filepath.EvalSymlinks(root)
  	if err != nil {
- 		return false
+ 		return false // a missing root yields tools that fail, never a panic
  	}
-@@ -332,9 +333,10 @@
- // gitFiles runs git with hooks and fsmonitor disabled: a repo's own config
- // must never make a read-only dot execute a program.
- func gitFiles(ctx context.Context, root string) ([]string, error) {
--	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-+	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath="+platform.DevNull,
- 		"-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
- 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+-	if rr == string(filepath.Separator) {
++	if filepath.Dir(rr) == rr { // a file system root on any OS
+ 		return true
+ 	}
+ 	rootInfo, err := os.Stat(rr)
+@@ -498,11 +502,12 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
+ 	if fi, err := os.Lstat(gitDir); err != nil || !fi.IsDir() {
+ 		return nil, errors.New("not a git work tree root")
+ 	}
+-	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
++	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=", "-c", "core.hooksPath="+platform.DevNull,
+ 		"--git-dir="+gitDir, "--work-tree="+root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+ 	cmd.Dir = root
+ 	cmd.Env = gitEnv(os.Environ())
+ 	cmd.WaitDelay = 500 * time.Millisecond
 +	platform.HideWindow(cmd)
  	var out bytes.Buffer
  	cmd.Stdout, cmd.Stderr = &out, io.Discard
  	if err := cmd.Run(); err != nil {
+@@ -520,11 +525,13 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
+ // gitEnv filters env for a git child: no HERDR_*/Claude session variables
+ // (the CleanEnv set) and none of the GIT_* variables that would override the
+ // pinned git dir or the config. (A local copy: internal/backend imports this
+-// package, and memory's filter is unexported.)
++// package, and memory's filter is unexported.) Names compare in
++// platform.EnvKey form, so case-insensitively on Windows.
+ func gitEnv(env []string) []string {
+ 	out := make([]string, 0, len(env)+3)
+ 	for _, kv := range env {
+-		name, _, _ := strings.Cut(kv, "=")
++		raw, _, _ := strings.Cut(kv, "=")
++		name := platform.EnvKey(raw)
+ 		if strings.HasPrefix(name, "HERDR_") || strings.HasPrefix(name, "GIT_CONFIG") || strings.HasPrefix(name, "CLAUDE_CODE_") {
+ 			continue
+ 		}
 ```
 
-`internal/backend/ollama/ollama.go` (the import block and `mapErr` from Phase 4 Task 13):
+- [ ] **Step 5: Implement the connection-refused checks (Plan decision 26)**
+
+`internal/backend/api.go`:
+
+```diff
+--- a/internal/backend/api.go
++++ b/internal/backend/api.go
+@@ -5,9 +5,9 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"strings"
+-	"syscall"
+ 	"time"
+ 
++	"herdr-dots/internal/platform"
+ 	"herdr-dots/internal/pricing"
+ 	"herdr-dots/internal/textutil"
+ )
+@@ -81,7 +81,7 @@ func (u unreachable) Unwrap() error        { return u.error }
+ // connection refused or a timeout. Validation errors (bad key, unknown
+ // model) are not.
+ func Unreachable(err error) bool {
+-	return errors.Is(err, ErrUnreachable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, syscall.ECONNREFUSED)
++	return errors.Is(err, ErrUnreachable) || errors.Is(err, context.DeadlineExceeded) || platform.ConnRefused(err)
+ }
+ 
+ // ErrRefused marks a provider safety refusal. It is a run error: it reaches
+```
+
+`internal/backend/openaiapi/openai.go`:
+
+```diff
+--- a/internal/backend/openaiapi/openai.go
++++ b/internal/backend/openaiapi/openai.go
+@@ -11,7 +11,6 @@ import (
+ 	"fmt"
+ 	"sort"
+ 	"strings"
+-	"syscall"
+ 	"time"
+ 
+ 	"github.com/openai/openai-go/v3"
+@@ -23,6 +22,7 @@ import (
+ 	"herdr-dots/internal/backend/httpx"
+ 	"herdr-dots/internal/backend/toolloop"
+ 	"herdr-dots/internal/credentials"
++	"herdr-dots/internal/platform"
+ 	"herdr-dots/internal/pricing"
+ 	"herdr-dots/internal/textutil"
+ )
+@@ -278,7 +278,7 @@ func mapErr(err error, key, model string) error {
+ 		}
+ 	}
+ 	msg := errors.New(clip(credentials.Redact(err.Error(), key), 300))
+-	if errors.Is(err, syscall.ECONNREFUSED) {
++	if platform.ConnRefused(err) {
+ 		return backend.MarkUnreachable(msg)
+ 	}
+ 	return msg
+```
+
+`internal/backend/anthropicapi/anthropic.go`:
+
+```diff
+--- a/internal/backend/anthropicapi/anthropic.go
++++ b/internal/backend/anthropicapi/anthropic.go
+@@ -8,7 +8,6 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+-	"syscall"
+ 	"time"
+ 
+ 	"github.com/anthropics/anthropic-sdk-go"
+@@ -19,6 +18,7 @@ import (
+ 	"herdr-dots/internal/backend/httpx"
+ 	"herdr-dots/internal/backend/toolloop"
+ 	"herdr-dots/internal/credentials"
++	"herdr-dots/internal/platform"
+ 	"herdr-dots/internal/pricing"
+ 	"herdr-dots/internal/textutil"
+ )
+@@ -267,7 +267,7 @@ func mapErr(err error, key, model string) error {
+ 		}
+ 	}
+ 	msg := errors.New(clip(credentials.Redact(err.Error(), key), 300))
+-	if errors.Is(err, syscall.ECONNREFUSED) {
++	if platform.ConnRefused(err) {
+ 		return backend.MarkUnreachable(msg)
+ 	}
+ 	return msg
+```
+
+`internal/backend/ollama/ollama.go`:
 
 ```diff
 --- a/internal/backend/ollama/ollama.go
 +++ b/internal/backend/ollama/ollama.go
-@@
- 	"net"
+@@ -13,12 +13,12 @@ import (
  	"net/url"
  	"os"
  	"strings"
@@ -4899,40 +5598,84 @@ Expected: FAIL: `TestPermissiveFileIsRefusedWithoutReadingIt` (the error lacks t
  	"herdr-dots/internal/backend/toolloop"
 +	"herdr-dots/internal/platform"
  	"herdr-dots/internal/pricing"
-@@
+ 	"herdr-dots/internal/textutil"
+ 	"herdr-dots/internal/transcript"
+@@ -419,7 +419,7 @@ func mapErr(err error, base, model string) error {
+ 		}
+ 		return fmt.Errorf("ollama error: %s", textutil.SanitizeModelText(se.Error()))
+ 	}
 -	if errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(err.Error(), "connection refused") {
 +	if platform.ConnRefused(err) || strings.Contains(err.Error(), "connection refused") {
- 		return fmt.Errorf("Ollama isn't running at %s: start it with `ollama serve`", base)
+ 		return backend.MarkUnreachable(fmt.Errorf("Ollama isn't running at %s: start it with `ollama serve`", base))
  	}
+ 	return fmt.Errorf("ollama at %s: %s", base, textutil.SanitizeModelText(err.Error()))
 ```
 
-These two hunks have no line numbers: apply them by hand (find the lines shown with `-`, replace them with the `+` lines). If `syscall` is still used elsewhere in `ollama.go`, keep the import; `go build` tells you.
+`internal/backend/httpx/httpx.go`:
 
-- [ ] **Step 4: Run the tests to see them pass**
+```diff
+--- a/internal/backend/httpx/httpx.go
++++ b/internal/backend/httpx/httpx.go
+@@ -16,10 +16,10 @@ import (
+ 	"os"
+ 	"strconv"
+ 	"strings"
+-	"syscall"
+ 	"time"
+ 
+ 	"herdr-dots/internal/credentials"
++	"herdr-dots/internal/platform"
+ )
+ 
+ // maxBody caps how much of a response is read.
+@@ -243,13 +243,17 @@ func (c Client) scrub(err error) error {
+ 			s.causes = append(s.causes, sentinel)
+ 		}
+ 	}
++	if platform.ConnRefused(err) {
++		s.causes = append(s.causes, platform.ErrConnRefused)
++	}
+ 	return s
+ }
+ 
+ // keptSentinels are what a scrubbed error still matches with errors.Is: the
+-// deadline and cancellation (callers report timeouts), and connection
+-// refused (the editor's save check treats it as "unreachable").
+-var keptSentinels = []error{context.DeadlineExceeded, context.Canceled, os.ErrDeadlineExceeded, syscall.ECONNREFUSED}
++// deadline and cancellation (callers report timeouts). Connection refused
++// is kept too, as platform.ErrConnRefused (platform.ConnRefused matches it on
++// every OS; the editor's save check treats it as "unreachable").
++var keptSentinels = []error{context.DeadlineExceeded, context.Canceled, os.ErrDeadlineExceeded}
+ 
+ // scrubbed is a redacted error. It unwraps only to sentinels, never to the
+ // original error, whose text may carry the secret.
+```
+
+- [ ] **Step 6: Run the tests to see them pass**
 
 Run: `gofmt -w internal && GOTOOLCHAIN=local go test -race ./internal/credentials/ ./internal/backend/...`
-Expected: PASS, including Phase 4's `TestResolveInRootRefusesEscapes`, `TestResolveInRootDeniesSecretsEvenThroughSymlinks`, `TestReadFileOffsetLimitAndRefusals`, `TestGrepAndListRespectGitignoreAndDenyList`, the redaction tests, and the new `TestDeniedIgnoresCase`, `TestResolveInRootNeverReachesAStreamOrDevice`, `TestPermissiveFileIsRefusedWithoutReadingIt`, `TestMapErrNamesAStoppedServer`.
+Expected: PASS, including Phase 4's `TestResolveInRootRefusesEscapes`, `TestDeniedIsCaseInsensitive`, `TestDeniedUsesFullUnicodeCaseFolding`, `TestResolveInRootRefusesCaseVariantsOnDisk`, `TestNoToolsForHomeOrAboveIt`, `TestRootReachingHomeThroughASuffixIsUnavailable`, `TestSymlinkRefusedEvenWhenTargetIsOwnerOnly`, the redaction tests, `backend.TestUnreachable`, and the new `TestResolveInRootNeverReachesAStreamOrDevice`, `TestPermissiveFileIsRefusedWithoutReadingIt`, `TestMapErrNamesAStoppedServer`.
 
-- [ ] **Step 5: Cross-OS gate**
+- [ ] **Step 7: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
-GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./internal/credentials/ ./internal/backend/toolloop/ ./internal/backend/ollama/
-mkdir -p "${TMPDIR:-/tmp}/p6-win" && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p6-win/" ./internal/credentials/ ./internal/backend/toolloop/ ./internal/backend/ollama/
+GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./internal/credentials/ ./internal/backend/...
+mkdir -p "${TMPDIR:-/tmp}/p6-win" && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p6-win/" ./internal/credentials/ ./internal/backend/...
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr-dots' | sort -u
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five succeed; the last two print only `# herdr-dots/cmd/herdr-dots` (Task 6, same wave) plus Task 1's Phase 5 packages.
+Expected: `gofmt` prints nothing; the next five succeed; the last two print only `# herdr-dots/cmd/herdr-dots` until Task 6 is merged (Wave 2's list), and nothing once it is.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add internal/credentials internal/backend/toolloop internal/backend/ollama
-git commit -m "feat(credentials): DACL privacy check; tool jail denies case tricks and NTFS streams (Phase 6)"
+git add internal/credentials internal/backend/toolloop internal/backend/ollama internal/backend/api.go internal/backend/openaiapi/openai.go internal/backend/anthropicapi/anthropic.go internal/backend/httpx
+git commit -m "feat(credentials): privacy checked on the opened file per OS; tool jail denies NTFS tricks and drive roots; refused connections recognised on Windows (Phase 6)"
 ```
 
 ---
@@ -4942,7 +5685,7 @@ git commit -m "feat(credentials): DACL privacy check; tool jail denies case tric
 **Depends on:** Task 2 (`Cmd.Cleanup`, `Cmd.Close`, `Preflight`, `platform.LookPath`, `IsBatchFile`, `MaxInlinePrompt`, `ErrCmdTooLong`, `ErrUnsafeBatchArg`), Task 3 (`platform.SecureDir`, `SecureFile`, `platformtest.AssertPrivateFile`). Wave 2.
 
 **Files:**
-- Modify: `internal/backend/claude.go` (Phase 4 changed `parseClaude` only), `internal/backend/codex.go` (Phase 5 appends `-c mcp_servers.herdr-dots.enabled=false` in `BuildCmd`)
+- Modify: `internal/backend/claude.go` (Phase 4 changed `parseClaude` only), `internal/backend/codex.go` (Phase 5 appends `codexMCPOff(env)` in `BuildCmd`; Task 10 ports `codex_mcp.go`, not this file)
 - Create: `internal/backend/runfiles.go`
 - Test: `internal/backend/runfiles_test.go`, `internal/backend/runfiles_windows_test.go`
 
@@ -5221,7 +5964,7 @@ func writeRunFiles(files map[string]string) (map[string]string, func(), error) {
 ```diff
 --- a/internal/backend/claude.go
 +++ b/internal/backend/claude.go
-@@ -6,9 +6,10 @@
+@@ -6,9 +6,10 @@ import (
  	"encoding/json"
  	"fmt"
  	"os"
@@ -5233,7 +5976,7 @@ func writeRunFiles(files map[string]string) (map[string]string, func(), error) {
  )
  
  type ClaudeCLI struct {
-@@ -34,21 +35,47 @@
+@@ -34,21 +35,47 @@ func (c ClaudeCLI) environ() []string {
  }
  
  func (c ClaudeCLI) Check(context.Context) error {
@@ -5284,7 +6027,7 @@ func writeRunFiles(files map[string]string) (map[string]string, func(), error) {
  	}
  	if r.Model != "" {
  		args = append(args, "--model", r.Model)
-@@ -61,14 +88,19 @@
+@@ -61,14 +88,19 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
  	// Denied args (dots.Validate rejects them too) are dropped so they can never
  	// override the flags above.
  	args = append(args, dots.SafeArgs(c.Kind(), r.Args)...)
@@ -5313,7 +6056,7 @@ func writeRunFiles(files map[string]string) (map[string]string, func(), error) {
 ```diff
 --- a/internal/backend/codex.go
 +++ b/internal/backend/codex.go
-@@ -8,9 +8,9 @@
+@@ -8,9 +8,9 @@ import (
  	"errors"
  	"fmt"
  	"os"
@@ -5324,7 +6067,7 @@ func writeRunFiles(files map[string]string) (map[string]string, func(), error) {
  )
  
  // CodexCLI runs `codex exec --json` in a read-only sandbox. Codex has no
-@@ -39,7 +39,7 @@
+@@ -39,7 +39,7 @@ func (c CodexCLI) environ() []string {
  }
  
  func (c CodexCLI) Check(context.Context) error {
@@ -5333,7 +6076,7 @@ func writeRunFiles(files map[string]string) (map[string]string, func(), error) {
  		return fmt.Errorf("codex CLI not found on PATH: install it with `npm i -g @openai/codex`")
  	}
  	return nil
-@@ -63,6 +63,9 @@
+@@ -65,6 +65,9 @@ func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
  		return Result{}, err
  	}
  	out, stderr, err := c.Runner.Run(ctx, c.BuildCmd(r))
@@ -5353,7 +6096,7 @@ Expected: PASS, including `TestShortPromptStaysInArgvExactlyAsV1`, `TestLongProm
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -5363,7 +6106,7 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five succeed; the last two print only Wave 2's list (`# herdr-dots/cmd/herdr-dots`, `# herdr-dots/internal/backend/toolloop`, `# herdr-dots/internal/credentials`, plus Task 1's Phase 5 packages).
+Expected: `gofmt` prints nothing; the next five succeed; the last two print only Wave 2's list (`# herdr-dots/internal/backend/toolloop`, `# herdr-dots/cmd/herdr-dots`, each until its task merges).
 
 - [ ] **Step 6: Commit**
 
@@ -5374,18 +6117,24 @@ git commit -m "feat(backend): long system prompts via a private file; cmd.exe-sa
 
 ---
 
-### Task 10: Phase 5 ports and the portability guard
+### Task 10: Phase 5 ports, the memory editor and the portability guard
 
-**Depends on:** Tasks 6–9 (Wave 3). Phase 5's plan was written in parallel with this one, so this task works from the Phase 5 spec's interfaces (`internal/mcpinstall`, `internal/mcpserver`, `cmd/herdr-dots/mcp.go`, `cmd/herdr-dots/setupmcp.go`) and lets a test find the exact lines to change instead of guessing them.
+**Depends on:** Tasks 2–9 (Wave 3): `platform.HomeEnv`, `EnvKey`, `Command`, `LookPath`, `CodexConfig`, `ClaudeUserConfig` (Task 2), `platform.SecureDir`, `platformtest.Endpoint`, `platformtest.AssertPrivateFile` (Task 3), `ipc.Listen` and `paths.Paths.EngineEndpoint` (Task 6). Reconciled (Plan decision 24): every Phase 5 port below is a concrete diff against the merged Phase 5 code; the guard confirms there is nothing left.
 
 **Files:**
-- Test: `internal/platform/portability_test.go`
-- Modify: the Phase 5 (and any Phase 3) files the guard reports, typically `internal/mcpinstall/*.go`, `internal/mcpserver/*.go`, `cmd/herdr-dots/mcp.go`, `cmd/herdr-dots/setupmcp.go`, and their `_test.go` files
+- Test: `internal/platform/portability_test.go`, `internal/platform/editor_unix_test.go`, `internal/platform/editor_windows_test.go`
+- Create: `internal/platform/editor_unix.go`, `internal/platform/editor_windows.go`
+- Modify: `internal/mcpinstall/install.go`, `internal/mcpinstall/install_test.go`, `internal/mcpinstall/final_test.go`
+- Create: `internal/mcpinstall/final_unix_test.go`
+- Modify: `internal/backend/codex_mcp.go`, `internal/backend/codex_mcp_test.go`
+- Modify: `internal/mcpserver/engine_test.go`, `internal/engine/ask_test.go`
+- Modify: `cmd/herdr-dots/setupmcp.go`, `cmd/herdr-dots/setupmcp_test.go`, `cmd/herdr-dots/memory.go`, `cmd/herdr-dots/memory_test.go`
+- Create: `cmd/herdr-dots/memory_unix_test.go`
 - Modify: `docs/superpowers/notes/2026-10-08-phase-6-verification.md` (Phase 5 section)
 
 **Interfaces:**
-- Consumes: every `platform` helper from Tasks 2–3 (`LookPath`, `Command`, `CommandContext`, `CodexConfig`, `ClaudeUserConfig`, `DevNull`, `CheckPrivate`, `StartTree`, `StartDetached`, `HideWindow`), `paths.Paths.EngineEndpoint`, `ipc.Dial`, `platformtest`.
-- Produces: `TestProductCodeHasNoUnixOnlyCalls` (package `platform`), which fails on any of these in untagged, non-test product code outside `internal/platform`: `"/dev/null"`, `syscall.Kill(`, `Setpgid`, `Setsid`, `syscall.Flock`, `syscall.O_NOFOLLOW`, `syscall.Stat_t`, `syscall.ECONNREFUSED`, `"unix"`, `os.Getuid()`, `exec.LookPath(`, `runtime.GOOS`, `.EngineSock()`, `"/tmp`, `".claude"`, `".claude.json"`, `".codex"`, `Command("claude"`, `Command("codex"`, `(ctx, "claude"`, `(ctx, "codex"`. Phases 7–9 inherit it.
+- Consumes: `platform.HomeEnv`, `platform.EnvKey(name string) string`, `platform.Command(name string, args []string) (*exec.Cmd, error)`, `platform.LookPath(name string) (string, error)`, `platform.CodexConfig(home string) string`, `platform.ClaudeUserConfig(home string) string`, `platform.SecureDir(path string) error`, `platformtest.Endpoint(t testing.TB) string`, `platformtest.AssertPrivateFile`, `ipc.Listen(endpoint string) (net.Listener, error)`.
+- Produces: `func platform.EditorCommand(editor, file string) *exec.Cmd` (Unix: `sh -c '<editor> "$1"' sh <file>`, byte-identical to Phase 2; Windows: `%ComSpec% /d /s /c "<editor> "<file>""`; Plan decision 30). `TestProductCodeHasNoUnixOnlyCalls` (package `platform`), which fails on any of these in untagged, non-test product code outside `internal/platform`: `"/dev/null"`, `syscall.Kill(`, `Setpgid`, `Setsid`, `syscall.Flock`, `syscall.O_NOFOLLOW`, `syscall.Stat_t`, `syscall.ECONNREFUSED`, `"unix"`, `os.Getuid()`, `exec.LookPath(`, `runtime.GOOS`, `.EngineSock()`, `"/tmp`, `".claude"`, `".claude.json"`, `".codex"`, `Command("claude"`, `Command("codex"`, `(ctx, "claude"`, `(ctx, "codex"`, `exec.Command("sh"`, `"HOME"`. Phases 7–9 inherit it. Behavior: `setup-mcp` runs `claude mcp …` / `codex mcp …` through `platform.Command` (a `claude.cmd` shim is quoted for cmd.exe; a `%`, `"` or `!` in a path is refused with `platform.ErrUnsafeBatchArg` before anything runs) and finds them with `platform.LookPath`; `mcpinstall.Env.ClaudeConfigPath`/`CodexConfigPath` use the platform helpers; a codex dot run finds `%USERPROFILE%\.codex\config.toml` on Windows; `memory edit` works without `sh`.
 
 - [ ] **Step 1: Write the guard**
 
@@ -5426,6 +6175,8 @@ var unixOnly = map[string]string{
 	`Command("codex"`:      "platform.Command (safe for a codex.cmd shim)",
 	`(ctx, "claude"`:       "platform.Command (safe for a claude.cmd shim)",
 	`(ctx, "codex"`:        "platform.Command (safe for a codex.cmd shim)",
+	`exec.Command("sh"`:    "platform.EditorCommand (no sh on Windows)",
+	`"HOME"`:               "platform.HomeEnv or os.UserHomeDir (Windows reads USERPROFILE)",
 }
 
 // moduleRoot walks up from the test's directory to go.mod.
@@ -5527,66 +6278,955 @@ func itoa(n int) string {
 }
 ```
 
-- [ ] **Step 2: Run it to see what Phase 5 needs**
+- [ ] **Step 2: Run it to see what Phases 2 and 5 need**
 
 Run: `GOTOOLCHAIN=local go test ./internal/platform/ -run TestProductCodeHasNoUnixOnlyCalls -v 2>&1 | grep -E 'portability_test|^(--- |ok|FAIL)'`
-Expected: either PASS (Phase 5 is already portable) or FAIL with one line per finding, `path:line: pattern (use replacement)`. Paste the findings into the notes file under a new heading `## Phase 5 port (Task 10)`. Every finding is in a Phase 3–5 file (v1, Phase 2 and Phase 4 code was ported in Waves 1–2; if a finding points there, fix it too and say so in the notes).
+Expected (replayed; the order of findings within a line may vary): FAIL with exactly these six findings, all fixed in Step 4:
 
-- [ ] **Step 3: Fix every finding**
-
-Apply the replacement the guard names. The usual Phase 5 cases, with the exact code:
-
-| Guard finding | Replace with |
-|---|---|
-| `exec.LookPath("claude")` (or `"codex"`) | `platform.LookPath("claude")` |
-| `cmd := exec.Command("claude", args...)` (or `"codex"`) | `cmd, err := platform.Command("claude", args)` followed by `if err != nil { return err }` (in a function returning more values, return their zero values with `err`) |
-| `cmd := exec.CommandContext(ctx, "codex", args...)` | `cmd, err := platform.CommandContext(ctx, "codex", args)` followed by the same error check |
-| `filepath.Join(home, ".codex", "config.toml")` | `platform.CodexConfig(home)` |
-| `filepath.Join(home, ".claude.json")` | `platform.ClaudeUserConfig(home)` |
-| `"/dev/null"` | `platform.DevNull` (product code) or `os.DevNull` (tests) |
-| `.EngineSock()` | `.EngineEndpoint()` |
-| a mode-bit or uid privacy check (`Perm()&0o077`, `syscall.Stat_t`, `os.Getuid()`) | `platform.CheckPrivate(path)`, mapping `platform.ErrNotPrivate` / `platform.ErrNotOwner` to the package's own errors and adding `platform.FixPrivateHint(path)` to the message |
-| `syscall.Kill`, `Setpgid`, `Setsid` | `platform.StartTree` + `Tree.Kill` + `defer tree.Close()`, or `platform.StartDetached` |
-| `runtime.GOOS` | move the OS-specific code into `<name>_unix.go` (first line `//go:build unix`) and `<name>_windows.go` (first line `//go:build windows`) |
-| `"unix"` | `ipc.Listen` / `ipc.Dial` |
-| `"/tmp...` | `os.TempDir()` |
-
-Two Phase 5 behaviors the guard can't see; check them by reading the code:
-- **The installed server command must be the running binary's own path.** `setup-mcp` must take it from `os.Executable()` (it ends in `.exe` on Windows). If Phase 5 builds it as `filepath.Join(<plugin root>, "bin", "herdr-dots")`, replace that expression with the result of `os.Executable()` (return its error), because Claude Code and Codex start the server without `PATHEXT` help.
-- **Every child `setup-mcp` starts (`claude mcp add`, `claude mcp list`, `codex mcp add`, `codex mcp list`) goes through `platform.Command`/`CommandContext`.** With npm installs these are `claude.cmd`/`codex.cmd`; `platform.Command` quotes the config and state dir paths (spaces, `&`) for cmd.exe and refuses `%` or `"` in them with `platform.ErrUnsafeBatchArg`, which `setup-mcp` prints as is.
-
-- [ ] **Step 4: Port the Phase 5 tests**
-
-Run the audit from Task 11 Step 2 on the Phase 5 test files only:
-
-```bash
-grep -rnE 'Mode\(\)\.Perm\(\)|net\.Listen\("unix"|"sh", "-c"|exec\.Command\("sh"|/bin/sh|os\.Symlink\(|os\.Getuid|0o644\)|"/dev/null"|filepath\.Join\("/' --include='*_test.go' internal/mcpinstall internal/mcpserver cmd/herdr-dots | grep -v '_unix_test.go' | grep -v 'platform_manifest_test.go'
+```
+cmd/herdr-dots/memory.go:649: exec.Command("sh" (use platform.EditorCommand (no sh on Windows))
+internal/backend/codex_mcp.go:51: "HOME" (use platform.HomeEnv or os.UserHomeDir (Windows reads USERPROFILE))
+internal/backend/codex_mcp.go:59: ".codex" (use platform.CodexSessionsDir / CodexConfig)
+internal/mcpinstall/install.go:67: ".claude.json" (use platform.ClaudeUserConfig)
+internal/mcpinstall/install.go:69: ".claude.json" (use platform.ClaudeUserConfig)
+internal/mcpinstall/install.go:77: ".codex" (use platform.CodexSessionsDir / CodexConfig)
 ```
 
-Fix each hit with these rules (Task 11 uses the same table for Phase 3–4 tests):
+Line numbers are those at `a47427d`. Any other finding comes from a commit after `a47427d`: fix it with the replacement the guard names and list it in the notes (Step 8).
 
-| Pattern in a test | Fix |
-|---|---|
-| `st.Mode().Perm() != 0o600` or `!= 0o700`, asserting privacy | `platformtest.AssertPrivateFile(t, path)` / `platformtest.AssertPrivateDir(t, path)` (drop the now-unused `os.Stat`) |
-| `Mode().Perm()` compared with a mode the test itself wrote (`0o640`) | take `before, _ := os.Stat(path)` before the action and compare with `before.Mode().Perm()` (Windows reports `0666`) |
-| `os.WriteFile(..., 0o644)` or `os.Chmod(..., 0o644)` to make a file readable by others | a helper `readableByOthers(t, path)` in `<pkg>_unix_test.go` (`os.Chmod(path, 0o644)`) and `<pkg>_windows_test.go` (copy `setDACL`, `me` and `readableByOthers` from `internal/credentials/perms_windows_test.go`) |
-| `net.Listen("unix", p)` | `herdrtest.Listen(p)` for a fake Herdr; `ipc.Listen(endpoint)` with a `testEndpoint(t)` for the engine (copy `testEndpoint` from `internal/ipc/endpoint_unix_test.go` and `endpoint_windows_test.go`) |
-| a test that runs `sh`, `/bin/sh`, `sleep` or `cat` | move it into `<pkg>_unix_test.go` with `//go:build unix` as the first line; add a `cmd.exe` version in `<pkg>_windows_test.go` only when the code under test behaves differently on Windows |
-| `os.Symlink` that fails | `if runtime.GOOS == "windows" { t.Skipf("symlinks unavailable: %v", err) }` before `t.Fatal(err)` (symlinks need Developer Mode or admin) |
-| an absolute Unix path (`"/c"`, `"/repo"`) given to code that calls `filepath.IsAbs`, or compared with a `filepath.Join` result | `platformtest.Abs("c")` for inputs, `filepath.Join(...)` for expected values |
-| `"/dev/null"` | `os.DevNull` |
+- [ ] **Step 3: Write the editor tests**
 
-Expected afterwards: the command prints only lines where the path is opaque data (an absolute path that the code under test never resolves on disk or checks with `filepath.IsAbs`).
+`internal/platform/editor_unix_test.go`:
 
-- [ ] **Step 5: Run the guard and the tests**
+```go
+//go:build unix
 
-Run: `gofmt -w internal cmd && GOTOOLCHAIN=local go test -race ./...`
-Expected: PASS, including `TestProductCodeHasNoUnixOnlyCalls`.
+package platform
 
-- [ ] **Step 6: Cross-OS gate (everything green from here on)**
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestEditorCommandPassesTheFileAsAnArgument(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "my memory; echo INJECTED.toml")
+	out := filepath.Join(dir, "out.txt")
+	cmd := EditorCommand("printf '%s' >"+out, file)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(out); string(got) != file {
+		t.Fatalf("editor saw %q, want %q", got, file)
+	}
+}
+```
+
+`internal/platform/editor_windows_test.go` (runs only on Windows; no non-ASCII in the path, because cmd.exe's `echo` writes the OEM code page):
+
+```go
+//go:build windows
+
+package platform
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// An editor given as a command line with a flag gets the file as one quoted
+// argument, even with spaces in both paths.
+func TestEditorCommandRunsTheEditorLineOnTheFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "my dir")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	editor := filepath.Join(dir, "my editor.cmd")
+	if err := os.WriteFile(editor, []byte("@echo off\r\necho [%1] [%2] > \"%~dp0seen.txt\"\r\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "memory file.toml")
+	if err := EditorCommand(`"`+editor+`" --wait`, file).Run(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "seen.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := strings.TrimSpace(string(got)); s != `[--wait] ["`+file+`"]` {
+		t.Fatalf("editor saw %s", s)
+	}
+}
+```
+
+Run: `GOTOOLCHAIN=local go test ./internal/platform/`
+Expected: FAIL to compile (`undefined: EditorCommand`).
+
+- [ ] **Step 4: Implement**
+
+`internal/platform/editor_unix.go`:
+
+```go
+//go:build unix
+
+package platform
+
+import "os/exec"
+
+// EditorCommand runs the user's editor command line (from $EDITOR, which may
+// carry flags such as "code --wait") on file through the shell: sh -c
+// '<editor> "$1"' sh <file>. file is passed as an argument, never parsed.
+func EditorCommand(editor, file string) *exec.Cmd {
+	return exec.Command("sh", "-c", editor+` "$1"`, "sh", file)
+}
+```
+
+`internal/platform/editor_windows.go`:
+
+```go
+//go:build windows
+
+package platform
+
+import (
+	"os/exec"
+	"syscall"
+)
+
+// EditorCommand runs the user's editor command line (from %EDITOR%, which
+// may carry flags such as "code --wait") on file through cmd.exe:
+// <comspec> /d /s /c "<editor> "<file>"". file is a path herdr-dots made
+// (a private temp file), so it holds no quote; the editor line is the user's
+// own setting and runs as they wrote it.
+func EditorCommand(editor, file string) *exec.Cmd {
+	shell := comspec()
+	cmd := exec.Command(shell)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: shell + ` /d /s /c "` + editor + ` "` + file + `""`}
+	return cmd
+}
+```
+
+`cmd/herdr-dots/memory.go` (Phase 2's `memory edit`: the editor through `platform.EditorCommand`, the temp directory made private on every OS):
+
+```diff
+--- a/cmd/herdr-dots/memory.go
++++ b/cmd/herdr-dots/memory.go
+@@ -9,7 +9,6 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"os"
+-	"os/exec"
+ 	"path/filepath"
+ 	"strings"
+ 	"text/tabwriter"
+@@ -18,6 +17,7 @@ import (
+ 	"herdr-dots/internal/config"
+ 	"herdr-dots/internal/memory"
+ 	"herdr-dots/internal/paths"
++	"herdr-dots/internal/platform"
+ 	"herdr-dots/internal/textutil"
+ )
+ 
+@@ -635,18 +635,22 @@ func (c *memCLI) edit(args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	// A private 0700 directory, removed with everything the editor leaves
+-	// in it (swap and backup files hold the same memory text).
++	// A private directory (0700; an owner-only DACL on Windows), removed
++	// with everything the editor leaves in it (swap and backup files hold the
++	// same memory text).
+ 	dir, err := os.MkdirTemp("", "herdr-dots-memory-*") // 0700
+ 	if err != nil {
+ 		return err
+ 	}
+ 	defer os.RemoveAll(dir)
++	if err := platform.SecureDir(dir); err != nil {
++		return err
++	}
+ 	file := filepath.Join(dir, "memory.toml")
+ 	if err := os.WriteFile(file, data, 0o600); err != nil {
+ 		return err
+ 	}
+-	cmd := exec.Command("sh", "-c", c.editor+` "$1"`, "sh", file)
++	cmd := platform.EditorCommand(c.editor, file) // sh -c on Unix, cmd.exe on Windows
+ 	cmd.Stdin, cmd.Stdout, cmd.Stderr = c.in, c.out, c.errOut
+ 	if err := cmd.Run(); err != nil {
+ 		return fmt.Errorf("edit: the editor failed: %w (nothing changed)", err)
+```
+
+`internal/mcpinstall/install.go` (Phase 5; `CLAUDE_CONFIG_DIR` and `CODEX_HOME` stay honored, Plan decision 29):
+
+```diff
+--- a/internal/mcpinstall/install.go
++++ b/internal/mcpinstall/install.go
+@@ -18,6 +18,7 @@ import (
+ 	"unicode"
+ 
+ 	"herdr-dots/internal/fsutil"
++	"herdr-dots/internal/platform"
+ )
+ 
+ type Client string
+@@ -61,20 +62,22 @@ func (e Env) get(k string) string {
+ 	return e.Getenv(k)
+ }
+ 
+-// ClaudeConfigPath is the file `claude mcp add --scope user` edits.
++// ClaudeConfigPath is the file `claude mcp add --scope user` edits
++// (platform.ClaudeUserConfig under CLAUDE_CONFIG_DIR or the home directory).
+ func (e Env) ClaudeConfigPath() string {
+ 	if d := e.get("CLAUDE_CONFIG_DIR"); d != "" {
+-		return filepath.Join(d, ".claude.json")
++		return platform.ClaudeUserConfig(d)
+ 	}
+-	return filepath.Join(e.Home, ".claude.json")
++	return platform.ClaudeUserConfig(e.Home)
+ }
+ 
+-// CodexConfigPath is Codex's user config.
++// CodexConfigPath is Codex's user config: CODEX_HOME/config.toml, else
++// platform.CodexConfig (~/.codex/config.toml, %USERPROFILE%\.codex on Windows).
+ func (e Env) CodexConfigPath() string {
+ 	if d := e.get("CODEX_HOME"); d != "" {
+ 		return filepath.Join(d, "config.toml")
+ 	}
+-	return filepath.Join(e.Home, ".codex", "config.toml")
++	return platform.CodexConfig(e.Home)
+ }
+ 
+ // Command is one CLI call; a MayFail command's failure is ignored (and its
+```
+
+`internal/backend/codex_mcp.go` (Phase 5's config lookup for a codex dot run):
+
+```diff
+--- a/internal/backend/codex_mcp.go
++++ b/internal/backend/codex_mcp.go
+@@ -6,6 +6,8 @@ import (
+ 	"strings"
+ 
+ 	"github.com/BurntSushi/toml"
++
++	"herdr-dots/internal/platform"
+ )
+ 
+ // CodexMCPServer is the Dots MCP server's name in Codex's config.toml
+@@ -40,15 +42,17 @@ func codexMCPOff(env []string) []string {
+ }
+ 
+ // codexConfigPath is the config.toml a codex child with env reads:
+-// $CODEX_HOME/config.toml, else $HOME/.codex/config.toml ("" when neither is set).
++// $CODEX_HOME/config.toml, else platform.CodexConfig of the home variable
++// (HOME; USERPROFILE on Windows), "" when neither is set. Names compare in
++// platform.EnvKey form, so case-insensitively on Windows.
+ func codexConfigPath(env []string) string {
+ 	var home, codexHome string
+ 	for _, kv := range env {
+ 		k, v, _ := strings.Cut(kv, "=")
+-		switch k {
+-		case "CODEX_HOME":
++		switch platform.EnvKey(k) {
++		case platform.EnvKey("CODEX_HOME"):
+ 			codexHome = v
+-		case "HOME":
++		case platform.EnvKey(platform.HomeEnv):
+ 			home = v
+ 		}
+ 	}
+@@ -56,7 +60,7 @@ func codexConfigPath(env []string) string {
+ 	case codexHome != "":
+ 		return filepath.Join(codexHome, "config.toml")
+ 	case home != "":
+-		return filepath.Join(home, ".codex", "config.toml")
++		return platform.CodexConfig(home)
+ 	}
+ 	return ""
+ }
+```
+
+`cmd/herdr-dots/setupmcp.go` (the installed command is already `os.Executable()` resolved through `EvalSymlinks`, so it ends in `.exe` on Windows; the children go through `platform.Command`):
+
+```diff
+--- a/cmd/herdr-dots/setupmcp.go
++++ b/cmd/herdr-dots/setupmcp.go
+@@ -7,13 +7,13 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"os"
+-	"os/exec"
+ 	"path/filepath"
+ 	"strings"
+ 	"time"
+ 
+ 	"herdr-dots/internal/mcpinstall"
+ 	"herdr-dots/internal/paths"
++	"herdr-dots/internal/platform"
+ )
+ 
+ // setupIO is everything setup-mcp touches, so tests can fake it.
+@@ -39,11 +39,18 @@ func runSetupMCP(args []string) error {
+ 	home, _ := os.UserHomeDir()
+ 	return setupMCP(args, setupIO{
+ 		in: os.Stdin, out: os.Stdout,
++		// platform.Command runs an npm claude.cmd/codex.cmd shim through
++		// cmd.exe with every argument quoted, and refuses a path cmd.exe
++		// can't carry (a %, " or !) before anything runs.
+ 		run: func(a []string) (string, error) {
+-			out, err := exec.Command(a[0], a[1:]...).CombinedOutput()
++			cmd, err := platform.Command(a[0], a[1:])
++			if err != nil {
++				return "", err
++			}
++			out, err := cmd.CombinedOutput()
+ 			return string(out), err
+ 		},
+-		lookPath: exec.LookPath,
++		lookPath: platform.LookPath,
+ 		env:      mcpinstall.Env{Getenv: os.Getenv, Home: home},
+ 		now:      time.Now,
+ 		exe:      exe,
+```
+
+- [ ] **Step 5: Port the Phase 2 and Phase 5 tests**
+
+`cmd/herdr-dots/memory_test.go` and the new `cmd/herdr-dots/memory_unix_test.go`: the three editor tests drive a `sh` script (`sed`, `stat`) as `$EDITOR`, so they move, unchanged, into a Unix-only file (Plan decision 30; the Windows editor is tested in `internal/platform`):
+
+```diff
+--- a/cmd/herdr-dots/memory_test.go
++++ b/cmd/herdr-dots/memory_test.go
+@@ -141,30 +141,6 @@ func TestMemoryPinApproveAndProjects(t *testing.T) {
+ 	}
+ }
+ 
+-func TestMemoryEditAppliesExactlyOneUpdate(t *testing.T) {
+-	c, out, _ := newMemCLI(t)
+-	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "Use zod for validation")
+-	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "Sessions expire after one hour")
+-	script := filepath.Join(t.TempDir(), "editor.sh")
+-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsed -i.bak 's/Use zod for validation/Use valibot for validation/' \"$1\"\n"), 0o700); err != nil {
+-		t.Fatal(err)
+-	}
+-	c.editor = script
+-	out.Reset()
+-	mustRun(t, c, "edit", "--scope", "dot", "--dot", "security")
+-	if !strings.Contains(out.String(), "applied: 0 added, 1 updated, 0 forgotten") {
+-		t.Fatalf("%s", out)
+-	}
+-	e, _ := c.store.Get(testPID, memory.Ref{Scope: memory.ScopeDot, Dot: "security", ID: "m1"})
+-	if e.Text != "Use valibot for validation" {
+-		t.Fatalf("%+v", e)
+-	}
+-	c.editor = ""
+-	if err := c.run([]string{"edit"}); err == nil || !strings.Contains(err.Error(), "EDITOR") {
+-		t.Fatalf("want an $EDITOR hint, got %v", err)
+-	}
+-}
+-
+ func TestMemoryExportImportIsIdempotent(t *testing.T) {
+ 	c, out, _ := newMemCLI(t)
+ 	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "Use zod for validation")
+@@ -265,23 +241,6 @@ func TestMemoryImportSecretInteractiveConfirm(t *testing.T) {
+ 	}
+ }
+ 
+-func TestMemoryEditMarksUserSource(t *testing.T) {
+-	c, _, _ := newMemCLI(t)
+-	if _, err := c.store.Add(testPID, memory.Entry{Scope: memory.ScopeDot, Dot: "security", Kind: memory.KindNote, Text: "Use zod for validation", Source: memory.SourceModel, Status: memory.StatusActive}); err != nil {
+-		t.Fatal(err)
+-	}
+-	script := filepath.Join(t.TempDir(), "editor.sh")
+-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsed -i.bak 's/zod/valibot/' \"$1\"\n"), 0o700); err != nil {
+-		t.Fatal(err)
+-	}
+-	c.editor = script
+-	mustRun(t, c, "edit", "--scope", "dot", "--dot", "security")
+-	e, _ := c.store.Get(testPID, memory.Ref{Scope: memory.ScopeDot, Dot: "security", ID: "m1"})
+-	if e.Source != memory.SourceUser {
+-		t.Fatalf("source %q", e.Source)
+-	}
+-}
+-
+ // Final review minor 4: a secret in paths is gated like a secret in text.
+ func TestMemorySecretInPathsIsGated(t *testing.T) {
+ 	c, _, _ := newMemCLI(t)
+@@ -297,42 +256,6 @@ func TestMemorySecretInPathsIsGated(t *testing.T) {
+ 	}
+ }
+ 
+-// Final review minor 8: edit works in a private 0700 directory that is
+-// removed afterwards with whatever the editor left in it (swap, backup).
+-func TestMemoryEditRemovesItsTempDirectory(t *testing.T) {
+-	c, _, _ := newMemCLI(t)
+-	t.Setenv("TMPDIR", t.TempDir())
+-	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "Use zod for validation")
+-	record := filepath.Join(t.TempDir(), "record")
+-	script := filepath.Join(t.TempDir(), "editor.sh")
+-	body := "#!/bin/sh\nd=$(dirname \"$1\")\necho \"$d\" > " + record + "\n" +
+-		"(stat -f %Lp \"$d\" 2>/dev/null || stat -c %a \"$d\") >> " + record + "\n" +
+-		"touch \"$d/.swp-leftover\"\nsed -i.bak 's/zod/valibot/' \"$1\"\n"
+-	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+-		t.Fatal(err)
+-	}
+-	c.editor = script
+-	mustRun(t, c, "edit", "--scope", "dot", "--dot", "security")
+-	data, err := os.ReadFile(record)
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	lines := strings.Fields(string(data))
+-	if len(lines) != 2 {
+-		t.Fatalf("record %q", data)
+-	}
+-	dir, mode := lines[0], lines[1]
+-	if filepath.Clean(dir) == filepath.Clean(os.Getenv("TMPDIR")) {
+-		t.Fatalf("edit must use its own directory, got the shared temp dir %s", dir)
+-	}
+-	if mode != "700" {
+-		t.Fatalf("temp directory mode %s, want 700", mode)
+-	}
+-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+-		t.Fatalf("temp directory %s survived the edit (err %v)", dir, err)
+-	}
+-}
+-
+ // Final review minor 9: a skipped import entry is named by its number, never
+ // its text (it may be a secret).
+ func TestMemoryImportSkipNamesTheEntryNotItsText(t *testing.T) {
+```
+
+`cmd/herdr-dots/memory_unix_test.go`:
+
+```go
+//go:build unix
+
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"herdr-dots/internal/memory"
+)
+
+// The memory editor tests drive a sh script as $EDITOR (sed, stat), so they
+// run on Unix; on Windows the editor goes through cmd.exe
+// (platform.EditorCommand, tested in internal/platform).
+
+func TestMemoryEditAppliesExactlyOneUpdate(t *testing.T) {
+	c, out, _ := newMemCLI(t)
+	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "Use zod for validation")
+	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "Sessions expire after one hour")
+	script := filepath.Join(t.TempDir(), "editor.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsed -i.bak 's/Use zod for validation/Use valibot for validation/' \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.editor = script
+	out.Reset()
+	mustRun(t, c, "edit", "--scope", "dot", "--dot", "security")
+	if !strings.Contains(out.String(), "applied: 0 added, 1 updated, 0 forgotten") {
+		t.Fatalf("%s", out)
+	}
+	e, _ := c.store.Get(testPID, memory.Ref{Scope: memory.ScopeDot, Dot: "security", ID: "m1"})
+	if e.Text != "Use valibot for validation" {
+		t.Fatalf("%+v", e)
+	}
+	c.editor = ""
+	if err := c.run([]string{"edit"}); err == nil || !strings.Contains(err.Error(), "EDITOR") {
+		t.Fatalf("want an $EDITOR hint, got %v", err)
+	}
+}
+
+func TestMemoryEditMarksUserSource(t *testing.T) {
+	c, _, _ := newMemCLI(t)
+	if _, err := c.store.Add(testPID, memory.Entry{Scope: memory.ScopeDot, Dot: "security", Kind: memory.KindNote, Text: "Use zod for validation", Source: memory.SourceModel, Status: memory.StatusActive}); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "editor.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsed -i.bak 's/zod/valibot/' \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.editor = script
+	mustRun(t, c, "edit", "--scope", "dot", "--dot", "security")
+	e, _ := c.store.Get(testPID, memory.Ref{Scope: memory.ScopeDot, Dot: "security", ID: "m1"})
+	if e.Source != memory.SourceUser {
+		t.Fatalf("source %q", e.Source)
+	}
+}
+
+// Final review minor 8: edit works in a private 0700 directory that is
+// removed afterwards with whatever the editor left in it (swap, backup).
+func TestMemoryEditRemovesItsTempDirectory(t *testing.T) {
+	c, _, _ := newMemCLI(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "Use zod for validation")
+	record := filepath.Join(t.TempDir(), "record")
+	script := filepath.Join(t.TempDir(), "editor.sh")
+	body := "#!/bin/sh\nd=$(dirname \"$1\")\necho \"$d\" > " + record + "\n" +
+		"(stat -f %Lp \"$d\" 2>/dev/null || stat -c %a \"$d\") >> " + record + "\n" +
+		"touch \"$d/.swp-leftover\"\nsed -i.bak 's/zod/valibot/' \"$1\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.editor = script
+	mustRun(t, c, "edit", "--scope", "dot", "--dot", "security")
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Fields(string(data))
+	if len(lines) != 2 {
+		t.Fatalf("record %q", data)
+	}
+	dir, mode := lines[0], lines[1]
+	if filepath.Clean(dir) == filepath.Clean(os.Getenv("TMPDIR")) {
+		t.Fatalf("edit must use its own directory, got the shared temp dir %s", dir)
+	}
+	if mode != "700" {
+		t.Fatalf("temp directory mode %s, want 700", mode)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("temp directory %s survived the edit (err %v)", dir, err)
+	}
+}
+```
+
+`internal/mcpinstall/install_test.go` (absolute test paths on every OS without backslashes, so the expected TOML and JSON stay byte-exact; privacy through `platformtest`; the user's own file mode compared with its mode before the write; symlinks skip where refused):
+
+```diff
+--- a/internal/mcpinstall/install_test.go
++++ b/internal/mcpinstall/install_test.go
+@@ -4,16 +4,24 @@ import (
+ 	"errors"
+ 	"os"
+ 	"path/filepath"
++	"runtime"
+ 	"slices"
+ 	"strings"
+ 	"testing"
+ 	"time"
++
++	"herdr-dots/internal/platform/platformtest"
+ )
+ 
+-const (
+-	tBin   = "/opt/herdr dots/bin/herdr-dots"
+-	tCfg   = "/home/u/.config/herdr/plugins/herdr-dots"
+-	tState = "/home/u/.local/state/herdr/plugins/herdr-dots"
++// tRoot is "" on Unix and the temp dir's drive ("C:") on Windows, so the
++// paths below are absolute everywhere (checkInputs) and hold no backslash,
++// which keeps the expected TOML and JSON byte-exact on every OS.
++var tRoot = filepath.VolumeName(os.TempDir())
++
++var (
++	tBin   = tRoot + "/opt/herdr dots/bin/herdr-dots"
++	tCfg   = tRoot + "/home/u/.config/herdr/plugins/herdr-dots"
++	tState = tRoot + "/home/u/.local/state/herdr/plugins/herdr-dots"
+ )
+ 
+ var tNow = time.Date(2026, 10, 8, 14, 30, 0, 0, time.UTC)
+@@ -43,6 +51,18 @@ func readFile(t *testing.T, path string) string {
+ 	return string(b)
+ }
+ 
++// symlinkOrSkip creates a symlink, skipping the test where the OS refuses
++// (Windows without Developer Mode or admin rights).
++func symlinkOrSkip(t *testing.T, target, link string) {
++	t.Helper()
++	if err := os.Symlink(target, link); err != nil {
++		if runtime.GOOS == "windows" {
++			t.Skipf("symlinks unavailable: %v", err)
++		}
++		t.Fatal(err)
++	}
++}
++
+ func noRun(t *testing.T) func(Command) error {
+ 	return func(c Command) error { t.Fatalf("unexpected command %v", c.Args); return nil }
+ }
+@@ -58,10 +78,10 @@ args = ["--port", "0"]
+ model = "gpt-6-luna"
+ `
+ 
+-const wantBlock = "# >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)\n" +
++var wantBlock = "# >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)\n" +
+ 	"[mcp_servers.herdr-dots]\n" +
+-	"command = \"/opt/herdr dots/bin/herdr-dots\"\n" +
+-	"args = [\"mcp\", \"--config-dir\", \"/home/u/.config/herdr/plugins/herdr-dots\", \"--state-dir\", \"/home/u/.local/state/herdr/plugins/herdr-dots\"]\n" +
++	"command = \"" + tBin + "\"\n" +
++	"args = [\"mcp\", \"--config-dir\", \"" + tCfg + "\", \"--state-dir\", \"" + tState + "\"]\n" +
+ 	"env_vars = [\"HERDR_PANE_ID\", \"HERDR_SOCKET_PATH\"]\n" +
+ 	"startup_timeout_sec = 20\n" +
+ 	"tool_timeout_sec = 180\n" +
+@@ -108,6 +128,7 @@ func TestCodexInstallPreservesOtherTablesAndRemoveRestores(t *testing.T) {
+ 	env := tempEnv(t)
+ 	path := env.CodexConfigPath()
+ 	writeFile(t, path, userCodex)
++	before, _ := os.Stat(path) // 0640 on Unix; Windows reports 0666
+ 	p, err := PlanInstall(ClientCodex, env, tBin, tCfg, tState)
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -125,12 +146,10 @@ func TestCodexInstallPreservesOtherTablesAndRemoveRestores(t *testing.T) {
+ 	if len(backups) != 1 || backups[0] != path+".bak-herdr-dots-20261008-143000" || readFile(t, backups[0]) != userCodex {
+ 		t.Fatalf("backups %v", backups)
+ 	}
+-	if st, _ := os.Stat(path); st.Mode().Perm() != 0o640 {
+-		t.Fatalf("mode %v: the file keeps its mode", st.Mode().Perm())
+-	}
+-	if st, _ := os.Stat(backups[0]); st.Mode().Perm() != 0o600 {
+-		t.Fatalf("backup mode %v", st.Mode().Perm())
++	if st, _ := os.Stat(path); st.Mode().Perm() != before.Mode().Perm() {
++		t.Fatalf("mode %v -> %v: the file keeps its mode", before.Mode().Perm(), st.Mode().Perm())
+ 	}
++	platformtest.AssertPrivateFile(t, backups[0])
+ 
+ 	again, err := PlanInstall(ClientCodex, env, tBin, tCfg, tState)
+ 	if err != nil || !again.Nothing {
+@@ -167,9 +186,7 @@ func TestCodexInstallIntoAMissingFile(t *testing.T) {
+ 	if got := readFile(t, env.CodexConfigPath()); got != wantBlock {
+ 		t.Fatalf("got:\n%s", got)
+ 	}
+-	if st, _ := os.Stat(env.CodexConfigPath()); st.Mode().Perm() != 0o600 {
+-		t.Fatalf("a new config is private: %v", st.Mode().Perm())
+-	}
++	platformtest.AssertPrivateFile(t, env.CodexConfigPath()) // a new config is private
+ }
+ 
+ func TestCodexUnmarkedTableIsReplacedInPlace(t *testing.T) {
+@@ -246,7 +263,7 @@ func TestApplyRunsCommandsAndIgnoresOnlyMayFail(t *testing.T) {
+ 
+ func TestPlanRefusesRelativeOrControlPaths(t *testing.T) {
+ 	env := tempEnv(t)
+-	for _, bin := range []string{"bin/herdr-dots", "/bin/herdr\n-dots"} {
++	for _, bin := range []string{"bin/herdr-dots", tRoot + "/bin/herdr\n-dots"} {
+ 		if _, err := PlanInstall(ClientCodex, env, bin, tCfg, tState); err == nil {
+ 			t.Errorf("bin %q accepted", bin)
+ 		}
+@@ -271,9 +288,7 @@ func TestRecordsAndStatusLine(t *testing.T) {
+ 	if err != nil || len(loaded) != 2 {
+ 		t.Fatalf("loaded %+v %v", loaded, err)
+ 	}
+-	if st, _ := os.Stat(RecordPath(dir)); st.Mode().Perm() != 0o600 {
+-		t.Fatalf("mode %v", st.Mode().Perm())
+-	}
++	platformtest.AssertPrivateFile(t, RecordPath(dir))
+ 	if err := SaveRecords(RecordPath(dir), WithoutClient(loaded, ClientClaude)); err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -400,9 +415,7 @@ func TestDanglingSymlinkConfigIsRefused(t *testing.T) {
+ 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if err := os.Symlink(filepath.Join(t.TempDir(), "nope.toml"), path); err != nil {
+-		t.Fatal(err)
+-	}
++	symlinkOrSkip(t, filepath.Join(t.TempDir(), "nope.toml"), path)
+ 	for _, plan := range []func() (Plan, error){
+ 		func() (Plan, error) { return PlanInstall(ClientCodex, env, tBin, tCfg, tState) },
+ 		func() (Plan, error) { return PlanRemove(ClientCodex, env) },
+@@ -424,9 +437,7 @@ func TestSymlinkedConfigIsEditedThroughTheLink(t *testing.T) {
+ 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if err := os.Symlink(target, path); err != nil {
+-		t.Fatal(err)
+-	}
++	symlinkOrSkip(t, target, path)
+ 	p, err := PlanInstall(ClientCodex, env, tBin, tCfg, tState)
+ 	if err != nil {
+ 		t.Fatal(err)
+```
+
+`internal/mcpinstall/final_test.go` and the new `internal/mcpinstall/final_unix_test.go` (the fix wave's `chmod 000` test moves, unchanged, to a Unix-only file; Plan decision 34):
+
+```diff
+--- a/internal/mcpinstall/final_test.go
++++ b/internal/mcpinstall/final_test.go
+@@ -1,7 +1,6 @@
+ package mcpinstall
+ 
+ import (
+-	"os"
+ 	"strings"
+ 	"testing"
+ )
+@@ -26,27 +25,3 @@ func TestCodexReinstallNotesTheUsersEditsInsideTheBlock(t *testing.T) {
+ 		t.Fatalf("plain reinstall: %+v %v", p, err)
+ 	}
+ }
+-
+-// Phase 5 final review M7: a Claude config that exists but can't be read is
+-// never "not installed"; both remove and install refuse and say how to fix it.
+-func TestUnreadableClaudeConfigIsRefused(t *testing.T) {
+-	if os.Geteuid() == 0 {
+-		t.Skip("root reads a mode-000 file")
+-	}
+-	env := tempEnv(t)
+-	claudeEntryJSON(t, env, `{"type": "stdio"}`)
+-	path := env.ClaudeConfigPath()
+-	if err := os.Chmod(path, 0); err != nil {
+-		t.Fatal(err)
+-	}
+-	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+-	want := "can't read " + path + ": permission denied; fix it or remove manually with `claude mcp remove --scope user herdr-dots`"
+-	p, err := PlanRemove(ClientClaude, env)
+-	if err == nil || err.Error() != want {
+-		t.Fatalf("remove: %+v %v", p, err)
+-	}
+-	p, err = PlanInstall(ClientClaude, env, tBin, tCfg, tState)
+-	if err == nil || !strings.HasPrefix(err.Error(), "can't read "+path+": permission denied") {
+-		t.Fatalf("install: %+v %v", p, err)
+-	}
+-}
+```
+
+`internal/mcpinstall/final_unix_test.go`:
+
+```go
+//go:build unix
+
+package mcpinstall
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+// Mode 000 makes a file unreadable only on Unix (on Windows it only sets the
+// read-only attribute), so this Phase 5 test runs there; the refusal itself
+// is the same code on every OS.
+
+// Phase 5 final review M7: a Claude config that exists but can't be read is
+// never "not installed"; both remove and install refuse and say how to fix it.
+func TestUnreadableClaudeConfigIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	env := tempEnv(t)
+	claudeEntryJSON(t, env, `{"type": "stdio"}`)
+	path := env.ClaudeConfigPath()
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	want := "can't read " + path + ": permission denied; fix it or remove manually with `claude mcp remove --scope user herdr-dots`"
+	p, err := PlanRemove(ClientClaude, env)
+	if err == nil || err.Error() != want {
+		t.Fatalf("remove: %+v %v", p, err)
+	}
+	p, err = PlanInstall(ClientClaude, env, tBin, tCfg, tState)
+	if err == nil || !strings.HasPrefix(err.Error(), "can't read "+path+": permission denied") {
+		t.Fatalf("install: %+v %v", p, err)
+	}
+}
+```
+
+`cmd/herdr-dots/setupmcp_test.go` (absolute paths built for the OS; the `go run` check matches `<sep>go-build`):
+
+```diff
+--- a/cmd/herdr-dots/setupmcp_test.go
++++ b/cmd/herdr-dots/setupmcp_test.go
+@@ -47,7 +47,7 @@ func newMCPSetupRig(t *testing.T, onPath ...string) *mcpSetupRig {
+ 		},
+ 		env:   mcpinstall.Env{Getenv: func(string) string { return "" }, Home: r.home},
+ 		now:   func() time.Time { return time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC) },
+-		exe:   "/opt/herdr-dots/bin/herdr-dots",
++		exe:   filepath.Join(r.home, "opt", "herdr-dots", "bin", "herdr-dots"), // absolute on every OS
+ 		paths: func() (paths.Paths, error) { return r.p, nil },
+ 	}
+ 	return r
+@@ -129,7 +129,7 @@ func TestSetupMCPBothSkipsAMissingClientAndInstallsCodex(t *testing.T) {
+ 
+ func TestSetupMCPRefusesGoRunBinaries(t *testing.T) {
+ 	r := newMCPSetupRig(t, "claude")
+-	r.io.exe = "/var/folders/x/T/go-build123/b001/exe/herdr-dots"
++	r.io.exe = filepath.Join(os.TempDir(), "go-build123", "b001", "exe", "herdr-dots")
+ 	if err := setupMCP([]string{"--yes"}, r.io); err == nil || !strings.Contains(err.Error(), "go run") {
+ 		t.Fatalf("got %v", err)
+ 	}
+```
+
+`internal/backend/codex_mcp_test.go` (the home variable a codex child reads on this OS):
+
+```diff
+--- a/internal/backend/codex_mcp_test.go
++++ b/internal/backend/codex_mcp_test.go
+@@ -6,6 +6,8 @@ import (
+ 	"slices"
+ 	"strings"
+ 	"testing"
++
++	"herdr-dots/internal/platform"
+ )
+ 
+ func codexHomeWith(t *testing.T, config string) string {
+@@ -31,12 +33,12 @@ const withServer = "model = \"x\"\n\n[mcp_servers.docs]\ncommand = \"docs\"\n\n[
+ // Review Focus 1: a codex dot run must not start the Dots MCP server.
+ func TestCodexDisablesTheDotsMCPServerWhenConfigured(t *testing.T) {
+ 	home := codexHomeWith(t, withServer)
+-	args := codexArgs("HOME="+home, "PATH=/bin", "HERDR_PANE_ID=w1:p1")
++	args := codexArgs(platform.HomeEnv+"="+home, "PATH=/bin", "HERDR_PANE_ID=w1:p1")
+ 	n := len(args)
+ 	if args[n-1] != "-" || args[n-3] != "-c" || args[n-2] != "mcp_servers.herdr-dots.enabled=false" {
+ 		t.Fatalf("args %v: the override sits right before the stdin marker", args)
+ 	}
+-	cmd := CodexCLI{Environ: func() []string { return []string{"HOME=" + home, "HERDR_PANE_ID=w1:p1"} }}.BuildCmd(req())
++	cmd := CodexCLI{Environ: func() []string { return []string{platform.HomeEnv + "=" + home, "HERDR_PANE_ID=w1:p1"} }}.BuildCmd(req())
+ 	if slices.Contains(cmd.Env, "HERDR_PANE_ID=w1:p1") {
+ 		t.Fatal("HERDR_* must still be stripped")
+ 	}
+@@ -48,7 +50,7 @@ func TestCodexHomeOverridesHome(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	empty := codexHomeWith(t, "")
+-	if args := codexArgs("HOME="+empty, "CODEX_HOME="+codexHome); !slices.Contains(args, "mcp_servers.herdr-dots.enabled=false") {
++	if args := codexArgs(platform.HomeEnv+"="+empty, "CODEX_HOME="+codexHome); !slices.Contains(args, "mcp_servers.herdr-dots.enabled=false") {
+ 		t.Fatalf("CODEX_HOME config not read: %v", args)
+ 	}
+ }
+@@ -61,7 +63,7 @@ func TestCodexLeavesTheOverrideOutWithoutTheServer(t *testing.T) {
+ 		"commented table": "# [mcp_servers.herdr-dots]\n",
+ 	} {
+ 		home := codexHomeWith(t, cfg)
+-		if args := codexArgs("HOME="+home, "PATH=/bin"); strings.Contains(strings.Join(args, " "), "mcp_servers.") {
++		if args := codexArgs(platform.HomeEnv+"="+home, "PATH=/bin"); strings.Contains(strings.Join(args, " "), "mcp_servers.") {
+ 			t.Errorf("%s: args %v", name, args)
+ 		}
+ 	}
+@@ -76,7 +78,7 @@ func TestCodexUserMCPArgsCannotReplaceTheOverride(t *testing.T) {
+ 	home := codexHomeWith(t, withServer)
+ 	r := req()
+ 	r.Args = []string{"-c", "mcp_servers.herdr-dots.enabled=true", "--config=mcp_servers.x.command=y"}
+-	args := CodexCLI{Environ: func() []string { return []string{"HOME=" + home} }}.BuildCmd(r).Args
++	args := CodexCLI{Environ: func() []string { return []string{platform.HomeEnv + "=" + home} }}.BuildCmd(r).Args
+ 	if strings.Contains(strings.Join(args, " "), "enabled=true") || strings.Contains(strings.Join(args, " "), "mcp_servers.x") {
+ 		t.Fatalf("denied user args leaked: %v", args)
+ 	}
+```
+
+`internal/mcpserver/engine_test.go` (the stub engine, like the real one in `internal/engine/ask_test.go` below, serves `platformtest.Endpoint` through `ipc.Listen`, so both run over a pipe on Windows; `ipc.Client` dials it with `ipc.Dial`):
+
+```diff
+--- a/internal/mcpserver/engine_test.go
++++ b/internal/mcpserver/engine_test.go
+@@ -4,13 +4,12 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"errors"
+-	"net"
+ 	"os"
+-	"path/filepath"
+ 	"testing"
+ 	"time"
+ 
+ 	"herdr-dots/internal/ipc"
++	"herdr-dots/internal/platform/platformtest"
+ 	"herdr-dots/internal/view"
+ )
+ 
+@@ -31,19 +30,16 @@ func (s stubEngine) Query(_ context.Context, cmd string, raw json.RawMessage) (a
+ 	return ipc.DotsResult{ProjectID: testPID, Dots: []ipc.DotInfo{{Slug: "security"}}}, nil
+ }
+ 
++// shortSock is a fresh engine endpoint: a short unix socket path, or a named
++// pipe on Windows.
+ func shortSock(t *testing.T) string {
+ 	t.Helper()
+-	dir, err := os.MkdirTemp("", "mcpe")
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	t.Cleanup(func() { os.RemoveAll(dir) })
+-	return filepath.Join(dir, "e.sock")
++	return platformtest.Endpoint(t)
+ }
+ 
+ func startStub(t *testing.T, path string) context.CancelFunc {
+ 	t.Helper()
+-	ln, err := net.Listen("unix", path)
++	ln, err := ipc.Listen(path)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+```
+
+`internal/engine/ask_test.go`:
+
+```diff
+--- a/internal/engine/ask_test.go
++++ b/internal/engine/ask_test.go
+@@ -4,9 +4,6 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"errors"
+-	"net"
+-	"os"
+-	"path/filepath"
+ 	"strings"
+ 	"sync"
+ 	"sync/atomic"
+@@ -18,6 +15,7 @@ import (
+ 	"herdr-dots/internal/dots"
+ 	"herdr-dots/internal/ipc"
+ 	"herdr-dots/internal/memory"
++	"herdr-dots/internal/platform/platformtest"
+ 	"herdr-dots/internal/queue"
+ 	"herdr-dots/internal/state"
+ 	"herdr-dots/internal/transcript"
+@@ -338,24 +336,20 @@ func TestListDotsAndListQueue(t *testing.T) {
+ 	}
+ }
+ 
+-// The engine answers queries over its real socket (ipc.Querier).
++// The engine answers queries over its real endpoint (ipc.Querier).
+ func TestQueriesOverTheEngineSocket(t *testing.T) {
+ 	r := newRig(t, dot("Security", dots.ModeQueue))
+ 	r.attach(t, "security")
+ 	r.be.set(critical)
+-	dir, err := os.MkdirTemp("", "engq")
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	t.Cleanup(func() { os.RemoveAll(dir) })
+-	ln, err := net.Listen("unix", filepath.Join(dir, "d.sock"))
++	endpoint := platformtest.Endpoint(t)
++	ln, err := ipc.Listen(endpoint)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	t.Cleanup(cancel)
+ 	go ipc.Serve(ctx, ln, r.e)
+-	c := ipc.Client{Path: filepath.Join(dir, "d.sock")}
++	c := ipc.Client{Path: endpoint}
+ 	qctx, qcancel := context.WithTimeout(ctx, 5*time.Second)
+ 	defer qcancel()
+ 	var res ipc.AskResult
+```
+
+Then check that no Phase 5 test still assumes Unix:
 
 ```bash
-gofmt -l .
+grep -rnE 'Mode\(\)\.Perm\(\)|net\.Listen\("unix"|"sh", "-c"|exec\.Command\("sh"|/bin/sh|os\.Symlink\(|os\.Getuid|0o644\)|"/dev/null"|filepath\.Join\("/|"HOME="' --include='*_test.go' internal/mcpinstall internal/mcpserver internal/engine internal/ipc cmd/herdr-dots/mcp_test.go cmd/herdr-dots/setupmcp_test.go cmd/herdr-dots/memory_test.go internal/backend/codex_mcp_test.go | grep -v '_unix_test.go'
+```
+
+Expected: exactly three lines, all in `internal/mcpinstall/install_test.go`: the `os.Symlink` inside `symlinkOrSkip`, and the two lines comparing the user's file mode with `before.Mode().Perm()`. Also check `grep -rn 'os.Chmod(' --include='*_test.go' internal/mcpinstall | grep -v _unix_test.go` prints nothing (mode 000 tests are Unix-only).
+
+- [ ] **Step 6: Run the guard and the tests**
+
+Run: `gofmt -w internal cmd && GOTOOLCHAIN=local go test -race ./...`
+Expected: PASS, including `TestProductCodeHasNoUnixOnlyCalls`, `TestEditorCommandPassesTheFileAsAnArgument`, Phase 5's `TestCodexInstallPreservesOtherTablesAndRemoveRestores`, `TestClaudePlanIsTheExactCLICommand`, `TestCodexDisablesTheDotsMCPServerWhenConfigured`, `TestCodexHomeOverridesHome`, `TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies`, `TestQueriesOverTheEngineSocket`, `TestSetupMCPRefusesGoRunBinaries`, and Phase 2's moved `TestMemoryEditAppliesExactlyOneUpdate`, `TestMemoryEditMarksUserSource`, `TestMemoryEditRemovesItsTempDirectory`.
+
+- [ ] **Step 7: Cross-OS gate (everything green from here on)**
+
+```bash
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -5595,14 +7235,24 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...
 mkdir -p "${TMPDIR:-/tmp}/p6-win" && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p6-win/" ./...
 ```
 
-Expected: `gofmt` prints nothing and every other command succeeds (the Windows build and vet of `./...` are clean; one `*.test.exe` per package with tests in `$TMPDIR/p6-win`).
+Expected: `gofmt` prints nothing and every other command succeeds (the Windows build and vet of `./...` are clean; one `*.test.exe` per package with tests in `$TMPDIR/p6-win`, plus `[no test files]` lines for `herdrtest`, `platformtest` and `version`).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Notes and commit**
+
+Append to `docs/superpowers/notes/2026-10-08-phase-6-verification.md`:
+
+```markdown
+## Phase 5 port (Task 10)
+
+- Guard findings before the port: `cmd/herdr-dots/memory.go` (`sh -c` editor, Phase 2), `internal/backend/codex_mcp.go` (`HOME`, `.codex`), `internal/mcpinstall/install.go` (`.claude.json`, `.codex`). All fixed; the guard passes.
+- Ported without a guard finding: `setup-mcp` children through `platform.Command` / `platform.LookPath`; `mcp.go` and its test on `EngineEndpoint` (Task 6); Phase 5's IPC, MCP and engine tests on `ipc.Listen` endpoints.
+- Not run on Windows: `claude mcp add` through npm's `claude.cmd`, `codex mcp list` through `codex.cmd`, the detached engine started by the MCP server, and `memory edit` through cmd.exe are user gates.
+```
 
 ```bash
-git add internal/platform/portability_test.go docs/superpowers/notes/2026-10-08-phase-6-verification.md internal cmd
-git status --short   # only the guard, the notes and the files Step 3/4 changed
-git commit -m "feat(platform): portability guard; MCP server and installer run on Windows (Phase 6)"
+git add internal/platform docs/superpowers/notes/2026-10-08-phase-6-verification.md internal/mcpinstall internal/mcpserver internal/engine/ask_test.go internal/backend/codex_mcp.go internal/backend/codex_mcp_test.go cmd/herdr-dots/setupmcp.go cmd/herdr-dots/setupmcp_test.go cmd/herdr-dots/memory.go cmd/herdr-dots/memory_test.go cmd/herdr-dots/memory_unix_test.go
+git status --short   # nothing else is modified
+git commit -m "feat(platform): portability guard; MCP installer, codex config lookup and memory editor run on Windows (Phase 6)"
 ```
 
 ---
@@ -5613,10 +7263,10 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
 
 **Files:**
 - Modify: `internal/memory/store_test.go`, `internal/paths/memory_test.go`, `internal/state/state_test.go`, `internal/queue/queue_test.go`, `internal/dots/store_test.go`
-- Modify: Phase 3–4 test files the audit lists (never Phase 5 test files, which Task 10 owns, and never `cmd/herdr-dots/platform_manifest_test.go`, which Task 12 owns)
+- Modify (Phase 4 tests the reconcile audit found): `internal/paths/providers_test.go`, `cmd/herdr-dots/keys_test.go`. (Phase 4's toolloop and credentials tests are ported in Task 8; Phase 2 and Phase 5 tests that Task 10 owns are not touched here, nor `cmd/herdr-dots/platform_manifest_test.go` or `memwire_test.go`, which Task 12 owns.)
 
 **Interfaces:**
-- Consumes: `platformtest.Abs(parts ...string) string`, `platformtest.AssertPrivateFile(t testing.TB, path string)`, `platformtest.AssertPrivateDir(t testing.TB, path string)`, `herdrtest.Listen`, `ipc.Listen`.
+- Consumes: `platformtest.Abs(parts ...string) string`, `platformtest.AssertPrivateFile(t testing.TB, path string)`, `platformtest.AssertPrivateDir(t testing.TB, path string)`.
 - Produces: no product symbols; the darwin suite stays green and the Windows test binaries compile.
 
 - [ ] **Step 1: Port the v1 and Phase 2 tests**
@@ -5626,7 +7276,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
 ```diff
 --- a/internal/memory/store_test.go
 +++ b/internal/memory/store_test.go
-@@ -12,6 +12,7 @@
+@@ -12,6 +12,7 @@ import (
  	"time"
  
  	"herdr-dots/internal/lockfile"
@@ -5634,7 +7284,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
  )
  
  const pid = "g-0123456789abcdef"
-@@ -248,14 +249,10 @@
+@@ -283,14 +284,10 @@ func TestFilesArePrivate(t *testing.T) {
  	mustAdd(t, s, pid, dotNote("security", "a fact"))
  	mustAdd(t, s, "", Entry{Scope: ScopeGlobal, Dot: "security", Kind: KindPreference, Text: "British spelling"})
  	for _, d := range []string{s.Dir, filepath.Join(s.Dir, pid), filepath.Join(s.Dir, pid, "dots"), filepath.Join(s.Dir, GlobalID, "dots")} {
@@ -5658,7 +7308,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
 ```diff
 --- a/internal/paths/memory_test.go
 +++ b/internal/paths/memory_test.go
-@@ -7,17 +7,20 @@
+@@ -7,17 +7,20 @@ import (
  	"path/filepath"
  	"strings"
  	"testing"
@@ -5682,7 +7332,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
  		t.Fatal("two Herdr sessions must share one memory dir")
  	}
  }
-@@ -30,17 +33,12 @@
+@@ -30,17 +33,12 @@ func TestEnsureCreatesMemoryDirAndStatePointer(t *testing.T) {
  			t.Fatal(err)
  		}
  	}
@@ -5702,7 +7352,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
  }
  
  func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-@@ -50,8 +48,9 @@
+@@ -50,8 +48,9 @@ func TestDiscoverPrefersHerdrEnv(t *testing.T) {
  		t.Fatal("must not shell out when the env is set")
  		return "", nil
  	}
@@ -5714,7 +7364,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
  		t.Fatalf("%+v %v", p, err)
  	}
  }
-@@ -128,7 +127,7 @@
+@@ -128,7 +127,7 @@ func TestDiscoverRejectsRelativeStateDir(t *testing.T) {
  	run := func(context.Context, string, ...string) (string, error) {
  		return "", nil
  	}
@@ -5730,7 +7380,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
 ```diff
 --- a/internal/state/state_test.go
 +++ b/internal/state/state_test.go
-@@ -9,6 +9,8 @@
+@@ -9,6 +9,8 @@ import (
  	"strings"
  	"testing"
  	"time"
@@ -5739,7 +7389,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
  )
  
  func TestAttachmentsCRUDAndPersistence(t *testing.T) {
-@@ -136,10 +138,7 @@
+@@ -136,10 +138,7 @@ func TestFeedAppendRecentAndReload(t *testing.T) {
  	if len(r) != 5 || r[4].Turn != 60 || r[0].Turn != 56 {
  		t.Fatalf("recent %+v", r)
  	}
@@ -5758,11 +7408,8 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
 ```diff
 --- a/internal/queue/queue_test.go
 +++ b/internal/queue/queue_test.go
-@@ -2,9 +2,10 @@
- 
- import (
- 	"errors"
--	"os"
+@@ -5,6 +5,8 @@ import (
+ 	"os"
  	"path/filepath"
  	"testing"
 +
@@ -5770,7 +7417,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
  )
  
  func open(t *testing.T) (*Store, string) {
-@@ -22,10 +23,7 @@
+@@ -22,10 +24,7 @@ func TestAddAssignsIDAndPersists(t *testing.T) {
  	if err != nil || c.ID == "" || c.Status != StatusPending || c.CreatedAt.IsZero() {
  		t.Fatalf("%+v %v", c, err)
  	}
@@ -5789,7 +7436,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
 ```diff
 --- a/internal/dots/store_test.go
 +++ b/internal/dots/store_test.go
-@@ -6,6 +6,8 @@
+@@ -6,6 +6,8 @@ import (
  	"path/filepath"
  	"strings"
  	"testing"
@@ -5798,7 +7445,7 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
  )
  
  func valid(name string) Dot {
-@@ -28,10 +30,7 @@
+@@ -28,10 +30,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
  	if got.Name != "Security" || got.Purpose != d.Purpose || got.Trigger.FileGlobs[0] != "**/*.ts" || got.Slug != "security" {
  		t.Fatalf("round trip: %+v", got)
  	}
@@ -5812,34 +7459,100 @@ git commit -m "feat(platform): portability guard; MCP server and installer run o
  		t.Fatalf("purpose should be written as a multi-line string:\n%s", raw)
 ```
 
-- [ ] **Step 2: Audit the Phase 3 and Phase 4 tests**
+- [ ] **Step 2: Port the Phase 4 tests**
+
+`internal/paths/providers_test.go` (expected paths built with `filepath.Join`, which uses `\` on Windows):
+
+```diff
+--- a/internal/paths/providers_test.go
++++ b/internal/paths/providers_test.go
+@@ -1,10 +1,13 @@
+ package paths
+ 
+-import "testing"
++import (
++	"path/filepath"
++	"testing"
++)
+ 
+ func TestProviderFilesLiveInTheConfigDir(t *testing.T) {
+ 	p := New("/cfg", "/state", "/tmp/herdr.sock")
+-	if p.CredentialsFile() != "/cfg/credentials.toml" || p.PricesFile() != "/cfg/prices.toml" {
++	if p.CredentialsFile() != filepath.Join("/cfg", "credentials.toml") || p.PricesFile() != filepath.Join("/cfg", "prices.toml") {
+ 		t.Fatalf("%s %s", p.CredentialsFile(), p.PricesFile())
+ 	}
+ }
+```
+
+`cmd/herdr-dots/keys_test.go` (`keys set` writes `credentials.toml` owner-only on every OS):
+
+```diff
+--- a/cmd/herdr-dots/keys_test.go
++++ b/cmd/herdr-dots/keys_test.go
+@@ -4,7 +4,6 @@ import (
+ 	"bytes"
+ 	"context"
+ 	"errors"
+-	"os"
+ 	"path/filepath"
+ 	"strings"
+ 	"testing"
+@@ -12,6 +11,7 @@ import (
+ 	"herdr-dots/internal/config"
+ 	"herdr-dots/internal/credentials"
+ 	"herdr-dots/internal/paths"
++	"herdr-dots/internal/platform/platformtest"
+ )
+ 
+ func TestKeysNeverEchoAnUnrecognisedProviderArgument(t *testing.T) {
+@@ -73,9 +73,9 @@ func TestKeysSetReadsStdinWritesOwnerOnlyAndVerifies(t *testing.T) {
+ 	if err := keysCmd([]string{"set", "anthropic"}, k); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	st, _ := os.Stat(k.store.Path)
+-	if st.Mode().Perm() != 0o600 || out.String() != "stored · verified\n" || len(*verified) != 1 {
+-		t.Fatalf("mode %v out %q verified %v", st.Mode().Perm(), out, *verified)
++	platformtest.AssertPrivateFile(t, k.store.Path)
++	if out.String() != "stored · verified\n" || len(*verified) != 1 {
++		t.Fatalf("out %q verified %v", out, *verified)
+ 	}
+ 	if key, _, _ := k.store.Lookup("anthropic"); key != "sk-ant-api03-PIPEDKEY00001234" {
+ 		t.Fatalf("stored %q", key)
+```
+
+(`internal/queue/queue_test.go` keeps its `os` import: Phase 3 tests in that file use it.)
+
+- [ ] **Step 3: Audit what is left**
 
 Run:
 
 ```bash
-grep -rnE 'Mode\(\)\.Perm\(\)|net\.Listen\("unix"|"sh", "-c"|exec\.Command\("sh"|/bin/sh|os\.Symlink\(|os\.Getuid|0o644\)|"/dev/null"|filepath\.Join\("/' --include='*_test.go' . \
-  | grep -v '_unix_test.go' | grep -v '^./internal/platform/' \
-  | grep -v '^./internal/mcpinstall/' | grep -v '^./internal/mcpserver/' | grep -v 'mcp' | grep -v 'platform_manifest_test.go'
+grep -rnE 'Mode\(\)\.Perm\(\)|net\.Listen\("unix"|"sh", "-c"|exec\.Command\("sh"|/bin/sh|os\.Symlink\(|os\.Getuid|0o644\)|"/dev/null"|filepath\.Join\("/|Setenv\("HOME"' --include='*_test.go' internal cmd \
+  | grep -v '_unix_test.go' | grep -v '^internal/platform/' | grep -v 'symlinkOrSkip\|before.Mode()'
 ```
 
-Fix each hit with these rules:
+Expected (replayed with Tasks 8 and 10 merged; Task 10's files are in the same wave, so without them `internal/mcpinstall`, `internal/mcpserver`, `internal/engine/ask_test.go` and `cmd/herdr-dots/memory_test.go` lines also appear, and are Task 10's to fix): only data-only or intentional lines remain:
+
+- `internal/memory/project_test.go`: the `#!/bin/sh` hook in `TestExecGitNeverRunsHooks` (the test asserts the hook never runs; Git for Windows has its own `sh`, so it holds there too).
+- `internal/council/live_test.go`: the `0o644` of a recorded transcript (`RECORD=1` live test, never in CI).
+- `internal/paths/paths_test.go`, `internal/paths/providers_test.go` and `internal/keys/keys_test.go`: `filepath.Join("/...` expected values (the code under test joins the same way).
+- `internal/keys/keys_test.go`: the `os.Symlink` that skips on Windows (Task 7).
+- `internal/backend/toolloop/tools_test.go`: `setHome`'s own `t.Setenv("HOME", dir)` (it sets `USERPROFILE` too).
+- `internal/credentials/perms_windows_test.go`, `internal/backend/toolloop/tools_test.go`, `internal/mcpinstall/install_test.go`: the `os.Symlink` inside each `symlinkOrSkip` helper.
+
+Paths that are only data (transcript tool inputs such as `"/r/auth.ts"`, memory entry `Paths`, `"/repo"` working directories, socket paths that are hashed but never opened) stay as they are. If a commit after `a47427d` adds another hit, fix it with these rules:
 
 | Pattern in a test | Fix |
 |---|---|
 | `st.Mode().Perm() != 0o600` or `!= 0o700`, asserting privacy | `platformtest.AssertPrivateFile(t, path)` / `platformtest.AssertPrivateDir(t, path)` (drop the now-unused `os.Stat`) |
 | `Mode().Perm()` compared with a mode the test itself wrote (`0o640`) | take `before, _ := os.Stat(path)` before the action and compare with `before.Mode().Perm()` (Windows reports `0666`) |
 | `os.WriteFile(..., 0o644)` or `os.Chmod(..., 0o644)` to make a file readable by others | a helper `readableByOthers(t, path)` in `<pkg>_unix_test.go` (`os.Chmod(path, 0o644)`) and `<pkg>_windows_test.go` (copy `setDACL`, `me` and `readableByOthers` from `internal/credentials/perms_windows_test.go`) |
-| `net.Listen("unix", p)` | `herdrtest.Listen(p)` for a fake Herdr; `ipc.Listen(endpoint)` with a `testEndpoint(t)` for the engine (copy `testEndpoint` from `internal/ipc/endpoint_unix_test.go` and `endpoint_windows_test.go`) |
+| `net.Listen("unix", p)` | `herdrtest.Listen(p)` for a fake Herdr; `ipc.Listen(platformtest.Endpoint(t))` for an engine |
 | a test that runs `sh`, `/bin/sh`, `sleep` or `cat` | move it into `<pkg>_unix_test.go` with `//go:build unix` as the first line; add a `cmd.exe` version in `<pkg>_windows_test.go` only when the code under test behaves differently on Windows |
 | `os.Symlink` that fails | `if runtime.GOOS == "windows" { t.Skipf("symlinks unavailable: %v", err) }` before `t.Fatal(err)` (symlinks need Developer Mode or admin) |
+| `t.Setenv("HOME", dir)` for code that calls `os.UserHomeDir` | also `t.Setenv("USERPROFILE", dir)` (Plan decision 28) |
 | an absolute Unix path (`"/c"`, `"/repo"`) given to code that calls `filepath.IsAbs`, or compared with a `filepath.Join` result | `platformtest.Abs("c")` for inputs, `filepath.Join(...)` for expected values |
 | `"/dev/null"` | `os.DevNull` |
-
-Paths that are only data (transcript tool inputs such as `"/r/auth.ts"`, memory entry `Paths`, socket paths that are hashed but never opened) stay as they are.
-
-- [ ] **Step 3: Re-run the audit**
-
-Run the Step 2 command again. Expected: only data-only lines remain. Note each remaining file in the commit message body ("data-only paths left as is: ...").
 
 - [ ] **Step 4: Run the tests**
 
@@ -5849,24 +7562,24 @@ Expected: PASS.
 - [ ] **Step 5: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
-GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./internal/memory/ ./internal/paths/ ./internal/state/ ./internal/queue/ ./internal/dots/
+GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./internal/memory/ ./internal/paths/ ./internal/state/ ./internal/queue/ ./internal/dots/ ./cmd/herdr-dots/
 mkdir -p "${TMPDIR:-/tmp}/p6-win" && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p6-win/" ./...
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr-dots' | sort -u
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five succeed; the last two print nothing, or only the Phase 5 packages from Task 1's baseline (Task 10 runs in the same wave).
+Expected: `gofmt` prints nothing; the next five succeed; the last two print nothing.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal cmd
-git status --short   # only *_test.go files
-git commit -m "test: state privacy and paths portably so the suite runs on Windows CI (Phase 6)"
+git add internal/memory/store_test.go internal/paths/memory_test.go internal/paths/providers_test.go internal/state/state_test.go internal/queue/queue_test.go internal/dots/store_test.go cmd/herdr-dots/keys_test.go
+git status --short   # nothing else is modified
+git commit -m "test: state privacy and paths portably so the suite runs on Windows CI (Phase 6)" -m "data-only paths left as is: internal/memory/project_test.go (hook script), internal/council/live_test.go (recorded transcript)"
 ```
 
 ---
@@ -5878,10 +7591,10 @@ git commit -m "test: state privacy and paths portably so the suite runs on Windo
 **Files:**
 - Modify: `herdr-plugin.toml`, `internal/version/version.go`, `Makefile`
 - Create: `scripts/build.ps1`, `.github/workflows/ci.yml`, `.gitattributes`
-- Test: `cmd/herdr-dots/platform_manifest_test.go`
+- Test: `cmd/herdr-dots/platform_manifest_test.go`; modify `cmd/herdr-dots/memwire_test.go` (Phase 5's version pin, Plan decision 33)
 
 **Interfaces:**
-- Consumes: `version.Version`; Phase 3's manifest test (`TestManifestDeclaresTheCouncilActionAndPopup`) keeps passing because actions and panes are unchanged.
+- Consumes: `version.Version`; Phase 3's manifest test (`TestManifestDeclaresTheCouncilActionAndPopup`, `cmd/herdr-dots/council_test.go`) keeps passing because actions and panes are unchanged.
 - Produces: `platforms = ["macos", "linux", "windows"]`; one `[[build]]` per OS; `version = "0.6.0"` in both places; `make cross`; the CI workflow (written, committed, not pushed).
 
 - [ ] **Step 1: Write the failing test**
@@ -6011,10 +7724,29 @@ func TestWindowsBuildScriptBuildsTheExe(t *testing.T) {
 }
 ```
 
+`cmd/herdr-dots/memwire_test.go` (Phase 5 pinned the version here; rename the test and expect the new version before changing it):
+
+```diff
+--- a/cmd/herdr-dots/memwire_test.go
++++ b/cmd/herdr-dots/memwire_test.go
+@@ -57,8 +57,8 @@ func TestBuildEngineWiresMemory(t *testing.T) {
+ 	}
+ }
+ 
+-func TestVersionIsPhaseFive(t *testing.T) {
+-	if version.Version != "0.5.0" {
+-		t.Fatalf("version %s, want 0.5.0", version.Version)
++func TestVersionIsPhaseSix(t *testing.T) {
++	if version.Version != "0.6.0" {
++		t.Fatalf("version %s, want 0.6.0", version.Version)
+ 	}
+ }
+```
+
 - [ ] **Step 2: Run it to see it fail**
 
-Run: `GOTOOLCHAIN=local go test ./cmd/herdr-dots/ -run 'TestManifestDeclaresEveryPlatform|TestRuntimeCommandsAreShared|TestWindowsBuildScript' -v`
-Expected: FAIL: `platforms [macos linux]` and `open ../../scripts/build.ps1: no such file or directory`.
+Run: `GOTOOLCHAIN=local go test ./cmd/herdr-dots/ -run 'TestManifestDeclaresEveryPlatform|TestRuntimeCommandsAreShared|TestWindowsBuildScript|TestVersionIsPhaseSix' -v`
+Expected: FAIL: `platforms [macos linux]`, `open ../../scripts/build.ps1: no such file or directory` and `version 0.5.0, want 0.6.0`.
 
 - [ ] **Step 3: The manifest and the version**
 
@@ -6167,12 +7899,12 @@ Expected: only the files of this task are staged or modified.
 - [ ] **Step 6: Run the tests and the cross build**
 
 Run: `GOTOOLCHAIN=local go test -race ./cmd/herdr-dots/ && GOTOOLCHAIN=local make cross && ruby -e 'require "yaml"; YAML.load_file(".github/workflows/ci.yml"); puts "ci.yml parses"'`
-Expected: PASS (`TestManifestDeclaresEveryPlatformAndOneBuildEach`, `TestRuntimeCommandsAreSharedByEveryPlatform`, `TestWindowsBuildScriptBuildsTheExe`, Phase 3's manifest test); `make cross` ends without error; `ci.yml parses`. (Ruby ships with macOS; if it is missing, `python3 -c 'import sys,yaml; yaml.safe_load(open(".github/workflows/ci.yml"))'` with PyYAML does the same.)
+Expected: PASS (`TestManifestDeclaresEveryPlatformAndOneBuildEach`, `TestRuntimeCommandsAreSharedByEveryPlatform`, `TestWindowsBuildScriptBuildsTheExe`, `TestVersionIsPhaseSix`, Phase 3's manifest test); `make cross` ends without error; `ci.yml parses`. (Ruby ships with macOS; if it is missing, `python3 -c 'import sys,yaml; yaml.safe_load(open(".github/workflows/ci.yml"))'` with PyYAML does the same.)
 
 - [ ] **Step 7: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -6182,12 +7914,12 @@ GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... 2>&1 | grep '^# herdr
 GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... 2>&1 | grep '^# herdr-dots' | sort -u
 ```
 
-Expected: `gofmt` prints nothing; the next five succeed; the last two print nothing, or only Task 1's Phase 5 packages (Task 10 runs in the same wave).
+Expected: `gofmt` prints nothing; the next five succeed; the last two print nothing.
 
 - [ ] **Step 8: Commit (never push)**
 
 ```bash
-git add herdr-plugin.toml internal/version/version.go Makefile scripts/build.ps1 .github/workflows/ci.yml .gitattributes cmd/herdr-dots/platform_manifest_test.go
+git add herdr-plugin.toml internal/version/version.go Makefile scripts/build.ps1 .github/workflows/ci.yml .gitattributes cmd/herdr-dots/platform_manifest_test.go cmd/herdr-dots/memwire_test.go
 git commit -m "build: Windows platform, build.ps1, three-OS CI matrix, version 0.6.0 (Phase 6)"
 ```
 
@@ -6208,23 +7940,24 @@ git commit -m "build: Windows platform, build.ps1, three-OS CI matrix, version 0
 
 In `README.md` (post-Phase-5 form; Phases 2–5 rewrote parts of it, so anchor on the headings):
 
-1. Replace the status blockquote at the top (the paragraph starting `> **Status:`) with:
+1. Replace the status blockquote at the top (the three lines starting `> **Status: scaffold (v0.5.0).**`) with:
 
 ```markdown
-> **Status: 0.6.0, in development.** It is not finished and not ready for general use. Windows
-> support is new in 0.6.0: it is cross-compiled and unit-tested, but it has **not been run on
-> Windows** by the developer yet (see [Windows (beta)](#windows-beta)). See [Roadmap](#roadmap)
-> for what's missing.
+> **Status: scaffold (v0.6.0).** Phases 1 (core loop), 2 (dot memory, VITAL), 3 (council), 4 (API and
+> Ollama backends, cost), 5 (Dots MCP server) and 6 (Windows support) are in. Windows support is
+> cross-compiled and unit-tested, but it has **not been run on Windows** by the developer yet (see
+> [Windows (beta)](#windows-beta)). The project is not done and not ready for general use; see the
+> [Roadmap](#roadmap) for what's missing.
 ```
 
-2. Under `## Requirements`, replace the Herdr bullet with:
+2. Under `## Requirements`, replace the Herdr bullet (`- Herdr ≥ 0.8.0 on macOS or Linux`) with:
 
 ```markdown
 - Herdr ≥ 0.8.0 on macOS or Linux, or Herdr ≥ 0.9.1 (the Windows beta, preview channel) on
   Windows 10 1809+ or Windows 11
 ```
 
-3. Under `## Install`, after the existing shell block, add:
+3. Under `## Install`, after the existing shell block (the one ending `herdr plugin link .        # development install`), add:
 
 ````markdown
 On Windows (PowerShell, from a clone of this repo):
@@ -6239,7 +7972,7 @@ If your machine's policy blocks PowerShell scripts, build by hand with
 
 - [ ] **Step 2: README Windows section**
 
-Add this section before `## Privacy and safety` (or before `## Known gaps` if that heading moved):
+Add this section directly before `## Privacy and safety`:
 
 ```markdown
 ## Windows (beta)
@@ -6268,17 +8001,18 @@ Herdr Dots runs on the Herdr Windows beta with the same features as on macOS and
 
 - [ ] **Step 3: README known gaps and roadmap**
 
-Under `## Known gaps`, remove "no Windows support" from any bullet that lists it, and add:
+Under `## Known gaps in this scaffold`, delete the bullet `- No Windows support.`, shorten the bullet that ends `no access for agents outside Herdr; MCP on Windows` / `comes with Phase 6.` so it ends `no access for agents outside Herdr.`, and add:
 
 ```markdown
 - Windows support (0.6.0) has not been run on Windows by the developer; it is cross-compiled and
   unit-tested only. The three-OS CI workflow is written but not yet pushed anywhere.
 ```
 
-In the `## Roadmap` table, set the Windows row (it may read "Windows" inside a "Later" row; split it out if so) to:
+In the `## Roadmap` table, replace the row `| 6–10 | Windows, write-capable dots, proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |` with these two rows:
 
 ```markdown
-| 6 | Windows support (0.6.0): named pipes, Job Objects, ACL privacy, `.cmd` shims. Built and unit-tested; **not run on Windows yet** |
+| 6 | Windows support: named pipes, Job Objects, ACL privacy, `.cmd` shims (in this scaffold since 0.6.0; built and unit-tested, **not run on Windows yet**) |
+| 7–10 | Write-capable dots, proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
 ```
 
 Keep the Phase 2 row exactly as it is (**VITAL**), and keep every later phase listed as not built.
@@ -6308,16 +8042,16 @@ Run:
 ```bash
 grep -n 'VITAL' README.md
 grep -n 'not been run on' README.md
-grep -nE 'is (done|finished|complete|ready)|feature complete|production[- ]ready' README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md | grep -v 'only when\|until\|not '
+grep -nE 'is (done|finished|complete|ready)|feature complete|production[- ]ready' README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md | grep -v 'only when\|only after\|until\|not \|→ feature complete\|in "feature complete"'
 sh scripts/build.sh && ./bin/herdr-dots version
 ```
 
-Expected: at least one `VITAL` line (Phase 2); at least two `not been run on` lines; the third command prints nothing; the last prints `herdr-dots 0.6.0 (scaffold)` (or Phase 5's suffix).
+Expected (replayed): two `VITAL` lines (the status blockquote and the Phase 2 roadmap row); exactly two `not been run on` lines (the status blockquote's `> cross-compiled and unit-tested, but it has **not been run on Windows** by the developer yet (see` and the known-gaps bullet `- Windows support (0.6.0) has not been run on Windows by the developer; it is cross-compiled and`); the third command prints nothing (the existing "feature complete only after Phase 10" lines and the roadmap's Phase 10 lines are excluded on purpose); the last prints `herdr-dots 0.6.0 (scaffold)`.
 
 - [ ] **Step 6: Cross-OS gate**
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
@@ -6342,13 +8076,15 @@ git commit -m "docs: Windows beta support in README and roadmap; not run on Wind
 **1. Spec coverage.**
 - §1 success criteria 1 (install/link on Windows, `platforms` with `"windows"`): Task 12 (manifest, `build.ps1`), user gate in Task 1. 2 (every feature on Windows): engine lock and detached start (Tasks 4, 6), IPC (6), panes and popups (6, 12), transcripts (7), CLI backends (2, 9), API backends and credentials (8), memory (4, 7), council (no OS-specific code; covered by the guard and Task 11), MCP server and installers (6, 10). 3 (no Unix regression, same suite on three OSes): byte-identical Unix code paths in every task, Task 11, CI in Task 12. 4 (private to the user): Tasks 3, 6, 7, 8.
 - §3 decisions: W1 Tasks 2–3 and the guard (10); W2 Task 6 (`dialSocket`, refined by V1); W3 Task 6 (+ owner check); W4 Task 4; W5 Task 2 / Task 6 (Plan decision 8); W6 Task 2; W7 Task 9 (Plan decision 4); W8 Tasks 2 and 9; W9 Task 2; W10 Tasks 3, 6, 7, 8; W11 Task 12; W12 Tasks 2 and 7 (`ClaudeProjectKey` dropped, Plan decision 15); W13 Tasks 7 and 8; W14 Task 12.
-- §4.2 interface changes: `herdr.SocketClient` dial (6), `ipc.Listen`/`Dial` (6), `EngineEndpoint` (6), `lockfile` (4), `ExecRunner` (2), `CleanEnv` (2), `ClaudeCLI.BuildCmd` + `Cmd.Cleanup` (2, 9), `ensureEngine` (6), transcripts and `keys.ConfigPath` (7), credentials (8), mcpinstall (10), memory/toolloop `DevNull` (7, 8), manifest and `build.ps1` (12).
+- §4.2 interface changes: `herdr.SocketClient` dial (6), `ipc.Listen`/`Dial` (6), `EngineEndpoint` (6), `lockfile` (4), `ExecRunner` (2), `CleanEnv` (2), `ClaudeCLI.BuildCmd` + `Cmd.Cleanup` (2, 9), `ensureEngine` (6), transcripts and `keys.ConfigPath` (7), credentials (8; `CheckPrivateFile` on the opened file), mcpinstall (10), memory/toolloop `DevNull` (7, 8), manifest and `build.ps1` (12). Found in the merged code by the reconcile and covered: Phase 4's `ECONNREFUSED` checks and httpx sentinel (8), the jail's drive-root refusal and `gitEnv` (8), Phase 5's `engineEnv` (6), codex config lookup, `setup-mcp` children and test sockets (10), Phase 2's `sh -c` memory editor (10), Phase 4–5 tests that assumed Unix (8, 10, 11), and Phase 5's version pin (12).
 - §7 UI: Task 5 (ASCII switch); `ctrl+w` dropped with evidence (Plan decision 16).
 - §8.1 errors: unreachable socket (v1 30 s exit, unchanged), pipe collision (Tasks 3, 6), over-long `.cmd` line (Tasks 2, 9), ACL failure (Plan decision 10, Task 7). §8.3 tests: per-OS path tables (2), `CleanEnv` (2), prompt file (9), pipe and SDDL (3, 6), `LockFileEx` across processes (4), Job Object kills `cmd /c ping` (2), detach survives its parent (2), pipe-mode fake Herdr (6), CI (12), manual run (Task 1 user gates).
 - §9 V1–V8: Task 1 and "Confirmed while planning". §10 out of scope respected.
 
-**2. Placeholder scan.** No "TBD", "TODO" or "similar to Task N". Task 1's notes contain three "(paste ... here)" slots for command output the executor records; they are recording steps, not missing design. Task 10 works from the guard's output because Phase 5's plan didn't exist; every replacement it may need is spelled out with code.
+**2. Placeholder scan.** No "TBD", "TODO" or "similar to Task N". Task 1's notes contain two "(paste ... here)" slots for command output the executor records; they are recording steps, not missing design (the expected output is given in Task 1 Step 2). Task 10 carries concrete diffs for every Phase 2/5 port (reconciled); the guard confirms nothing is left, and its table of replacements stays only for code added after `a47427d`.
 
 **3. Type consistency.** `platform.StartDetached` returns `(*os.Process, error)` everywhere (Tasks 2, 6). `platform.Command`/`CommandContext` take `args []string` (Tasks 2, 10). `Cmd.Close()` and `Preflight(err)` (Task 2) are what Task 9 calls. `EngineEndpoint()` (Task 6) is what Task 10's table and the guard name. `platformtest.Abs`/`AssertPrivateFile`/`AssertPrivateDir` (Task 3) match their uses in Tasks 6, 7, 8, 9, 11. `ErrInsecurePerms` keeps its name; `platform.FixPrivateHint` is used in Task 8 and its tests.
 
-**4. Review Focus.** Each of the five items names its tests and owning tasks (2, 3, 6, 7, 8, 9). Further inputs found while planning got tests too: `.ENV` and NTFS stream tricks against the tool jail (Task 8), a reader holding a file during an atomic replace (Task 7), two engines on one machine (Task 6), and a cancelled context for shim commands (Task 2).
+**4. Review Focus.** Each of the five items names its tests and owning tasks (2, 3, 6, 7, 8, 9). Further inputs found while planning got tests too: `.ENV` and NTFS stream tricks against the tool jail (Task 8), a reader holding a file during an atomic replace (Task 7), two engines on one machine (Task 6), and a cancelled context for shim commands (Task 2). Added by the reconcile: a credentials file whose DACL is checked through the open handle (`TestCheckPrivateFileReadsTheHandlesDACL`, Task 3), a refused dial keeping its identity after httpx scrubbing (`platform.ConnRefused` in httpx's test, Task 8), an editor command line with flags and spaces (`TestEditorCommandRunsTheEditorLineOnTheFile`, Task 10).
+
+**5. Reconcile replay (2026-10-09).** All 13 tasks were replayed in wave order on scratch worktrees of `5863171` and `a47427d`; every code block in this plan is the replayed content. Final state: darwin `go test -race ./...`, `go vet ./...` and `gofmt -l internal cmd` clean; `GOOS=linux go build ./...`, `GOOS=windows go build ./...` and `GOOS=windows go vet ./...` clean; `GOOS=windows go test -c ./...` compiles every test binary; `make cross` passes. Nothing ran on Windows: every Windows-only behavior is a user gate in Task 1's notes.
