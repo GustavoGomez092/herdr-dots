@@ -104,3 +104,8 @@ func (f *Feed) Recent(paneID string, n int) []FeedEntry {
 	}
 	return append([]FeedEntry(nil), list...)
 }
+
+// OutcomeAsked: the main agent asked this dot (or a council, Dot "council")
+// through the Dots MCP server (Phase 5). Detail starts with the severity, or
+// "pass", followed by " · " and the run's cost detail when there is one.
+const OutcomeAsked = "asked"

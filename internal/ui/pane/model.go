@@ -427,6 +427,9 @@ func feedOutcome(e state.FeedEntry) string {
 		}
 	case state.OutcomeSuppressed:
 		return "suppressed (" + strings.TrimPrefix(e.Detail, "similar to ") + ")"
+	case state.OutcomeAsked:
+		sev, _, _ := strings.Cut(e.Detail, " · ")
+		return "◆ asked by agent · " + sev
 	}
 	return e.Outcome
 }
