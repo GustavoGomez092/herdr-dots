@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"herdr-dots/internal/platform"
 )
 
 // Project identifies the repository a pane works in.
@@ -27,23 +29,28 @@ type GitRunner func(ctx context.Context, dir string, args ...string) (string, er
 // gitTimeout bounds one ResolveProject call; tests shorten it.
 var gitTimeout = 5 * time.Second
 
-// ExecGit runs git with hooks disabled, no terminal prompts and no optional locks.
+// ExecGit runs git with hooks disabled (core.hooksPath is the null device:
+// /dev/null, or NUL on Windows), no terminal prompts, no optional locks and,
+// on Windows, no console window.
 func ExecGit(ctx context.Context, dir string, args ...string) (string, error) {
-	full := append([]string{"-C", dir, "-c", "core.hooksPath=/dev/null"}, args...)
+	full := append([]string{"-C", dir, "-c", "core.hooksPath=" + platform.DevNull}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Env = gitEnv(os.Environ())
 	cmd.WaitDelay = 500 * time.Millisecond
+	platform.HideWindow(cmd)
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
 }
 
 // gitEnv filters env for a git child: no HERDR_*/Claude session variables, and
 // none of the GIT_* variables that would override -C or the config. (A local
-// filter: importing internal/backend here would be an import cycle.)
+// filter: importing internal/backend here would be an import cycle.) Names
+// compare in platform.EnvKey form, so case-insensitively on Windows.
 func gitEnv(env []string) []string {
 	out := make([]string, 0, len(env)+3)
 	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
+		raw, _, _ := strings.Cut(kv, "=")
+		name := platform.EnvKey(raw)
 		if strings.HasPrefix(name, "HERDR_") || strings.HasPrefix(name, "GIT_CONFIG") {
 			continue
 		}

@@ -105,3 +105,34 @@ func TestParseClaudeRealFixture(t *testing.T) {
 		}
 	}
 }
+
+// claudeWindowsSample is a Claude Code transcript as written on Windows:
+// backslash paths with spaces and non-ASCII characters in tool inputs.
+const claudeWindowsSample = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"Add login"},"sessionId":"s1","cwd":"C:\\Users\\José Núñez\\src\\my app"}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"C:\\Users\\José Núñez\\src\\my app\\login.tsx","old_string":"a","new_string":"b"}}]}}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","content":[{"type":"text","text":"Added login form."}]}}
+`
+
+// Review Focus: a project path with spaces and non-ASCII characters.
+func TestWindowsTranscriptUnderANonASCIIHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "José Núñez")
+	dir := filepath.Join(home, ".claude", "projects", "C--Users-Jos--N--ez-src-my-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(dir, "0f9e-77.jsonl")
+	if err := os.WriteFile(f, []byte(claudeWindowsSample), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ResolveClaudePath(home, "id", "0f9e-77")
+	if err != nil || p != f {
+		t.Fatalf("ResolveClaudePath = %q %v", p, err)
+	}
+	turns, err := ClaudeReader{Path: p}.Turns(context.Background())
+	if err != nil || len(turns) != 1 || turns[0].Assistant != "Added login form." {
+		t.Fatalf("turns %+v %v", turns, err)
+	}
+	if len(turns[0].Tools) != 1 || turns[0].Tools[0].Paths[0] != `C:\Users\José Núñez\src\my app\login.tsx` {
+		t.Fatalf("tool paths %+v", turns[0].Tools)
+	}
+}

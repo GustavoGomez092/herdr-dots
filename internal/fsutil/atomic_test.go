@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"herdr-dots/internal/platform/platformtest"
 )
 
 func TestWriteFileAtomicCreatesWithPerm(t *testing.T) {
@@ -16,13 +18,9 @@ func TestWriteFileAtomicCreatesWithPerm(t *testing.T) {
 	if string(got) != "hello" {
 		t.Fatalf("content = %q", got)
 	}
-	st, _ := os.Stat(p)
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("perm = %v", st.Mode().Perm())
-	}
-	dst, _ := os.Stat(filepath.Dir(p))
-	if dst.Mode().Perm() != 0o700 {
-		t.Fatalf("dir perm = %v", dst.Mode().Perm())
+	platformtest.AssertPrivateFile(t, p)
+	if st, _ := os.Stat(filepath.Dir(p)); !st.IsDir() {
+		t.Fatal("parent dir not created")
 	}
 }
 

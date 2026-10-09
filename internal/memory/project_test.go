@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"herdr-dots/internal/platform"
 )
 
 // isolateGit keeps the developer's git config (signing, hooks) out of tests.
@@ -206,5 +208,20 @@ func TestGitEnvStripsHerdrAndGitOverrides(t *testing.T) {
 	}
 	if gitEnv(nil) == nil {
 		t.Error("must return a non-nil slice")
+	}
+}
+
+func TestGitEnvFoldsCaseWhereTheOSDoes(t *testing.T) {
+	in := []string{"Git_Dir=/x", "herdr_pane_id=w1:p1", "Path=/bin"}
+	out := gitEnv(in)
+	joined := strings.Join(out, "\n")
+	if platform.EnvKey("a") == "A" { // Windows: Git_Dir is GIT_DIR
+		if strings.Contains(joined, "Git_Dir") || strings.Contains(joined, "herdr_pane_id") || !strings.Contains(joined, "Path=/bin") {
+			t.Fatalf("Windows gitEnv = %v", out)
+		}
+		return
+	}
+	if !strings.Contains(joined, "Git_Dir=/x") || !strings.Contains(joined, "herdr_pane_id") {
+		t.Fatalf("Unix gitEnv = %v", out)
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"herdr-dots/internal/platform"
 )
 
 // Codex rollout files (~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl).
@@ -103,7 +105,7 @@ func ResolveCodexPath(home, kind, value string) (string, error) {
 		if value == "" || strings.ContainsAny(value, `/\*?[]`) || strings.Contains(value, "..") {
 			return "", fmt.Errorf("invalid codex session id %q", value)
 		}
-		matches, _ := filepath.Glob(filepath.Join(home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+value+".jsonl"))
+		matches, _ := filepath.Glob(filepath.Join(platform.CodexSessionsDir(home), "*", "*", "*", "rollout-*-"+value+".jsonl"))
 		if len(matches) == 0 {
 			return "", fmt.Errorf("no transcript for codex session %s", value)
 		}

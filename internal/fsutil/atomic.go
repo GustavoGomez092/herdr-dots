@@ -8,7 +8,10 @@ import (
 
 // WriteFileAtomic writes data to a temp file in the same directory and renames
 // it over path, so readers never observe a half-written file. The parent
-// directory is created with 0700.
+// directory is created with 0700. A private perm (no group or other bits)
+// also gets an owner-only DACL on Windows, and a write whose privacy can't be
+// set fails. On Windows the rename is retried briefly while another process
+// has the old file open.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -28,6 +31,10 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		f.Close()
 		return err
 	}
+	if err := restrict(tmp, perm); err != nil {
+		f.Close()
+		return err
+	}
 	if err := f.Sync(); err != nil {
 		f.Close()
 		return err
@@ -35,5 +42,5 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return rename(tmp, path)
 }

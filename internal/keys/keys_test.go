@@ -3,11 +3,14 @@ package keys
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"herdr-dots/internal/platform"
 )
 
 const userConfig = `onboarding = false
@@ -29,11 +32,11 @@ command = "someone.else.thing"
 func TestConfigPath(t *testing.T) {
 	env := map[string]string{}
 	get := func(k string) string { return env[k] }
-	if p := ConfigPath(get, "/h"); p != "/h/.config/herdr/config.toml" {
+	if p := ConfigPath(get, "/h"); p != filepath.Join("/h", ".config", "herdr", "config.toml") {
 		t.Fatal(p)
 	}
 	env["XDG_CONFIG_HOME"] = "/x"
-	if p := ConfigPath(get, "/h"); p != "/x/herdr/config.toml" {
+	if p := ConfigPath(get, "/h"); p != filepath.Join("/x", "herdr", "config.toml") {
 		t.Fatal(p)
 	}
 	env["HERDR_CONFIG_PATH"] = "/custom.toml"
@@ -83,6 +86,7 @@ func TestAppendRefusesWhenResultWouldNotParse(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.toml")
 	os.WriteFile(p, []byte(inline), 0o640)
+	before, _ := os.Stat(p)
 	if _, err := Existing([]byte(inline)); err != nil {
 		t.Fatalf("the inline form is valid TOML on its own: %v", err)
 	}
@@ -93,8 +97,8 @@ func TestAppendRefusesWhenResultWouldNotParse(t *testing.T) {
 	if string(now) != inline {
 		t.Fatalf("file must be untouched, got:\n%s", now)
 	}
-	if st, _ := os.Stat(p); st.Mode().Perm() != 0o640 {
-		t.Fatalf("mode changed: %v", st.Mode().Perm())
+	if st, _ := os.Stat(p); st.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("mode changed: %v -> %v", before.Mode().Perm(), st.Mode().Perm())
 	}
 }
 
@@ -102,8 +106,12 @@ func TestAppendPreservesFileModeAndSymlink(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "dotfiles-config.toml")
 	os.WriteFile(real, []byte(userConfig), 0o640)
+	before, _ := os.Stat(real)
 	link := filepath.Join(dir, "config.toml")
 	if err := os.Symlink(real, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if _, err := Append(link, Defaults()[2:], time.Now()); err != nil {
@@ -113,8 +121,8 @@ func TestAppendPreservesFileModeAndSymlink(t *testing.T) {
 		t.Fatal("a symlinked config must stay a symlink")
 	}
 	st, _ := os.Stat(real)
-	if st.Mode().Perm() != 0o640 {
-		t.Fatalf("mode %v, want 0640", st.Mode().Perm())
+	if st.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("mode %v, want %v", st.Mode().Perm(), before.Mode().Perm())
 	}
 	if data, _ := os.ReadFile(real); !strings.Contains(string(data), "prefix+shift+s") {
 		t.Fatalf("not appended:\n%s", data)
@@ -162,5 +170,14 @@ func TestCouncilKeyIsFreeUnlessTheUserBoundIt(t *testing.T) {
 	_, _, conflicts = Plan([]Binding{council}, map[string]string{"prefix+shift+c": "someone.else.copy"})
 	if len(conflicts) != 1 || conflicts[0].With != "someone.else.copy" {
 		t.Fatalf("a user binding wins: %v", conflicts)
+	}
+}
+
+func TestConfigPathFollowsHerdrOnThisOS(t *testing.T) {
+	env := map[string]string{"APPDATA": filepath.Join("C:", "Users", "José Núñez", "AppData", "Roaming")}
+	get := func(k string) string { return env[k] }
+	home := filepath.Join("Users", "José Núñez")
+	if got, want := ConfigPath(get, home), platform.HerdrConfigPath(get, home); got != want {
+		t.Fatalf("ConfigPath %q, platform says %q", got, want)
 	}
 }
