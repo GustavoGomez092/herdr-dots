@@ -42,19 +42,21 @@ var (
 )
 
 type Dot struct {
-	Slug     string       `toml:"-"`
-	Name     string       `toml:"name"`
-	Glyph    string       `toml:"glyph"`
-	Color    string       `toml:"color"`
-	Purpose  string       `toml:"purpose,omitempty"`
-	Backend  BackendSpec  `toml:"backend"`
-	Delivery DeliverySpec `toml:"delivery"`
-	Trigger  TriggerSpec  `toml:"trigger"`
-	Context  ContextSpec  `toml:"context"`
-	Budget   BudgetSpec   `toml:"budget"`
-	Memory   MemorySpec   `toml:"memory"`
-	Research ResearchSpec `toml:"research"` // Phase 8: idle research
-	Schedule ScheduleSpec `toml:"schedule"` // Phase 8: standing task on a cron schedule
+	Slug       string       `toml:"-"`
+	Name       string       `toml:"name"`
+	Glyph      string       `toml:"glyph"`
+	Color      string       `toml:"color"`
+	Origin     string       `toml:"origin,omitempty"` // template or import in a user file; "" = user; project is set at load
+	SourcePath string       `toml:"-"`                // project dots: the file the dot was loaded from
+	Purpose    string       `toml:"purpose,omitempty"`
+	Backend    BackendSpec  `toml:"backend"`
+	Delivery   DeliverySpec `toml:"delivery"`
+	Trigger    TriggerSpec  `toml:"trigger"`
+	Context    ContextSpec  `toml:"context"`
+	Budget     BudgetSpec   `toml:"budget"`
+	Memory     MemorySpec   `toml:"memory"`
+	Research   ResearchSpec `toml:"research"` // Phase 8: idle research
+	Schedule   ScheduleSpec `toml:"schedule"` // Phase 8: standing task on a cron schedule
 
 	Capabilities CapabilitySpec `toml:"capabilities"`
 }
@@ -158,6 +160,18 @@ func (d Dot) Validate() error {
 	}
 	if strings.TrimSpace(d.Purpose) == "" {
 		add("purpose is required")
+	}
+	switch d.Origin {
+	case "", OriginUser, OriginTemplate, OriginImport:
+		if IsProjectSlug(d.Slug) {
+			add("names starting with %q are reserved for project dots", ProjectPrefix)
+		}
+	case OriginProject:
+		if _, _, ok := SplitProjectSlug(d.Slug); !ok {
+			add("project dot slug %q must look like %s<name>--<project>", d.Slug, ProjectPrefix)
+		}
+	default:
+		add("origin %q must be %s, %s or %s", d.Origin, OriginUser, OriginTemplate, OriginImport)
 	}
 	if n := utf8.RuneCountInString(d.Glyph); n < 1 || n > 2 {
 		add("glyph must be 1-2 characters")

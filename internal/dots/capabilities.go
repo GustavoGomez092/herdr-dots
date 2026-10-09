@@ -14,10 +14,11 @@ type CapabilitySpec struct {
 	WriteTimeoutSeconds int  `toml:"write_timeout_seconds"` // one draft run
 	MaxPatchBytes       int  `toml:"max_patch_bytes"`       // larger patches are rejected
 	MaxFiles            int  `toml:"max_files"`             // patches touching more files are rejected
+	MCP                 bool `toml:"mcp"`                   // Phase 9: the MCP server may ask this dot (ask_dot, ask_council)
 }
 
 func DefaultCapabilities() CapabilitySpec {
-	return CapabilitySpec{WriteTimeoutSeconds: 600, MaxPatchBytes: 200000, MaxFiles: 50}
+	return CapabilitySpec{WriteTimeoutSeconds: 600, MaxPatchBytes: 200000, MaxFiles: 50, MCP: true}
 }
 
 // WriteTimeout is the time limit of one draft run.
