@@ -1,12 +1,14 @@
 # Herdr Dots
 
-> **Status: 0.8.0, in development (scaffold, not done).** It is not finished and not ready for
-> general use. New in 0.8.0: proactive dots (opt-in, read-only) can research while you are away,
-> run on a schedule while Herdr runs and review new commits, under a daily dollar budget; this is
-> built, unit-tested and soak-tested once in an isolated Herdr session on macOS (driven by a test
-> client, not by hand). Write-capable dots (0.7.0) have **not been run end to end inside Herdr**
-> yet, and Windows support (0.6.0) has not been run on Windows yet. Phase 2 (dot memory) stays
-> the VITAL part. See the [Roadmap](#roadmap) for what's missing.
+> **Status: 0.9.0, in development (scaffold, not done).** It is not finished and not ready for
+> general use. New in 0.9.0: per-dot profiles with run history and tuning hints, dotpacks to export
+> and import dots (risky capabilities start off), and project dots shipped in a repository behind a
+> content-hash trust prompt; this is built and unit-tested but has **not been run end to end inside
+> Herdr** by the developer yet, and the manage popup's live check was not run on this machine (it is
+> a user gate). Proactive dots (0.8.0) were soak-tested once in an isolated Herdr session on macOS,
+> write-capable dots (0.7.0) have not been run end to end inside Herdr yet, and Windows support
+> (0.6.0) has not been run on Windows yet. Phase 2 (dot memory) stays the VITAL part. See the
+> [Roadmap](#roadmap) for what's missing.
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**: specialist agents (security,
 frontend, backend, copywriter, ...) that join a Claude Code or Codex session running in a Herdr
@@ -477,6 +479,63 @@ holding its lock, say), the write is retried three times, after 100 ms, 300 ms a
 every attempt fails does background work in that Herdr session stop until local midnight, with one
 log line and one toast. The budget never becomes unlimited.
 
+### Profiles, history and sharing (0.9.0)
+
+Every dot run (reviews, summons, council members, MCP asks, research, scheduled and commit runs,
+drafts and memory passes) and every card outcome (sent, edited, dismissed, applied, discarded,
+injected, orphaned) is kept per dot in the plugin state dir under `history/<slug>.jsonl`, across
+sessions and projects, capped at 20,000 lines. A run dropped before it finished (its pane closed,
+the dot detached) is recorded as "dropped" together with any cost it incurred. History holds only
+300-character excerpts, with anything that looks like a key always redacted, and never leaves this
+machine.
+
+Press `i` on a dot in the library for its **profile**: stats over rolling 7- and 30-day windows
+(`tab` switches; the last 7 or 30 days from now, not calendar days) with runs by kind, how often it
+flags, how often you accept its advice, suppressed repeats, cost and median latency; a memory
+summary; plain tuning hints ("Mostly dismissed", "Rarely speaks", "Your most expensive dot", "Keeps
+repeating dismissed advice", "Fails often"); and its recent history (`enter` shows the full
+message). The same data is available from the shell: `herdr-dots dots profile <slug>`.
+
+There are 14 built-in templates (`t` in the library), all with every risky feature off.
+
+**Share a dot** as one `.dotpack.toml` file (a dotpack): `x` in the profile, `I` in the library to
+import, or
+
+```sh
+herdr-dots dots export security --with-memory dot -o security.dotpack.toml
+herdr-dots dots import security.dotpack.toml            # or an https:// URL
+```
+
+Export refuses a dot or memory entry that looks like it holds a secret and names the fields only,
+never the text; `--force` drops the flagged memory entries and exports the rest. Absolute paths
+(`schedule.projects`) are dropped. Packs never contain credentials, history, global memory or
+preferences. Fetching a pack by URL is https only (a redirect that leaves https is refused).
+
+Import clamps every risky capability by default: a shared dot keeps only `--model` and `--effort`
+backend args, its budgets are clamped, and **inject delivery, write, MCP, research, web, schedules,
+commit triggers and custom `base_url`s are turned off**. Keep one with `--keep inject` (CLI) or its
+number in the preview. The preview shows everything (purpose, research topics, schedule task,
+backend, every memory entry) and must be read to the end before you can confirm. An import never
+overwrites a dot: a slug collision is refused (`--as <name>` imports it under another name). Memory
+in a pack arrives only as proposals labelled "imported"; they stay out of prompts until you approve
+them (`herdr-dots memory approve`, or `a` in the memory browser) and never stop a dot from repeating
+advice. Control, bidi and other invisible characters are refused in shared dots and in imported
+memory.
+
+**Project dots in a repository:** put dot files in `.herdr-dots/dots/*.toml` at the repository root
+(at most 64 files are read per repository). They show in the library as `project` dots, but a file
+runs only after you **trust** the exact bytes you saw: `T` in the library (or `herdr-dots dots trust
+<file>`) shows the whole file and the capabilities it asks for, each off until you grant it. Any
+edit makes the file untrusted again and pauses the dot until you trust it again; an untrusted or
+changed project dot never runs, in the background either. Trust is per project (the repository's
+git root commit): clones share it, but only for byte-identical files, and when trust came from
+another checkout the popup shows "trusted at <path>". Trusted dots still run clamped, with only the
+capabilities you granted. `project_dots_enabled = false` in `config.toml` turns project dots off
+(a malformed `config.toml` does too).
+
+The live check of the manage popup (profile, import, trust) was **not run on this machine**; it is
+a user gate (see `docs/superpowers/notes/2026-10-08-phase-9-verification.md`).
+
 ## Files
 
 - Dots: `$(herdr plugin config-dir herdr-dots)/dots/<slug>.toml` (hand-editable)
@@ -486,6 +545,9 @@ log line and one toast. The budget never becomes unlimited.
 - `daily.json` in the plugin state dir: today's background runs and cost, shared by every session (proactive dots).
 - `inbox.json` in the plugin state dir: scheduled results waiting for a pane on their project.
 - `memory/<project-id>/schedule.json` in the plugin state dir: the last slot each scheduled dot ran on that project.
+- `STATE_DIR/history/<slug>.jsonl`: per-dot run and card history, shared by every session (`0600`, capped at 20,000 lines).
+- Trusted project dot files: `$(herdr plugin config-dir herdr-dots)/trusted.json`
+- Project dots: `.herdr-dots/dots/*.toml` in a repository (used only after you trust each file)
 
 ## Windows (beta)
 
@@ -585,6 +647,11 @@ Linux, but it has not been run on Windows yet.
   `daily_budget_usd` (default $1.00) across every Herdr session.
 - Commit reviews never install git hooks; they only read `HEAD` and `git log`/`git show` output, with
   the repository's hooks, fsmonitor, diff drivers and transports disabled.
+- Shared dots are someone else's prompts: imported and project dots start with every risky
+  capability off, backend args other than `--model` and `--effort` are dropped, keys this version
+  doesn't understand are refused, and project dot trust is tied to the file's exact content.
+- Dotpacks never carry credentials or history, exported memory is secret-scanned, and history
+  stays on this machine with keys redacted.
 
 ## Known gaps in this scaffold
 
@@ -624,6 +691,11 @@ Linux, but it has not been run on Windows yet.
   a non-critical "away, then one card when you come back" digest was not seen live (every research
   result in the soak was critical). Web research was not part of the soak; Codex and OpenAI web
   search are not live-verified. Schedules run only while Herdr runs.
+- Profiles, dotpacks and project dots (0.9.0) are unit-tested on macOS only. The manage popup's
+  live check was not run on this machine, and a project dot's trust and pause have not been run end
+  to end inside Herdr (checklist in `docs/superpowers/notes/2026-10-08-phase-9-verification.md`).
+  A repository can ship a dot with the same display name as one of yours: the `proj:` slug and the
+  trust preview tell them apart.
 
 ## Roadmap
 
@@ -637,6 +709,7 @@ Linux, but it has not been run on Windows yet.
 | 6 | Windows support: named pipes, Job Objects, ACL privacy, `.cmd` shims (in this scaffold since 0.6.0; built and unit-tested, **not run on Windows yet**) |
 | 7 | Write-capable dots (0.7.0): drafts in isolated git worktrees, patch cards, a diff viewer, apply to the working tree only. Built and unit-tested; **not run end to end in Herdr yet** |
 | 8 | Proactive dots (0.8.0): idle research with a while-you-were-away digest, cron schedules while Herdr runs (with catch-up), commit reviews, a daily dollar budget. Built and unit-tested; soak-tested once in an isolated Herdr session on macOS |
-| 9–10 | Profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
+| 9 | Profiles, history and sharing (0.9.0): per-dot run history and profiles with tuning hints, dotpacks (export and import, risky capabilities off), project dots behind content-hash trust, seven more templates. Built and unit-tested; **not run end to end in Herdr yet** |
+| 10 | Hardening and release. The project is feature complete only after Phase 10. |
 
 See the draft roadmap for Phases 2–10.
