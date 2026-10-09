@@ -609,6 +609,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		Memory: mem.block, Learn: mem.learn,
 	}
 	if o.memoryPass {
+		if mem.project == "" {
+			return // no project: the pass's ops could not be stored, so skip the call
+		}
 		req.Pass, req.RepoRead, req.Question, req.Force = backend.PassMemory, false, "", false
 	}
 	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
@@ -625,9 +628,12 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 			da.Failures = 0
 			switch {
 			case o.memoryPass:
-				da.MemoryPasses++
-				if a.SessionValue == att.SessionValue && o.seenTo > da.MemorySeenTurn {
-					da.MemorySeenTurn = o.seenTo
+				// A pass from an old agent session charges nothing to the new one.
+				if a.SessionValue == att.SessionValue {
+					da.MemoryPasses++
+					if o.seenTo > da.MemorySeenTurn {
+						da.MemorySeenTurn = o.seenTo
+					}
 				}
 			case res.Verdict.Relevant:
 				da.CooldownLeft = d.Trigger.Cooldown
@@ -635,6 +641,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		}
 	})
 	if o.memoryPass {
+		e.clearError(k) // a pass sets no status of its own; drop a stale failure
 		if e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, true) == 0 {
 			e.feed(paneID, d.Slug, turn, state.OutcomePass, "memory pass: nothing new")
 		}

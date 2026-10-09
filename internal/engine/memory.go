@@ -12,6 +12,7 @@ import (
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
+	"herdr-dots/internal/view"
 )
 
 // pruneInterval is how often attached projects' memory is pruned.
@@ -282,6 +283,20 @@ func (e *Engine) setLearning(k key, on bool) {
 	}
 	e.mu.Unlock()
 	e.broadcast()
+}
+
+// clearError sets an error status back to idle after a successful memory
+// pass (memory passes set no status of their own, so nothing else would).
+func (e *Engine) clearError(k key) {
+	e.mu.Lock()
+	cleared := e.status[k] == view.StatusError
+	if cleared {
+		e.status[k] = view.StatusIdle
+	}
+	e.mu.Unlock()
+	if cleared {
+		e.broadcast()
+	}
 }
 
 // spawnOutcome records what happened to a card, off the caller's locks.

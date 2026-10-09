@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,6 +24,7 @@ import (
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
+	"herdr-dots/internal/view"
 )
 
 // memBackend returns scripted Results (verdict + remember ops).
@@ -30,14 +32,26 @@ type memBackend struct {
 	mu      sync.Mutex
 	results []backend.Result // consumed in order; the last one repeats
 	calls   []backend.Request
+	fails   int           // the next fails runs return an error
+	gate    chan struct{} // optional: runs block (after being recorded) until closed
 }
 
 func (b *memBackend) Kind() string                { return "claude-cli" }
 func (b *memBackend) Check(context.Context) error { return nil }
 func (b *memBackend) Run(_ context.Context, r backend.Request) (backend.Result, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.calls = append(b.calls, r)
+	gate := b.gate
+	b.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.fails > 0 {
+		b.fails--
+		return backend.Result{}, errors.New("backend unavailable")
+	}
 	res := backend.Result{Verdict: backend.Verdict{Severity: "info"}}
 	if len(b.results) > 0 {
 		res = b.results[0]
@@ -709,5 +723,94 @@ func TestAttachWithMemoryDisabledResolvesNoProject(t *testing.T) {
 	}
 	if ps, _ := r.mem.Projects(); len(ps) != 0 {
 		t.Fatalf("projects %+v", ps)
+	}
+}
+
+func (r *memRig) dotStatus(slug string) string {
+	pv, _ := r.e.Snapshot().Pane(pane)
+	for _, d := range pv.Dots {
+		if d.Slug == slug {
+			return d.Status
+		}
+	}
+	return ""
+}
+
+// A transient memory-pass failure must not leave an observe dot showing
+// "error" once a later pass succeeds.
+func TestSuccessfulMemoryPassClearsErrorStatus(t *testing.T) {
+	d := dot("Copy", dots.ModeObserve)
+	d.Memory.EveryTurns = 1
+	r := newMemRig(t, memOpts{}, d)
+	r.be.mu.Lock()
+	r.be.fails = 1
+	r.be.mu.Unlock()
+	r.attach(t, "copy")
+	r.turnEnds("s1", transcript.Turn{User: "one"})
+	eventually(t, "failed pass shows error", func() bool { return r.dotStatus("copy") == view.StatusError })
+	r.turnEnds("s1", transcript.Turn{User: "two"})
+	eventually(t, "second pass ran", func() bool { return r.dotAtt("copy").MemoryPasses == 1 })
+	eventually(t, "error cleared", func() bool { return r.dotStatus("copy") != view.StatusError })
+}
+
+// Reset (r in the Dots pane) clears an error status left by a failed pass.
+func TestResetClearsMemoryPassError(t *testing.T) {
+	d := dot("Copy", dots.ModeObserve)
+	d.Memory.EveryTurns = 1
+	r := newMemRig(t, memOpts{}, d)
+	r.be.mu.Lock()
+	r.be.fails = 1
+	r.be.mu.Unlock()
+	r.attach(t, "copy")
+	r.turnEnds("s1", transcript.Turn{User: "one"})
+	eventually(t, "failed pass shows error", func() bool { return r.dotStatus("copy") == view.StatusError })
+	if err := r.e.Reset(pane, "copy"); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.dotStatus("copy"); st == view.StatusError {
+		t.Fatalf("status after Reset: %s", st)
+	}
+}
+
+// A pass that finishes after the agent session changed must not charge the
+// new session's pass budget.
+func TestStaleMemoryPassDoesNotChargeNewSession(t *testing.T) {
+	d := dot("Copy", dots.ModeObserve)
+	d.Memory.EveryTurns = 1
+	r := newMemRig(t, memOpts{}, d)
+	gate := make(chan struct{})
+	r.be.mu.Lock()
+	r.be.gate = gate
+	r.be.mu.Unlock()
+	r.attach(t, "copy")
+	r.turnEnds("s1", transcript.Turn{User: "one"})
+	eventually(t, "pass in flight", func() bool { return r.be.n() == 1 })
+	r.setReader("s2", &fakeReader{})
+	p, _ := (&herdr.SocketClient{Path: r.srv.Path}).PaneGet(context.Background(), pane)
+	p.AgentSession = &herdr.AgentSession{Kind: "id", Value: "s2"}
+	r.srv.SetPane(p)
+	r.srv.Push(pane, herdr.StatusIdle)
+	eventually(t, "session followed", func() bool { a, _ := r.atts.Get(pane); return a.SessionValue == "s2" })
+	close(gate)
+	eventually(t, "stale pass finished", func() bool { return r.hasFeed(state.OutcomePass, "memory pass") })
+	if da := r.dotAtt("copy"); da.MemoryPasses != 0 || da.MemorySeenTurn != 0 {
+		t.Fatalf("stale pass charged the new session: %+v", da)
+	}
+}
+
+// A memory pass needs a project: without one, no model call is made.
+func TestMemoryPassWithoutProjectMakesNoCall(t *testing.T) {
+	d := dot("Copy", dots.ModeObserve)
+	d.Memory.EveryTurns = 1
+	r := newMemRig(t, memOpts{resolve: func(string) (memory.Project, error) {
+		return memory.Project{}, errors.New("no working directory")
+	}}, d)
+	r.attach(t, "copy")
+	r.turnEnds("s1", transcript.Turn{User: "one"})
+	r.turnEnds("s1", transcript.Turn{User: "two"})
+	eventually(t, "turns consumed", func() bool { return r.dotAtt("copy").LastSeenTurn == 2 })
+	time.Sleep(80 * time.Millisecond)
+	if n := r.be.n(); n != 0 {
+		t.Fatalf("%d backend calls for a pass with no project", n)
 	}
 }
