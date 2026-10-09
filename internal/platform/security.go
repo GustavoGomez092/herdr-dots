@@ -51,3 +51,55 @@ func allowedACESID(sid, me, owner string) bool {
 	}
 	return false
 }
+
+// pipeOwnerAccepted: an engine pipe is always created with O:<user SID>, so
+// only the current user may own it. Administrators is not accepted here even
+// for an elevated client (unlike files, see ownerAccepted).
+func pipeOwnerAccepted(owner, me string) bool { return owner != "" && owner == me }
+
+type aceKind int
+
+const (
+	aceAllow aceKind = iota // ACCESS_ALLOWED_ACE
+	aceDeny                 // ACCESS_DENIED_ACE
+	aceOther                // object, callback and every other entry type
+)
+
+// aclEntry is one DACL entry reduced to what the privacy rules look at.
+type aclEntry struct {
+	Kind        aceKind
+	InheritOnly bool // does not apply to the object itself
+	Inheritable bool // OBJECT_INHERIT or CONTAINER_INHERIT: children inherit it
+	SID         string
+}
+
+// checkPrivateEntries is CheckPrivate's rule set over plain data, so every OS
+// can test it. hasDACL is false for a NULL or absent DACL (full access for
+// everyone). On a directory, an allow entry for a foreign SID is refused when
+// it applies to the directory or is inheritable (even inherit-only), so new
+// files never briefly inherit it. On a file, inherit-only entries apply to
+// nothing and are skipped. Deny entries are skipped.
+func checkPrivateEntries(owner, me string, adminInToken, isDir, hasDACL bool, entries []aclEntry) error {
+	if !ownerAccepted(owner, me, adminInToken) {
+		return ErrNotOwner
+	}
+	if !hasDACL {
+		return ErrNotPrivate
+	}
+	for _, e := range entries {
+		applies := !e.InheritOnly || (isDir && e.Inheritable)
+		if !applies {
+			continue
+		}
+		switch e.Kind {
+		case aceDeny:
+		case aceAllow:
+			if !allowedACESID(e.SID, me, owner) {
+				return ErrNotPrivate
+			}
+		default:
+			return ErrNotPrivate // be conservative
+		}
+	}
+	return nil
+}

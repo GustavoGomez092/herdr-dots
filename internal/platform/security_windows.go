@@ -32,14 +32,6 @@ func adminInToken() bool {
 	return err == nil && member
 }
 
-// ownerOK applies ownerAccepted to SIDs from the Windows API.
-func ownerOK(owner, me *windows.SID) bool {
-	if owner == nil || me == nil {
-		return false
-	}
-	return ownerAccepted(owner.String(), me.String(), adminInToken())
-}
-
 // privateDACL builds "owner-only" access for path: full control for the
 // current user, SYSTEM and Administrators, inheritance from the parent off.
 // Directories pass their entries on to new children (OICI).
@@ -65,15 +57,23 @@ func applyPrivate(path string, dir bool) error {
 	if CheckPrivate(path) == nil {
 		return nil // already private: don't rewrite (and re-propagate) the ACL
 	}
+	me, err := currentUserSID()
+	if err != nil {
+		return err
+	}
 	dacl, err := privateDACL(dir)
 	if err != nil {
 		return err
 	}
+	// Owner and DACL in one call: the private DACL grants WRITE_OWNER, and an
+	// object left owned by someone else (an Administrators-owned file made
+	// while elevated) would stay refused by CheckPrivate.
 	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		me, nil, dacl, nil); err != nil {
 		return fmt.Errorf("make %s private: %w", path, err)
 	}
-	return nil
+	return CheckPrivate(path)
 }
 
 // SecureDir gives a directory an explicit owner-only DACL (current user,
@@ -96,7 +96,11 @@ func CheckPrivate(path string) error {
 	if err != nil {
 		return err
 	}
-	return checkPrivateSD(sd)
+	st, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	return checkPrivateSD(sd, st.IsDir())
 }
 
 // CheckPrivateFile is CheckPrivate for a file already open: it reads the
@@ -107,11 +111,16 @@ func CheckPrivateFile(f *os.File) error {
 	if err != nil {
 		return err
 	}
-	return checkPrivateSD(sd)
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	return checkPrivateSD(sd, st.IsDir())
 }
 
-// checkPrivateSD applies CheckPrivate's rules to a security descriptor.
-func checkPrivateSD(sd *windows.SECURITY_DESCRIPTOR) error {
+// checkPrivateSD reads a security descriptor into plain data and applies
+// checkPrivateEntries to it.
+func checkPrivateSD(sd *windows.SECURITY_DESCRIPTOR, isDir bool) error {
 	me, err := currentUserSID()
 	if err != nil {
 		return err
@@ -120,40 +129,42 @@ func checkPrivateSD(sd *windows.SECURITY_DESCRIPTOR) error {
 	if err != nil {
 		return err
 	}
-	if !ownerOK(owner, me) {
+	if owner == nil {
 		return ErrNotOwner
 	}
 	dacl, _, err := sd.DACL()
-	if err != nil || dacl == nil {
-		return ErrNotPrivate // no DACL at all grants everyone everything
+	if err != nil {
+		return err
 	}
-	meStr, ownerStr := me.String(), owner.String()
-	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
-		var ace *windows.ACCESS_ALLOWED_ACE
-		if err := windows.GetAce(dacl, i, &ace); err != nil {
-			return err
-		}
-		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
-			continue
-		}
-		switch ace.Header.AceType {
-		case windows.ACCESS_DENIED_ACE_TYPE:
-			continue
-		case windows.ACCESS_ALLOWED_ACE_TYPE:
-			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-			if !allowedACESID(sid.String(), meStr, ownerStr) {
-				return ErrNotPrivate
+	var entries []aclEntry
+	if dacl != nil {
+		for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+			var ace *windows.ACCESS_ALLOWED_ACE
+			if err := windows.GetAce(dacl, i, &ace); err != nil {
+				return err
 			}
-		default:
-			return ErrNotPrivate // object/callback entries: be conservative
+			e := aclEntry{
+				InheritOnly: ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0,
+				Inheritable: ace.Header.AceFlags&(windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE) != 0,
+				Kind:        aceOther,
+			}
+			switch ace.Header.AceType {
+			case windows.ACCESS_ALLOWED_ACE_TYPE:
+				e.Kind = aceAllow
+				e.SID = (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+			case windows.ACCESS_DENIED_ACE_TYPE:
+				e.Kind = aceDeny
+			}
+			entries = append(entries, e)
 		}
 	}
-	return nil
+	return checkPrivateEntries(owner.String(), me.String(), adminInToken(), isDir, dacl != nil, entries)
 }
 
-// FixPrivateHint tells the user how to make path private again.
+// FixPrivateHint tells the user how to make path private again. It avoids
+// %USERNAME%, which PowerShell does not expand.
 func FixPrivateHint(path string) string {
-	return fmt.Sprintf(`run: icacls "%s" /inheritance:r /grant:r "%%USERNAME%%:F" (or delete it and set it again)`, path)
+	return fmt.Sprintf(`delete the file and set it again, or run: icacls "%s" /inheritance:r /remove:g *S-1-1-0 *S-1-5-11 *S-1-5-32-545`, path)
 }
 
 // OpenNoFollow opens path read-only and fails if it is a symlink or another

@@ -23,9 +23,9 @@ func PipeSDDL() (string, error) {
 }
 
 // ListenPipe serves the named pipe name, reachable only by the current user.
-// It fails if the name already exists (go-winio creates the first instance
-// with FILE_FLAG_FIRST_PIPE_INSTANCE), so a pipe another user created first
-// is never shared.
+// It fails if the name already exists (go-winio v0.6.2 creates the first
+// instance with NtCreateNamedPipeFile and FILE_CREATE), so a pipe another
+// user created first is never shared.
 func ListenPipe(name string) (net.Listener, error) {
 	sddl, err := PipeSDDL()
 	if err != nil {
@@ -45,12 +45,10 @@ func DialPipe(ctx context.Context, name string) (net.Conn, error) {
 //
 // Elevation (UAC): ListenPipe sets the owner explicitly to the user SID, so
 // the engine's own pipe is owned by the user even when the engine runs
-// elevated. An Administrators owner (what an elevated process gets by
-// default for objects it makes without an explicit owner) is also accepted,
-// but only when this process's token has Administrators enabled (elevated).
-// A non-elevated process refuses an Administrators-owned pipe, because a
-// more privileged principal made it. SYSTEM and other users are always
-// refused. See ownerAccepted.
+// elevated. The owner must therefore be exactly the current user's SID.
+// Administrators is not accepted for pipes, elevated or not (unlike files,
+// see ownerAccepted), as is SYSTEM and every other account. See
+// pipeOwnerAccepted.
 func CheckPipeOwner(conn net.Conn) error {
 	f, ok := conn.(interface{ Fd() uintptr })
 	if !ok {
@@ -68,7 +66,7 @@ func CheckPipeOwner(conn net.Conn) error {
 	if err != nil {
 		return err
 	}
-	if !ownerOK(owner, me) {
+	if owner == nil || !pipeOwnerAccepted(owner.String(), me.String()) {
 		return fmt.Errorf("%w: the pipe is owned by %s", ErrNotOwner, owner.String())
 	}
 	return nil
