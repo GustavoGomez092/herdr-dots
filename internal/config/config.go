@@ -34,6 +34,10 @@ type Config struct {
 
 	Council CouncilConfig `toml:"council"` // [council] table (Phase 3)
 
+	ProactiveEnabled  bool    `toml:"proactive_enabled"`   // kill switch: idle research, schedules and commit triggers
+	DailyBudgetUSD    float64 `toml:"daily_budget_usd"`    // every background run, every session, per local day
+	CommitPollSeconds int     `toml:"commit_poll_seconds"` // how often on_commit dots check HEAD
+
 	WriteEnabled        bool `toml:"write_enabled"`         // global switch for write-capable dots (drafts); off by default
 	MaxConcurrentDrafts int  `toml:"max_concurrent_drafts"` // drafts running at once, engine-wide (1-8)
 
@@ -54,6 +58,12 @@ type ProviderConfig struct {
 
 // Provider returns the [providers.<name>] table (zero value when absent).
 func (c Config) Provider(name string) ProviderConfig { return c.Providers[name] }
+
+// Proactive defaults ([research], [schedule] and on_commit work).
+const (
+	DefaultDailyBudgetUSD    = 1.00
+	DefaultCommitPollSeconds = 15
+)
 
 // Council merge modes ([council] merge).
 const (
@@ -111,14 +121,18 @@ func Default() Config {
 		MemoryRetentionDays: 180,
 		MemoryMaxEntries:    200,
 
+		ProactiveEnabled:  true,
+		DailyBudgetUSD:    DefaultDailyBudgetUSD,
+		CommitPollSeconds: DefaultCommitPollSeconds,
+
 		MaxConcurrentDrafts: 2,
 	}
 }
 
 // Load returns Default() when the file is missing. Keys present in the file
 // override defaults; absent keys keep them. An unreadable or malformed file
-// yields Default() with InjectEnabled=false, MemoryEnabled=false and
-// WriteEnabled=false (the kill switches fail closed) plus an error so the
+// yields Default() with InjectEnabled, MemoryEnabled, WriteEnabled and
+// ProactiveEnabled false (the kill switches fail closed) plus an error so the
 // caller can log it and keep running.
 func Load(path string) (Config, error) {
 	c := Default()
@@ -127,12 +141,12 @@ func Load(path string) (Config, error) {
 		return c, nil
 	}
 	if err != nil {
-		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled = false, false, false
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
 		return c, err
 	}
 	if _, err := toml.Decode(string(data), &c); err != nil {
 		c = Default()
-		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled = false, false, false
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.MaxParallelRuns < 1 {
@@ -153,6 +167,12 @@ func Load(path string) (Config, error) {
 	c.MemoryMaxEntries = min(max(c.MemoryMaxEntries, 10), 10000)
 	c.MCP = c.MCP.Normalized()
 	c.Council = c.Council.Normalized()
+	// The daily budget always caps background work: zero, negative, NaN or
+	// infinite values mean the default, never "unlimited".
+	if !(c.DailyBudgetUSD > 0) || math.IsInf(c.DailyBudgetUSD, 0) {
+		c.DailyBudgetUSD = DefaultDailyBudgetUSD
+	}
+	c.CommitPollSeconds = min(max(c.CommitPollSeconds, 5), 600)
 	c.MaxConcurrentDrafts = min(max(c.MaxConcurrentDrafts, 1), 8)
 	if math.IsNaN(c.SessionBudgetUSD) || math.IsInf(c.SessionBudgetUSD, 0) || c.SessionBudgetUSD < 0 {
 		c.SessionBudgetUSD = 0
