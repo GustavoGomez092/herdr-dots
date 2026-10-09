@@ -26,6 +26,7 @@ func Defaults() []Binding {
 		{Key: "prefix+d", Action: "herdr-dots.manage", Description: "herdr-dots: manage dots"},
 		{Key: "prefix+a", Action: "herdr-dots.toggle-pane", Description: "herdr-dots: toggle Dots pane"},
 		{Key: "prefix+shift+s", Action: "herdr-dots.summon", Description: "herdr-dots: summon a dot"},
+		{Key: "prefix+shift+c", Action: "herdr-dots.council", Description: "herdr-dots: council (ask every dot)"},
 	}
 }
 

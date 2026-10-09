@@ -64,7 +64,7 @@ func TestPlanSkipsConflictsAndAlreadyBound(t *testing.T) {
 	if len(conflicts) != 1 || conflicts[0].Binding.Key != "prefix+a" || conflicts[0].With != "someone.else.thing" {
 		t.Fatalf("conflicts %v", conflicts)
 	}
-	if len(add) != 1 || add[0].Key != "prefix+shift+s" {
+	if len(add) != 2 || add[0].Key != "prefix+shift+s" || add[1].Key != "prefix+shift+c" {
 		t.Fatalf("add %v", add)
 	}
 }
@@ -128,7 +128,7 @@ func TestBlockIsValidTOMLAndAppendBacksUp(t *testing.T) {
 			Command []map[string]string `toml:"command"`
 		} `toml:"keys"`
 	}
-	if _, err := toml.Decode(block, &parsed); err != nil || len(parsed.Keys.Command) != 3 || parsed.Keys.Command[0]["type"] != "plugin_action" {
+	if _, err := toml.Decode(block, &parsed); err != nil || len(parsed.Keys.Command) != 4 || parsed.Keys.Command[0]["type"] != "plugin_action" {
 		t.Fatalf("block:\n%s\nerr %v", block, err)
 	}
 	p := filepath.Join(t.TempDir(), "config.toml")
@@ -147,5 +147,20 @@ func TestBlockIsValidTOMLAndAppendBacksUp(t *testing.T) {
 	}
 	if _, err := Existing(now); err != nil {
 		t.Fatalf("result must stay valid TOML: %v", err)
+	}
+}
+
+func TestCouncilKeyIsFreeUnlessTheUserBoundIt(t *testing.T) {
+	council := Defaults()[3]
+	if council.Key != "prefix+shift+c" || council.Action != "herdr-dots.council" {
+		t.Fatalf("council binding %+v", council)
+	}
+	add, _, conflicts := Plan([]Binding{council}, map[string]string{})
+	if len(add) != 1 || len(conflicts) != 0 {
+		t.Fatalf("prefix+shift+c is not a Herdr built-in: add %v conflicts %v", add, conflicts)
+	}
+	_, _, conflicts = Plan([]Binding{council}, map[string]string{"prefix+shift+c": "someone.else.copy"})
+	if len(conflicts) != 1 || conflicts[0].With != "someone.else.copy" {
+		t.Fatalf("a user binding wins: %v", conflicts)
 	}
 }
