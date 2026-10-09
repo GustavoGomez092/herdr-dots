@@ -19,6 +19,11 @@ type Config struct {
 	RunTimeoutSeconds  int    `toml:"run_timeout_seconds"`
 	TurnDebounceMs     int    `toml:"turn_debounce_ms"`
 	InjectEnabled      bool   `toml:"inject_enabled"`
+
+	MemoryEnabled            bool `toml:"memory_enabled"`              // global memory kill switch
+	MemoryRetentionDays      int  `toml:"memory_retention_days"`       // unused model/outcome memory is archived after this
+	MemoryMaxEntries         int  `toml:"memory_max_entries"`          // per dot scope; project 1.5x, global 0.5x
+	MemoryAutoApproveProject bool `toml:"memory_auto_approve_project"` // model-written project memory skips approval
 }
 
 func Default() Config {
@@ -30,6 +35,10 @@ func Default() Config {
 		RunTimeoutSeconds:  120,
 		TurnDebounceMs:     1500,
 		InjectEnabled:      true,
+
+		MemoryEnabled:       true,
+		MemoryRetentionDays: 180,
+		MemoryMaxEntries:    200,
 	}
 }
 
@@ -64,6 +73,10 @@ func Load(path string) (Config, error) {
 	if c.SessionBudgetCalls < 1 {
 		c.SessionBudgetCalls = 1
 	}
+	if c.MemoryRetentionDays < 1 {
+		c.MemoryRetentionDays = 1
+	}
+	c.MemoryMaxEntries = min(max(c.MemoryMaxEntries, 10), 10000)
 	return c, nil
 }
 

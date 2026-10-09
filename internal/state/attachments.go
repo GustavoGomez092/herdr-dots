@@ -22,6 +22,9 @@ type DotAttachment struct {
 	Paused       bool   `json:"paused"`
 	CooldownLeft int    `json:"cooldown_left"`
 	Failures     int    `json:"failures"`
+
+	MemorySeenTurn int `json:"memory_seen_turn"` // last turn index a memory pass covered
+	MemoryPasses   int `json:"memory_passes"`    // memory passes run for this attachment
 }
 
 type Attachment struct {
@@ -33,6 +36,9 @@ type Attachment struct {
 	Source          string          `json:"source"`
 	ForceScrollback bool            `json:"force_scrollback"`
 	Dots            []DotAttachment `json:"dots"`
+
+	ProjectID   string `json:"project_id,omitempty"` // memory project (memory.Project.ID)
+	ProjectName string `json:"project_name,omitempty"`
 }
 
 func (a *Attachment) Find(slug string) *DotAttachment {

@@ -15,6 +15,9 @@ const (
 	OutcomePass    = "pass"
 	OutcomeError   = "error"
 	OutcomeBudget  = "budget"
+
+	OutcomeLearned    = "learned"    // memory ops applied (detail "learned N")
+	OutcomeSuppressed = "suppressed" // verdict too similar to remembered advice (detail "similar to d:m17")
 )
 
 // feedKeep is how many recent entries per pane stay in memory.
