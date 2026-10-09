@@ -143,6 +143,9 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
 		Usage:       usage,
 		Feed:        feed,
 		Logf:        logf,
+
+		Memory:         memoryStoreFor(p, cfg, logf),
+		ResolveProject: resolveProject,
 	}), nil
 }
 
