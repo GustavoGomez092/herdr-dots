@@ -154,6 +154,7 @@ type Engine struct {
 	commitAt    time.Time        // last HEAD check
 	commitBusy  bool             // a HEAD check is running
 	commitAgain bool             // a HEAD check skipped a dot whose review was queued: check again when it ends
+	commitErrs  map[string]bool  // repo dir + git error already logged this session (commits.go); created lazily
 
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex

@@ -72,30 +72,49 @@ func TestMaxOutputCapsWhatIsKept(t *testing.T) {
 }
 
 // A partial clone's missing blob is never fetched lazily, even by a git that
-// ignores GIT_NO_LAZY_FETCH (before 2.44): protocol.allow=never refuses the
-// transport, so the repository's remote.origin.uploadpack program never runs.
+// ignores GIT_NO_LAZY_FETCH (before 2.44), whatever protocol.* keys the
+// repository sets: GIT_ALLOW_PROTOCOL=none (which overrides every
+// protocol.*.allow) and the protocol.allow=never pin refuse the transport, so
+// no upload-pack or ext:: program from the repository's config runs.
 func TestNoLazyFetchWhereGitIgnoresNoLazyFetch(t *testing.T) {
-	ctx := context.Background()
-	src := t.TempDir()
-	sh(t, src, "init", "-q")
-	writeFile(t, filepath.Join(src, "f.txt"), "remote only\n")
-	sh(t, src, "add", "-A")
-	sh(t, src, "commit", "-q", "-m", "one")
-	sh(t, src, "config", "uploadpack.allowFilter", "true")
-	sh(t, src, "config", "uploadpack.allowAnySHA1InWant", "true")
-	clone := filepath.Join(t.TempDir(), "clone")
-	sh(t, src, "-c", "protocol.file.allow=always", "clone", "-q", "--no-checkout", "--filter=blob:none",
-		"file://"+filepath.ToSlash(src), clone)
-	marker := filepath.Join(t.TempDir(), "ran")
-	script := filepath.Join(t.TempDir(), "upload.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$0 $*\" >> '"+marker+"'\nexit 1\n"), 0o700); err != nil {
-		t.Fatal(err)
+	cases := map[string]func(t *testing.T, clone, script string){
+		"protocol.allow=always + uploadpack": func(t *testing.T, clone, script string) {
+			sh(t, clone, "config", "remote.origin.uploadpack", script)
+			sh(t, clone, "config", "protocol.allow", "always")
+		},
+		"protocol.file.allow=always + uploadpack": func(t *testing.T, clone, script string) {
+			sh(t, clone, "config", "remote.origin.uploadpack", script)
+			sh(t, clone, "config", "protocol.file.allow", "always")
+		},
+		"ext:: remote": func(t *testing.T, clone, script string) {
+			sh(t, clone, "config", "remote.origin.url", "ext::"+filepath.ToSlash(script)+" %S")
+			sh(t, clone, "config", "protocol.ext.allow", "always")
+		},
 	}
-	sh(t, clone, "config", "remote.origin.uploadpack", script)
-	sh(t, clone, "config", "protocol.allow", "always")
-	// GIT_NO_LAZY_FETCH=0 stands in for a git that does not know the variable.
-	_, _ = isoGit(t).Run(ctx, clone, []string{"GIT_NO_LAZY_FETCH=0"}, "show", "--patch", "--no-ext-diff", "--no-textconv", "HEAD")
-	if b, err := os.ReadFile(marker); err == nil {
-		t.Fatalf("a lazy fetch ran the repository's upload-pack program:\n%s", b)
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			src := t.TempDir()
+			sh(t, src, "init", "-q")
+			writeFile(t, filepath.Join(src, "f.txt"), "remote only\n")
+			sh(t, src, "add", "-A")
+			sh(t, src, "commit", "-q", "-m", "one")
+			sh(t, src, "config", "uploadpack.allowFilter", "true")
+			sh(t, src, "config", "uploadpack.allowAnySHA1InWant", "true")
+			clone := filepath.Join(t.TempDir(), "clone")
+			sh(t, src, "-c", "protocol.file.allow=always", "clone", "-q", "--no-checkout", "--filter=blob:none",
+				"file://"+filepath.ToSlash(src), clone)
+			marker := filepath.Join(t.TempDir(), "ran")
+			script := filepath.Join(t.TempDir(), "upload.sh")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$0 $*\" >> '"+marker+"'\nexit 1\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			setup(t, clone, script)
+			// GIT_NO_LAZY_FETCH=0 stands in for a git that does not know the variable.
+			_, _ = isoGit(t).Run(ctx, clone, []string{"GIT_NO_LAZY_FETCH=0"}, "show", "--patch", "--no-ext-diff", "--no-textconv", "HEAD")
+			if b, err := os.ReadFile(marker); err == nil {
+				t.Fatalf("a lazy fetch ran a program from the repository's config:\n%s", b)
+			}
+		})
 	}
 }

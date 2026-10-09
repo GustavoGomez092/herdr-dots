@@ -43,10 +43,13 @@ var (
 // runs), gc.auto=0 and maintenance.auto=false (no background maintenance),
 // diff.submodule=short (a diff never starts a child `git diff` inside a
 // submodule, which would read that submodule's own diff.external and
-// textconv drivers; ruling P8-R13), protocol.allow=never (no fetch, so no
-// transport or upload-pack program from the repository's config, even from
-// a lazy fetch on a git too old for GIT_NO_LAZY_FETCH), and a cleaned
-// environment.
+// textconv drivers; ruling P8-R13), protocol.allow=never, and a cleaned
+// environment. The environment drops every GIT_* variable and sets
+// GIT_ALLOW_PROTOCOL=none, which overrides every protocol.*.allow key a
+// repository may set (protocol.allow=never alone is only a default that
+// protocol.<name>.allow=always beats), and GIT_NO_LAZY_FETCH=1: no transport
+// starts, so no upload-pack or ext:: program from the repository's config
+// runs, even from a lazy fetch on a git too old for GIT_NO_LAZY_FETCH.
 type Git struct {
 	Bin     string          // "" = "git"
 	Timeout time.Duration   // per command; 0 = DefaultTimeout
@@ -282,6 +285,12 @@ func gitEnv(env []string) []string {
 		"GIT_OPTIONAL_LOCKS=0",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_NO_LAZY_FETCH=1",
+		// No transport at all: GIT_ALLOW_PROTOCOL overrides every
+		// protocol.*.allow key (a repository's protocol.file.allow=always or
+		// protocol.ext.allow=always included), and the child of a lazy fetch
+		// inherits it. "none" names no protocol; an empty value is unreliable
+		// in Windows environment blocks.
+		"GIT_ALLOW_PROTOCOL=none",
 		"GIT_LFS_SKIP_SMUDGE=1",
 		"GIT_LITERAL_PATHSPECS=1",
 		"LC_ALL=C",

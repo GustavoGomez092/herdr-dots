@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -549,7 +550,8 @@ func TestCommitsWhileProactiveIsOffAreNeverReviewed(t *testing.T) {
 // A git failure while building a review (here a missing object) starts no
 // review and leaves the HEAD unrecorded: the next check retries it.
 func TestAGitErrorLeavesTheHeadForTheNextCheck(t *testing.T) {
-	r, repo := commitRig(t, commitDot("Tests"))
+	logs := &logSink{}
+	r, repo := commitRigWith(t, proOpts{deps: logs.deps}, commitDot("Tests"))
 	head := proCommit(t, repo, "a.go", "package a // the object goes missing for a while\n", "flaky object")
 	blob := proGit(t, repo, "rev-parse", head+":a.go")
 	obj := filepath.Join(repo, ".git", "objects", blob[:2], blob[2:])
@@ -560,9 +562,14 @@ func TestAGitErrorLeavesTheHeadForTheNextCheck(t *testing.T) {
 	if err := os.Remove(obj); err != nil {
 		t.Fatal(err)
 	}
-	r.checkHeads(t)
-	if n, q := len(commitRuns(r)), queuedJobs(r); n != 0 || q != 0 {
-		t.Fatalf("a review started without its commit context: %d runs, %d queued", n, q)
+	for range 3 { // a persistent error is retried at every check, and logged once
+		r.checkHeads(t)
+		if n, q := len(commitRuns(r)), queuedJobs(r); n != 0 || q != 0 {
+			t.Fatalf("a review started without its commit context: %d runs, %d queued", n, q)
+		}
+	}
+	if n := logs.count("commit " + head[:7] + " not reviewed"); n != 1 {
+		t.Fatalf("the persistent git error was logged %d times, want once", n)
 	}
 	if err := os.WriteFile(obj, data, 0o444); err != nil {
 		t.Fatal(err)
@@ -571,6 +578,22 @@ func TestAGitErrorLeavesTheHeadForTheNextCheck(t *testing.T) {
 	eventually(t, "the retried review", func() bool { return len(commitRuns(r)) == 1 })
 	if q := commitRuns(r)[0].Question; !strings.Contains(q, head) || !strings.Contains(q, "+package a") {
 		t.Fatalf("retried review context:\n%s", q)
+	}
+}
+
+// splitPaths reads git's NUL-terminated path list; a list cut short by the
+// output cap loses only its last, partial path.
+func TestSplitPathsDropsATruncatedLastPath(t *testing.T) {
+	for in, want := range map[string][]string{
+		"":                      nil,
+		"a.go\x00":              {"a.go"},
+		"a.go\x00docs/b.md\x00": {"a.go", "docs/b.md"},
+		"a.go\x00docs/b.m":      {"a.go"}, // "docs/b.m" was cut by the cap
+		"docs/b.m":              nil,
+	} {
+		if got := splitPaths(in); !slices.Equal(got, want) {
+			t.Errorf("splitPaths(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

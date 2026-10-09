@@ -213,9 +213,13 @@ func (e *Engine) reviewCommit(a state.Attachment, gen uint64, head string, ds []
 		question, err = e.commitContext(a.Cwd, head)
 	}
 	if err != nil {
-		// The HEAD stays unrecorded: the next check tries it again.
+		// The HEAD stays unrecorded: the next check tries it again. A lasting
+		// error (an old git without a flag, a missing object) is logged once
+		// per repository and error this session, not at every check.
 		release()
-		e.d.Logf("pane %s: %s not reviewed: %v", a.PaneID, label, err)
+		if e.commitErrOnce(a.Cwd, err) {
+			e.d.Logf("pane %s: %s not reviewed: %v (retried at every check; logged once)", a.PaneID, label, err)
+		}
 		return
 	}
 	turns, err := e.reader(a).Turns(e.ctx)
@@ -277,6 +281,25 @@ func (e *Engine) reviewCommit(a state.Attachment, gen uint64, head string, ds []
 	}
 }
 
+// maxCommitErrs bounds the logged-error set; past it the set starts over.
+const maxCommitErrs = 256
+
+// commitErrOnce reports whether this git error in repository dir is new this
+// session (and records it).
+func (e *Engine) commitErrOnce(dir string, err error) bool {
+	k := dir + "\x00" + err.Error()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.commitErrs[k] {
+		return false
+	}
+	if e.commitErrs == nil || len(e.commitErrs) >= maxCommitErrs {
+		e.commitErrs = map[string]bool{}
+	}
+	e.commitErrs[k] = true
+	return true
+}
+
 // commitDone ends one commit review (j.done, exactly once): it releases the
 // reservation and, if a HEAD check skipped a dot meanwhile, lets the next
 // poll check again instead of waiting for commit_poll_seconds.
@@ -322,9 +345,13 @@ func (e *Engine) deliverCommit(j bgJob, v backend.Verdict) {
 //     name its own drivers). worktree.Git pins diff.submodule=short on every
 //     command too (ruling P8-R13); this is the second guard.
 //
-// worktree.Git also pins hooks and fsmonitor off and protocol.allow=never (no
-// fetch, lazy or not), filters never run on a commit-to-commit diff, and with
-// no terminal there is no pager.
+// worktree.Git also pins hooks and fsmonitor off and blocks every transport:
+// GIT_ALLOW_PROTOCOL=none in its environment overrides any protocol.*.allow
+// key a repository sets (protocol.allow=never on the command line is only a
+// default, kept as a second guard), and GIT_NO_LAZY_FETCH=1, so a lazy fetch
+// of a partial clone's missing object starts no upload-pack or ext:: program
+// (it fails, and the review is retried). Filters never run on a
+// commit-to-commit diff, and with no terminal there is no pager.
 var commitFlags = []string{"--no-color", "--no-ext-diff", "--no-textconv", "--no-show-signature", "--submodule=short"}
 
 // commitShow runs `git show` for one view of a commit: a merge is shown as
@@ -404,18 +431,28 @@ func (e *Engine) commitFiles(cwd, head string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return splitPaths(out), nil
+}
+
+// splitPaths reads git's NUL-terminated path list. Every complete path ends
+// with a NUL, so text after the last NUL is a path the output cap
+// (commitGitMaxBytes) cut short: it is dropped, never matched against globs.
+func splitPaths(out string) []string {
+	out = out[:strings.LastIndexByte(out, 0)+1]
 	var files []string
 	for _, f := range strings.Split(out, "\x00") {
 		if f = strings.TrimSpace(f); f != "" {
 			files = append(files, f)
 		}
 	}
-	return files, nil
+	return files
 }
 
 // gitOut runs git through Phase 7's runner (Deps.Git, worktree.Git): hooks
-// and fsmonitor off, diff.submodule=short, protocol.allow=never, no terminal
-// prompts, optional locks or lazy fetches, GIT_* variables dropped,
+// and fsmonitor off, diff.submodule=short, every transport refused
+// (GIT_ALLOW_PROTOCOL=none overriding the repository's protocol.* keys,
+// GIT_NO_LAZY_FETCH=1, protocol.allow=never as a second guard), no terminal
+// prompts or optional locks, the caller's GIT_* variables dropped,
 // platform.CommandContext and a ChildEnv environment, and here a 5 s timeout
 // and at most commitGitMaxBytes of output kept. It returns trimmed stdout.
 // Never call it under an engine lock.
