@@ -12,7 +12,8 @@
 
 **Binding rulings used here:** (2) model-written project memory is *proposed* until approved; (11) project identity is the git root commit with a path-hash fallback; (12) observe dots run one memory pass every 5 turns, at most 10 per session; (13) anti-repeat suppression is on at 0.7 similarity and every suppression is logged in the feed.
 
-**Preconditions (check before Task 1; stop if any fails):**
+**Preconditions (check before Task 0; stop if any fails):**
+- The v1 cmd wiring and the v1 final fix wave are merged into the base branch (`feat/dots-v1` at `924f991` or later; this plan was reconciled against that commit). Check: `internal/engine/settings.go` has `func (e *Engine) config() config.Config` (the engine reads every setting through it, because `config.toml` reloads at runtime; never read `e.d.Config` for a setting), `state.Attachments` has `Upsert(base Attachment, fn func(*Attachment)) error`, `internal/textutil` exports `SanitizeModelText`, and `cmd/herdr-dots/ui.go` has `resolveTarget(dotsPanesFile string) string`.
 - The v1 cmd wiring is merged into the base branch: `ls internal/lockfile/lockfile.go cmd/herdr-dots/engine.go cmd/herdr-dots/ui.go cmd/herdr-dots/action.go README.md` lists all five files, `internal/lockfile` exports `TryLock(path) (*Lock, error)`, `(*Lock) Release() error`, `Held(path) bool` and `ErrLocked`, `cmd/herdr-dots/engine.go` has `buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(string, ...any)) (*engine.Engine, error)`, `cmd/herdr-dots/ui.go` has `runManage`, and `cmd/herdr-dots/main.go` has the `commands` map with a `"setup-keys": runSetupKeys` entry.
 - `go test -race ./... && go vet ./...` passes on the base.
 
@@ -56,7 +57,7 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 5. **Shallow clones use path identity** (`git rev-parse --is-shallow-repository` = `true`): their `rev-list --max-parents=0` returns the shallow boundary, which changes when the clone deepens (V1). Repos without commits and non-git directories also use path identity. `ResolveProject` always returns a usable project; its error only explains a fallback.
 6. **`paths.Discover`** uses the Herdr variables when set; otherwise it runs `herdr plugin config-dir herdr-dots` (verified to exist in Herdr 0.8.2) and reads the state dir from `CONFIG_DIR/.state-dir`, a pointer file that `Paths.Ensure()` writes (Herdr has no `state-dir` command). `SocketPath` may be empty for the CLI.
 7. **Memory passes** run with `Pass = PassMemory`, `RepoRead = false`, no question and no `Force`, on the turns since `MemorySeenTurn` capped at `min(20, 2 × context.turns)`. They carry the memory block (so models can update or forget their own entries) and count toward call budgets and the 3-failure stop. A failed pass does not advance `MemorySeenTurn`.
-8. **`MemorySeenTurn`** starts at the same catch-up point as `LastSeenTurn`, resets to 0 when the agent session changes (`/clear`), and follows a shorter replacement reader down. **`MemoryPasses`** counts per attachment, like v1's call budgets (not reset by `/clear`).
+8. **`MemorySeenTurn`** starts at the same catch-up point as `LastSeenTurn`, resets to 0 when the agent session changes (`/clear`), and follows a shorter replacement reader down. **`MemoryPasses`** counts per attachment, like v1's call budgets (not reset by `/clear`). (Amended by decision 31: v1's call budgets now reset on a new agent session, so `MemoryPasses` does too.)
 9. **`DecideMemory` takes the new turns** (`NewTurns []transcript.Turn`) instead of a count plus an `AllFromDot` flag.
 10. **Anti-repeat (`memory.SuppressScore`)** compares both the whole verdict message and its first sentence with the remembered entry's subject (a rule's `" (reason: …)"` suffix is ignored), and takes the higher score. Accepted findings only suppress within the same agent session and 50 turns; dismissed entries always suppress. Summoned runs are never suppressed.
 11. **Only developer-approved deliveries are "sent" outcomes.** Inject-mode auto deliveries (never approved) record nothing; dismissing any card (suggest, queue, inject, orphaned) records a `dismissed` outcome.
@@ -76,6 +77,13 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 25. **Spec §6.4 "Pane M → rule"** stores the reason inside the text as `<first sentence> (reason: <reason>)`.
 26. **Lock timeouts** during a run: the run goes without memory (no block, no suppression candidates); writes are retried once and then dropped with a log line. Other write failures also get a one-time toast "memory write failed".
 27. **The V6 threshold check is a test** (`TestSuppressionThresholdOnLabeledPairs`) over `internal/memory/testdata/similar_pairs.tsv`, which Task 1 creates. It fails if more than 10% of the "different" pairs reach 0.7.
+28. **(reconciled)** **Task 0 lands two v1 fixes first.** `Attach` builds its `Upsert` base from the live pane with no dots (a `Detach` of the last dot during the transcript read must not be undone), and the Dots pane cuts the roster (`+N more`, selected dot kept visible) before the title or footer can leave a short pane. Tasks 10 and 13 change the same functions, so their diffs are written against Task 0's result.
+29. **(reconciled)** **Memory text is sanitized in the store**, like v1's feed (fix-wave item 5): `prepare` and `readScope` run `textutil.SanitizeModelText` on entry text, and `cleanPaths` drops globs that hold control characters. Every source (model ops, outcomes, imports, the browser, the CLI, hand edits) goes through one of the two, so no entry reaches a terminal or a prompt with escape sequences.
+30. **(reconciled)** **Settings are read through `e.config()`** (the atomic pointer that `config.toml` reloads fill). `memory_enabled = false` applies to the next run: `memOn`, `spawnOutcome`, `Remember` and each pruning pass read it per call, and the memory loop runs whenever a store exists. Turning memory **on**, and the `memory_*` limits, need an engine restart, because `memoryStoreFor` opens the store at start (nil when disabled), like v1's `max_parallel_runs`. The README says so.
+31. **(reconciled)** **`MemoryPasses` resets when the agent session changes** (`checkSession`), because the fix wave made v1's call budgets per agent session (item 8), and ruling 12's "at most 10 per session" means per agent session. `r` (Reset) leaves `MemoryPasses` alone.
+32. **(reconciled)** **`Attach` with memory:** the project is resolved after the agent check (a non-agent pane never runs git), goes into the `Upsert` base, and is set inside the `Upsert` function when the stored attachment has none. The catch-up point sets `MemorySeenTurn` with `LastSeenTurn`. `upgradeFromScrollback` (fix-wave item 2) moves `MemorySeenTurn` with `LastSeenTurn` too: scrollback turn numbers don't carry over to the transcript.
+33. **(reconciled)** **Dismiss and Edit hold `e.dmu`** (fix-wave item 11). Edit's `origBody` bookkeeping takes `e.mu` under `dmu` (the allowed order), and send/dismiss outcomes go through `spawnOutcome`, so no memory I/O happens under `dmu`.
+34. **(reconciled)** **The `M` chooser renders in the Dots pane footer**, next to the edit and summon inputs, so the viewport (fix-wave item 4) never scrolls it away. Task 13's help line keeps v1's `r reset dot+budget`.
 
 ## Review Focus
 
@@ -95,6 +103,7 @@ Each task runs in its own git worktree branched from the wave's base. Merge ever
 
 | Task | Title | Depends on | Wave |
 |---|---|---|---|
+| 0 | Opening fixes: Attach base from the live pane, roster cut before the header | — | 1 |
 | 1 | Verification spike (V1–V6) and test data | — | 1 |
 | 2 | `lockfile.Acquire`, `paths.MemoryDir`, `paths.Discover` | — | 1 |
 | 3 | Memory types, project identity, secret scanner, similarity | — | 1 |
@@ -103,22 +112,22 @@ Each task runs in its own git worktree branched from the wave's base. Merge ever
 | 6 | Memory store: files, locking, CRUD, dedupe, ledger | Task 2, Task 3 | 2 |
 | 8 | Selection and rendering | Task 3 | 2 |
 | 9 | TOML export, import and diff | Task 3 | 2 |
-| 13 | Dots pane memory affordances | Task 5 | 2 |
+| 13 | Dots pane memory affordances | Task 0, Task 5 | 2 |
 | 7 | Applying model ops, outcomes, remember, pruning | Task 1, Task 4, Task 6 | 3 |
 | 11 | Memory browser (`internal/ui/memui`) | Task 3, Task 6 | 3 |
-| 10 | Engine memory hooks | Task 4, Task 5, Task 6, Task 7, Task 8 | 4 |
+| 10 | Engine memory hooks | Task 0, Task 4, Task 5, Task 6, Task 7, Task 8 | 4 |
 | 12 | Manage popup memory screen and delete flow | Task 5, Task 6, Task 11 | 4 |
 | 14 | `herdr-dots memory` CLI | Task 2, Task 5, Task 6, Task 7, Task 9 | 4 |
 | 15 | Wiring (`buildEngine`, `runManage`) and version 0.2.0 | Task 2, Task 10, Task 12, Task 14 | 5 |
 | 16 | README, roadmap and end-to-end check | all | 6 |
 
-**Wave schedule:** W1 = {1, 2, 3, 4, 5} → W2 = {6, 8, 9, 13} → W3 = {7, 11} → W4 = {10, 12, 14} → W5 = {15} → W6 = {16}.
+**Wave schedule:** W1 = {0, 1, 2, 3, 4, 5} → W2 = {6, 8, 9, 13} → W3 = {7, 11} → W4 = {10, 12, 14} → W5 = {15} → W6 = {16}.
 
 The tasks below appear in wave order; task numbers are stable ids, not the execution order.
 
 **Gate after Wave 1:** start Wave 2 only after Task 1's notes say "assumption holds: yes" for V1–V5. If any says "no", stop and report to the user (the spec's §9 rule). V6 is checked by a test in Task 7.
 
-**Test-name hygiene for parallel tasks:** tasks that add test files to the same package in the same wave use disjoint helper names (Task 6: `testStore`, `mustAdd`, `list`, `dotNote`, `pid`; Task 8: `ent`, `ids`, `selNow`; Task 9: `tomlFixture`; Task 3: `isolateGit`, `gitT`, `newRepo`, `resolve`, `jwtA`, `jwtB`). Later tasks may reuse earlier helpers.
+**Test-name hygiene for parallel tasks:** tasks that add test files to the same package in the same wave use disjoint helper names (Task 6: `testStore`, `mustAdd`, `list`, `dotNote`, `pid`; Task 8: `ent`, `ids`, `selNow`; Task 9: `tomlFixture`; Task 3: `isolateGit`, `gitT`, `newRepo`, `resolve`, `jwtA`, `jwtB`; Task 0: `sixDots` in package `pane`). Later tasks may reuse earlier helpers.
 
 ## File Structure
 
@@ -150,12 +159,14 @@ internal/view/view.go                 (mod)  Pane.ProjectID/Name/MemoryEntries/M
 internal/ipc/ipc.go                   (mod)  CmdRemember, CmdMemoryChanged, RememberArgs
 internal/queue/queue.go               (mod)  Card.Project
 internal/engine/memory.go             (new)  DecideMemory, memory block, apply, suppression, outcomes, Remember, pruning loop
-internal/engine/engine.go             (mod)  Deps.Memory/ResolveProject; Attach, processPane, runDot, route, Snapshot hooks
-internal/engine/deliver.go            (mod)  outcomes on send/dismiss, edit originals, session reset
+internal/engine/engine.go             (mod)  Task 0: Attach Upsert base from the live pane. Task 10: Deps.Memory/ResolveProject; Attach, processPane, upgradeFromScrollback, runDot, route, Snapshot hooks
+internal/engine/attach_race_test.go   (new)  Task 0: a Detach during Attach's read sticks
+internal/engine/deliver.go            (mod)  outcomes on send/dismiss, edit originals, session reset (MemorySeenTurn, MemoryPasses)
 internal/engine/handle.go             (mod)  CmdRemember, CmdMemoryChanged
 internal/ui/memui/model.go            (new)  memory browser/editor
 internal/ui/manage/model.go           (mod)  M/P keys, memory screen, delete-memory question
-internal/ui/pane/model.go             (mod)  header counts, learning status, M chooser, feed details
+internal/ui/pane/model.go             (mod)  Task 0: roster cut first on a short pane. Task 13: header counts, learning status, M chooser, feed details
+internal/ui/pane/roster_test.go       (new)  Task 0: header stays on an 8-line pane with 6 dots
 cmd/herdr-dots/memory.go              (new)  herdr-dots memory CLI
 cmd/herdr-dots/memwire.go             (new)  memoryStoreFor, resolveProject, paneProject
 cmd/herdr-dots/main.go                (mod)  "memory" in the commands map
@@ -169,6 +180,282 @@ docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md     (mod)  Phase 2 row l
 ```
 
 **Conventions for code steps.** New files are given in full. Changes to existing files are given as unified diffs against the base code: apply them from the repo root with `git apply` (save the block to a file first, for example `/tmp/task.patch`, then `git apply /tmp/task.patch`). If a hunk doesn't apply because a neighboring line changed, make the same edit by hand: every hunk shows the exact lines to add and remove. After applying, run `gofmt -w` on the touched files.
+
+---
+
+### Task 0: Opening fixes: Attach base from the live pane, roster cut before the header
+
+Two small v1 fixes found after the final fix wave. They touch `engine.Attach` and the Dots pane `View`, which Tasks 10 and 13 change later, so they land first.
+
+1. **Attach can resurrect a detached dot.** When the attachment already exists, `Attach` passes the stored attachment (with its `Dots`) as the `Upsert` base. If a `Detach` of the last dot lands while `Attach` reads the transcript, the attachment is deleted, and `Upsert` then recreates it from that stale base, bringing the detached dot back. Fix: build the base from the live pane with `Dots: nil`; the stored attachment is used only to pick the reader.
+2. **The pane header scrolls off a short pane.** `View` clamps the body to at least one line, but head (title, roster, QUEUE rule) plus foot can already exceed the height, so the terminal shows the bottom and the title scrolls off. Fix: cut the roster first, ending it with a `+N more` line and keeping the selected roster dot visible, so the title and footer always fit.
+
+**Depends on:** none (Wave 1).
+
+**Files:**
+- Modify: `internal/engine/engine.go` (`Attach`)
+- Modify: `internal/ui/pane/model.go` (`View`, new `fitRoster`)
+- Test: `internal/engine/attach_race_test.go`, `internal/ui/pane/roster_test.go`
+
+**Interfaces:**
+- Consumes: v1 `state.Attachments.Upsert(base Attachment, fn func(*Attachment)) error`, the engine test rig (`newRig`, `dot`, `pane`, `r.attach`, `fakeReader.arm/entered/release`), the pane test helpers (`snap`, `press`, `fakeCaller`).
+- Produces: `Attach` behavior only (no new exported names); unexported `fitRoster(lines []string, n, sel int) []string` in package `pane`. Task 10's `engine.go` diff and Task 13's `pane/model.go` diff are written against this task's result.
+
+- [ ] **Step 1: Write the failing tests**
+
+`internal/engine/attach_race_test.go`:
+
+```go
+package engine
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"herdr-dots/internal/dots"
+	"herdr-dots/internal/herdr"
+)
+
+// A Detach of the last dot that lands while a second Attach reads the
+// transcript must stick: Attach's Upsert base comes from the live pane, not
+// from the attachment it read before the Detach.
+func TestAttachDoesNotResurrectDotDetachedDuringRead(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue), dot("Frontend", dots.ModeQueue))
+	// A working agent keeps processPaneIfIdle from reading the transcript, so
+	// the only Turns call after arm() is the second Attach's own read.
+	r.srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusWorking, Cwd: "/repo",
+		AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}})
+	r.attach(t, "security")
+	rd := r.readers["s1"]
+	rd.arm()
+	done := make(chan error, 1)
+	go func() { done <- r.e.Attach(context.Background(), pane, []string{"frontend"}) }()
+	select {
+	case <-rd.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Attach never read the transcript")
+	}
+	if err := r.e.Detach(pane, "security"); err != nil { // the last dot: the attachment is deleted
+		t.Fatal(err)
+	}
+	if _, ok := r.atts.Get(pane); ok {
+		t.Fatal("detaching the last dot must delete the attachment")
+	}
+	close(rd.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	a, ok := r.atts.Get(pane)
+	if !ok || a.Find("frontend") == nil {
+		t.Fatalf("frontend not attached: %+v", a.Dots)
+	}
+	if a.Find("security") != nil {
+		t.Fatalf("security was detached during Attach and came back: %+v", a.Dots)
+	}
+	if a.Agent != "claude" || a.SessionValue != "s1" || a.Cwd != "/repo" {
+		t.Fatalf("recreated attachment must come from the live pane: %+v", a)
+	}
+}
+```
+
+`internal/ui/pane/roster_test.go`:
+
+```go
+package pane
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"herdr-dots/internal/view"
+)
+
+// sixDots is snap() with six dots on the pane and no cards.
+func sixDots() view.Snapshot {
+	s := snap()
+	s.Panes[0].Cards = nil
+	s.Panes[0].Dots = nil
+	for i := 1; i <= 6; i++ {
+		s.Panes[0].Dots = append(s.Panes[0].Dots, view.DotState{
+			Slug: fmt.Sprintf("dot%d", i), Name: fmt.Sprintf("Dot%d", i), Glyph: "◆", Color: "red", Mode: "queue", Status: "passed",
+		})
+	}
+	return s
+}
+
+// When the roster doesn't fit, it is cut first ("+N more") so the header and
+// the footer stay on screen.
+func TestShortPaneTruncatesRosterAndKeepsHeader(t *testing.T) {
+	var m tea.Model = New("w1:p1", &fakeCaller{})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 46, Height: 8})
+	m, _ = m.Update(SnapshotMsg(sixDots()))
+	v := m.View()
+	lines := strings.Split(v, "\n")
+	if len(lines) > 8 {
+		t.Fatalf("view is %d lines, want <= 8:\n%s", len(lines), v)
+	}
+	if !strings.Contains(lines[0], "DOTS →") {
+		t.Fatalf("the header must be the first line:\n%s", v)
+	}
+	for _, want := range []string{"Dot1", "+3 more", "QUEUE (0)", "j/k move"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "Dot6") {
+		t.Errorf("the roster must be cut:\n%s", v)
+	}
+}
+
+// The selected roster dot stays visible when the roster is cut.
+func TestShortPaneKeepsSelectedRosterDotVisible(t *testing.T) {
+	var m tea.Model = New("w1:p1", &fakeCaller{})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 46, Height: 8})
+	m, _ = m.Update(SnapshotMsg(sixDots()))
+	m = press(m, "tab", "j", "j", "j", "j", "j") // roster, select Dot6
+	v := m.View()
+	lines := strings.Split(v, "\n")
+	if len(lines) > 8 || !strings.Contains(lines[0], "DOTS →") {
+		t.Fatalf("header must stay on an 8-line screen:\n%s", v)
+	}
+	for _, want := range []string{"Dot6", "+3 more"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q:\n%s", want, v)
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests to see them fail**
+
+Run: `go test ./internal/engine/ -run TestAttachDoesNotResurrectDotDetachedDuringRead ; go test ./internal/ui/pane/ -run TestShortPane`
+Expected: FAIL with `security was detached during Attach and came back` and `view is 9 lines, want <= 8` (both pane tests).
+
+- [ ] **Step 3: Implement**
+
+`internal/engine/engine.go`:
+
+```diff
+--- a/internal/engine/engine.go
++++ b/internal/engine/engine.go
+@@ -197,12 +197,16 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
+ 	pl := e.paneLock(paneID)
+ 	pl.Lock()
+ 	defer pl.Unlock()
++	// The Upsert base comes from the live pane with no dots, never from the
++	// stored attachment: a Detach of the last dot during the read below deletes
++	// the attachment, and a base copied from it would bring that dot back.
++	base := state.Attachment{PaneID: paneID, Agent: p.Agent, Cwd: p.WorkDir()}
++	if p.AgentSession != nil {
++		base.SessionKind, base.SessionValue = p.AgentSession.Kind, p.AgentSession.Value
++	}
+ 	att, ok := e.d.Attachments.Get(paneID)
+ 	if !ok {
+-		att = state.Attachment{PaneID: paneID, Agent: p.Agent, Cwd: p.WorkDir()}
+-		if p.AgentSession != nil {
+-			att.SessionKind, att.SessionValue = p.AgentSession.Kind, p.AgentSession.Value
+-		}
++		att = base
+ 	}
+ 	r := e.reader(att)
+ 	turns, err := r.Turns(ctx)
+@@ -222,7 +226,7 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
+ 	}
+ 	// Update-or-create in one store call: runFailed, cooldown or Detach updates
+ 	// made while the transcript was read are kept, not overwritten.
+-	err = e.d.Attachments.Upsert(att, func(x *state.Attachment) {
++	err = e.d.Attachments.Upsert(base, func(x *state.Attachment) {
+ 		x.Source = r.Source()
+ 		for _, da := range add {
+ 			if x.Find(da.Slug) == nil {
+```
+
+`internal/ui/pane/model.go`:
+
+```diff
+--- a/internal/ui/pane/model.go
++++ b/internal/ui/pane/model.go
+@@ -375,15 +375,16 @@ func (m Model) View() string {
+ 	if len(p.Dots) == 0 {
+ 		b.WriteString(style.Dim.Render("No dots here yet. Press prefix+d to add some.") + "\n")
+ 	}
++	top := b.String() // title and banners: always on screen
++	roster := make([]string, 0, len(p.Dots))
+ 	for i, d := range p.Dots {
+ 		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, d.Status)
+ 		if m.area == areaRoster && i == m.roster {
+ 			line = style.Selected.Render(line)
+ 		}
+-		b.WriteString(line + "\n")
++		roster = append(roster, line+"\n")
+ 	}
+-	b.WriteString(rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w))
+-	head := b.String() // header and roster: always on screen
++	queueRule := rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w)
+ 
+ 	// Body: cards, feed and help, scrolled so the selected card stays visible.
+ 	b.Reset()
+@@ -457,6 +458,16 @@ func (m Model) View() string {
+ 	b.WriteString(style.Dim.Render(footer))
+ 	foot := b.String()
+ 
++	if m.height > 0 {
++		// Cut the roster first so the title and the footer stay on screen,
++		// keeping one line for the body.
++		sel := -1
++		if m.area == areaRoster {
++			sel = m.roster
++		}
++		roster = fitRoster(roster, m.height-lineCount(top)-lineCount(queueRule)-lineCount(foot)-1, sel)
++	}
++	head := top + strings.Join(roster, "") + queueRule
+ 	if m.height > 0 {
+ 		avail := max(1, m.height-lineCount(head)-lineCount(foot))
+ 		bodyText = window(bodyText, avail, selStart, selEnd)
+@@ -464,6 +475,25 @@ func (m Model) View() string {
+ 	return head + bodyText + foot
+ }
+ 
++// fitRoster returns at most n roster lines. When some are cut, the last line
++// says how many ("+N more") and the selected dot (sel, -1 for none) stays
++// visible.
++func fitRoster(lines []string, n, sel int) []string {
++	if len(lines) <= n {
++		return lines
++	}
++	if n <= 0 {
++		return nil
++	}
++	keep := n - 1
++	off := 0
++	if sel >= keep {
++		off = min(sel-keep+1, len(lines)-keep)
++	}
++	out := append([]string(nil), lines[off:off+keep]...)
++	return append(out, style.Dim.Render(fmt.Sprintf("  +%d more", len(lines)-keep))+"\n")
++}
++
+ // lineCount counts lines in s; a trailing line without "\n" counts too.
+ func lineCount(s string) int {
+ 	n := strings.Count(s, "\n")
+```
+
+- [ ] **Step 4: Run the tests to see them pass**
+
+Run: `go test -race ./internal/engine/ ./internal/ui/pane/`
+Expected: PASS (including v1's `TestAttachDoesNotLoseConcurrentAttachmentUpdates` and `TestViewportKeepsHeaderRosterAndSelectedCard`).
+
+- [ ] **Step 5: Full check and commit**
+
+```bash
+gofmt -l internal cmd ; go vet ./... && go test -race ./...
+git add internal/engine/engine.go internal/engine/attach_race_test.go internal/ui/pane/model.go internal/ui/pane/roster_test.go
+git commit -m "fix: Attach never resurrects a detached dot; a short pane cuts the roster, not the header (Phase 2, VITAL)"
+```
 
 ---
 
@@ -2776,7 +3063,7 @@ git commit -m "feat: [memory] dot settings, memory config, attachment/view/ipc f
 - Test: `internal/memory/store_test.go`, `internal/memory/store_xproc_test.go`
 
 **Interfaces:**
-- Consumes: `lockfile.Acquire`, `lockfile.TryLock` (tests), `lockfile.ErrLocked`, `fsutil.WriteFileAtomic`, `doublestar.ValidatePattern`; Task 3's `Entry`, `Ref`, `Limits`, errors, `Normalize`, `Similar`, `SuppressScore`, `realPath`, `lastActive`, `fileVersion`, `GlobalID`.
+- Consumes: `lockfile.Acquire`, `lockfile.TryLock` (tests), `lockfile.ErrLocked`, `fsutil.WriteFileAtomic`, `doublestar.ValidatePattern`, v1 `textutil.SanitizeModelText(s string) string` (entry text on write and read; Plan decision 29); Task 3's `Entry`, `Ref`, `Limits`, errors, `Normalize`, `Similar`, `SuppressScore`, `realPath`, `lastActive`, `fileVersion`, `GlobalID`.
 - Produces (package `memory`):
   - `type Store struct{ Dir string; Limits Limits; Now func() time.Time; Logf func(string, ...any) }`; `Open(dir string, lim Limits) *Store`.
   - `ValidProjectID(p string) bool`; `ValidSlug(slug string) bool`.
@@ -2970,6 +3257,24 @@ func TestTextLimits(t *testing.T) {
 	}
 	if _, err := s.Add(pid, Entry{Scope: ScopeDot, Dot: "security", Kind: KindNote, Text: "x", Status: StatusProposed}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("only project memory can be proposed: %v", err)
+	}
+}
+
+// Entry text reaches terminals (memory browser, CLI) and prompts, like model
+// text in v1's feed: control characters are stripped on write and on read
+// (a hand edit or an old file), and paths holding them are dropped.
+func TestControlCharactersAreStripped(t *testing.T) {
+	s := testStore(t)
+	e := mustAdd(t, s, pid, dotNote("security", "use zod\x1b]52;c;ZXZpbA==\x07 schemas\u009b2J\tnow"))
+	if e.Text != "use zod]52;c;ZXZpbA== schemas2J\tnow" {
+		t.Fatalf("stored %q", e.Text)
+	}
+	path := filepath.Join(s.Dir, pid, "dots", "frontend.json")
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	os.WriteFile(path, []byte(`{"version":1,"entries":[{"id":"m1","kind":"note","status":"active","text":"hand\u001b[2J edit","paths":["web/\u001b[1m**","web/**"]}]}`), 0o600)
+	es := list(t, s, pid, Filter{Scope: ScopeDot, Dot: "frontend"})
+	if len(es) != 1 || es[0].Text != "hand[2J edit" || len(es[0].Paths) != 1 || es[0].Paths[0] != "web/**" {
+		t.Fatalf("hand-edited entry: %+v", es)
 	}
 }
 
@@ -3332,12 +3637,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
 
 	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/lockfile"
+	"herdr-dots/internal/textutil"
 )
 
 // Store reads and writes memory under Dir:
@@ -3527,6 +3834,9 @@ func readScope(path string, sc Scope, dot string) (scopeFile, error) {
 		if sc != ScopeProject {
 			e.Dot = dot
 		}
+		// Hand edits and old files get the same cleaning as new writes.
+		e.Text = textutil.SanitizeModelText(e.Text)
+		e.Paths = cleanPaths(e.Paths)
 		if idNum(e.ID) == 0 { // hand-written entry without an id
 			f.Next++
 			e.ID = "m" + strconv.Itoa(f.Next)
@@ -3588,7 +3898,8 @@ func (s *Store) maxText() int {
 
 // prepare validates and normalizes an entry before it is stored.
 func (s *Store) prepare(e Entry) (Entry, error) {
-	e.Text = strings.TrimSpace(e.Text)
+	// Entry text reaches terminals and prompts: no control characters.
+	e.Text = strings.TrimSpace(textutil.SanitizeModelText(e.Text))
 	if e.Text == "" {
 		return e, ErrEmpty
 	}
@@ -3624,7 +3935,7 @@ func cleanPaths(in []string) []string {
 	var out []string
 	for _, p := range in {
 		p = strings.TrimSpace(p)
-		if p == "" || len(p) > 200 || !doublestar.ValidatePattern(p) || slices.Contains(out, p) {
+		if p == "" || len(p) > 200 || strings.IndexFunc(p, unicode.IsControl) >= 0 || !doublestar.ValidatePattern(p) || slices.Contains(out, p) {
 			continue
 		}
 		out = append(out, p)
@@ -5100,7 +5411,7 @@ git commit -m "feat(memory): TOML export, import and diff for memory edit (Phase
 
 ### Task 13: Dots pane memory affordances
 
-**Depends on:** Task 5 (view fields, feed outcomes, `ipc.RememberArgs`). Wave 2.
+**Depends on:** Task 0 (its `View` is the base of this task's diff), Task 5 (view fields, feed outcomes, `ipc.RememberArgs`). Wave 2.
 
 **Files:**
 - Modify: `internal/ui/pane/model.go`
@@ -5108,7 +5419,7 @@ git commit -m "feat(memory): TOML export, import and diff for memory edit (Phase
 
 **Interfaces:**
 - Consumes: `view.Pane.ProjectName/MemoryEntries/MemoryProposals`, `view.DotState.Learning`, `state.OutcomeLearned/OutcomeSuppressed`, `ipc.CmdRemember`, `ipc.RememberArgs`; v1 test helpers `fakeCaller`, `snap()`, `key()`, `press()`, `ready()`.
-- Produces: header `DOTS → <agent> (<pane>) · <project> · mem N (K proposals)  budget …`; roster shows `◌ learning…` for a learning dot; feed shows `learned N` and `suppressed (d:m17)`; `M` on a queue card opens a chooser (`f` finding, `r` rule with an optional reason, `c` convention, `g` global, `esc` cancel) that sends `ipc.CmdRemember`. `M` is gated like `enter`/`x`/`e`: engine connected and queue focused.
+- Produces: header `DOTS → <agent> (<pane>) · <project> · mem N (K proposals)  budget …`; roster shows `◌ learning…` for a learning dot; feed shows `learned N` and `suppressed (d:m17)`; `M` on a queue card opens a chooser (`f` finding, `r` rule with an optional reason, `c` convention, `g` global, `esc` cancel) that sends `ipc.CmdRemember`. `M` is gated like `enter`/`x`/`e`: engine connected and queue focused. The chooser renders in the footer (with the edit and summon inputs), so a short pane keeps it on screen (Plan decision 34).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5209,6 +5520,21 @@ func TestFeedShowsLearnedAndSuppressed(t *testing.T) {
 		t.Fatalf("feed:\n%s", v)
 	}
 }
+
+// The chooser sits in the footer with the editors, so a short pane never
+// scrolls it off.
+func TestRememberChooserStaysOnScreenInShortPane(t *testing.T) {
+	var m tea.Model = New("w1:p1", &fakeCaller{})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 46, Height: 10})
+	m, _ = m.Update(SnapshotMsg(memSnap()))
+	v := press(m, "M").View()
+	if !strings.Contains(v, "f accepted finding") || !strings.Contains(v, "DOTS →") {
+		t.Fatalf("chooser and header must both show:\n%s", v)
+	}
+	if n := strings.Count(v, "\n") + 1; n > 10 {
+		t.Fatalf("view is %d lines, want <= 10:\n%s", n, v)
+	}
+}
 ```
 
 - [ ] **Step 2: Run the tests to see them fail**
@@ -5223,7 +5549,7 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
 ```diff
 --- a/internal/ui/pane/model.go
 +++ b/internal/ui/pane/model.go
-@@ -16,6 +16,7 @@
+@@ -16,6 +16,7 @@ import (
  	"herdr-dots/internal/dots"
  	"herdr-dots/internal/ipc"
  	"herdr-dots/internal/queue"
@@ -5231,11 +5557,12 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
  	"herdr-dots/internal/ui/style"
  	"herdr-dots/internal/view"
  )
-@@ -51,9 +52,14 @@
+@@ -53,10 +54,15 @@ type Model struct {
  	asking    bool
  	askSlug   string
  	question  textinput.Model
 -	width     int
+-	height    int // 0 = unknown: render everything
 -	status    string
 -	seen      bool // a snapshot or disconnect has been received
 +	// M chooser: remember the selected card (f/r/c/g); r asks for a reason.
@@ -5244,12 +5571,13 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
 +	reasoning   bool
 +	reason      textinput.Model
 +	width       int
++	height      int // 0 = unknown: render everything
 +	status      string
 +	seen        bool // a snapshot or disconnect has been received
  }
  
  const offlineHint = "offline: actions unavailable until the engine restarts"
-@@ -66,7 +72,9 @@
+@@ -69,7 +75,9 @@ func New(target string, c Caller) Model {
  	ta.ShowLineNumbers = false
  	ti := textinput.New()
  	ti.Placeholder = "optional question, enter to summon"
@@ -5260,7 +5588,7 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
  }
  
  func (m Model) Init() tea.Cmd { return nil }
-@@ -160,6 +168,8 @@
+@@ -192,6 +200,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
  			return m.updateEditor(msg)
  		case m.asking:
  			return m.updateQuestion(msg)
@@ -5269,7 +5597,7 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
  		}
  		return m.updateKeys(msg)
  	}
-@@ -195,17 +205,58 @@
+@@ -227,17 +237,58 @@ func (m Model) updateQuestion(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  	return m, cmd
  }
  
@@ -5330,7 +5658,7 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
  		if m.area != areaQueue {
  			m.status = "tab to the queue to act on a card"
  			return m, nil
-@@ -262,6 +313,10 @@
+@@ -295,6 +346,10 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  		if c, ok := m.selectedCard(); ok {
  			return m, m.call(ipc.CmdDismiss, ipc.CardArgs{ID: c.ID})
  		}
@@ -5341,14 +5669,14 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
  	case "e":
  		if c, ok := m.selectedCard(); ok && sendable(c) {
  			m.editing, m.editID = true, c.ID
-@@ -311,8 +366,23 @@
+@@ -344,9 +399,24 @@ func rule(title string, w int) string {
  
  const helpText = `j/k move   tab roster/queue   t next agent
  ⏎ send card   a send all   e edit   x dismiss
 +M remember card (finding, rule, convention, global)
  s summon dot   m cycle mode   p pause   d detach
- r reset errored dot   f feed   ? help   q close`
-+
+ r reset dot+budget    f feed   ? help   q close`
+ 
 +// feedOutcome shows memory outcomes with their detail: "learned 2",
 +// "suppressed (d:m17)".
 +func feedOutcome(e state.FeedEntry) string {
@@ -5362,25 +5690,26 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
 +	}
 +	return e.Outcome
 +}
- 
++
  func (m Model) View() string {
  	w := m.width
-@@ -326,6 +396,12 @@
+ 	if w <= 0 {
+@@ -359,6 +429,12 @@ func (m Model) View() string {
  		agent = "agent"
  	}
- 	head := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
+ 	title := fmt.Sprintf("DOTS → %s (%s)", agent, m.target)
 +	if ok && p.ProjectName != "" {
-+		head += fmt.Sprintf(" · %s · mem %d", p.ProjectName, p.MemoryEntries)
++		title += fmt.Sprintf(" · %s · mem %d", p.ProjectName, p.MemoryEntries)
 +		if p.MemoryProposals > 0 {
-+			head += fmt.Sprintf(" (%d proposals)", p.MemoryProposals)
++			title += fmt.Sprintf(" (%d proposals)", p.MemoryProposals)
 +		}
 +	}
  	if ok {
- 		head += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
+ 		title += fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget)
  	}
-@@ -343,7 +419,11 @@
- 		b.WriteString(style.Dim.Render("No dots here yet. Press prefix+d to add some.") + "\n")
- 	}
+@@ -378,7 +454,11 @@ func (m Model) View() string {
+ 	top := b.String() // title and banners: always on screen
+ 	roster := make([]string, 0, len(p.Dots))
  	for i, d := range p.Dots {
 -		line := fmt.Sprintf("%s %-12s %-8s %s", style.Glyph(d.Glyph, d.Color), trunc(d.Name, 12), d.Mode, d.Status)
 +		status := d.Status
@@ -5391,7 +5720,16 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
  		if m.area == areaRoster && i == m.roster {
  			line = style.Selected.Render(line)
  		}
-@@ -389,10 +469,17 @@
+@@ -431,7 +511,7 @@ func (m Model) View() string {
+ 	if m.showFeed {
+ 		b.WriteString(rule("FEED", w))
+ 		for _, e := range p.Feed {
+-			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), e.Outcome)
++			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
+ 			if e.Detail != "" && e.Outcome == "error" {
+ 				line += "  " + trunc(e.Detail, max(10, w-24))
+ 			}
+@@ -451,6 +531,13 @@ func (m Model) View() string {
  	if m.asking {
  		b.WriteString(rule("SUMMON "+m.askSlug, w) + m.question.View() + "\n")
  	}
@@ -5402,14 +5740,9 @@ Expected: FAIL: the header lacks `· herdr-dots · mem 42 (2 proposals)`, `M` se
 +			b.WriteString(rule("REMEMBER", w) + "f accepted finding · r rule: don't raise this again\nc project convention · g this dot everywhere · esc cancel\n")
 +		}
 +	}
- 	if m.showFeed {
- 		b.WriteString(rule("FEED", w))
- 		for _, e := range p.Feed {
--			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), e.Outcome)
-+			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
- 			if e.Detail != "" && e.Outcome == "error" {
- 				line += "  " + trunc(e.Detail, max(10, w-24))
- 			}
+ 	footer := "j/k move · ⏎ send · a all · s summon · ? help"
+ 	if m.status != "" {
+ 		footer = m.status
 ```
 
 - [ ] **Step 4: Run the tests to see them pass**
@@ -7046,7 +7379,7 @@ git commit -m "feat(ui): memory browser with approve, pin, edit, forget and filt
 
 ### Task 10: Engine memory hooks
 
-**Depends on:** Task 4, Task 5, Task 6, Task 7, Task 8. Wave 4.
+**Depends on:** Task 0 (its `Attach` is the base of this task's `engine.go` diff), Task 4, Task 5, Task 6, Task 7, Task 8. Wave 4.
 
 **Files:**
 - Create: `internal/engine/memory.go`
@@ -7054,15 +7387,16 @@ git commit -m "feat(ui): memory browser with approve, pin, edit, forget and filt
 - Test: `internal/engine/memory_test.go` (new; `engine_test.go` and `control_test.go` stay unchanged)
 
 **Interfaces:**
-- Consumes: `memory.Store` (`Candidates`, `Touch`, `Apply`, `RecordOutcome`, `Remember`, `SeeProject`, `Stats`, `Prune`, `List`, `Ledger`, `Projects`, `Add`), `memory.Select`, `memory.Render`, `memory.Query`, `memory.SuppressScore`, `memory.SuppressThreshold`, `memory.ResolveProject`, `memory.ExecGit`, `memory.ValidProjectID`, `memory.RememberAs`, `memory.Outcome*`; `backend.Request.Memory/Learn/Pass`, `backend.PassMemory`, `backend.Result.Remember`; `dots.Dot.Memory`; `state` memory fields and outcomes; `view` memory fields; `ipc.CmdRemember`, `ipc.CmdMemoryChanged`, `ipc.RememberArgs`; v1 engine internals (`runDot`, `runOpts`, `processPaneLocked`, `route`, `feed`, `setStatus`, `broadcast`, `spawn`, `Decide`, `ReasonObserve`, `tail`) and v1 test helpers (`fakeReader`, `eventually`, `dot`, `pane`, `critical`, `newRig`).
+- Consumes: `memory.Store` (`Candidates`, `Touch`, `Apply`, `RecordOutcome`, `Remember`, `SeeProject`, `Stats`, `Prune`, `List`, `Ledger`, `Projects`, `Add`), `memory.Select`, `memory.Render`, `memory.Query`, `memory.SuppressScore`, `memory.SuppressThreshold`, `memory.ResolveProject`, `memory.ExecGit`, `memory.ValidProjectID`, `memory.RememberAs`, `memory.Outcome*`; `backend.Request.Memory/Learn/Pass`, `backend.PassMemory`, `backend.Result.Remember`; `dots.Dot.Memory`; `state` memory fields and outcomes; `view` memory fields; `ipc.CmdRemember`, `ipc.CmdMemoryChanged`, `ipc.RememberArgs`; v1 engine internals (`runDot`, `runOpts`, `processPaneLocked`, `processPaneIfIdle`, `upgradeFromScrollback`, `checkSession`, `route`, `feed`, `setStatus`, `broadcast`, `spawn`, `Decide`, `ReasonObserve`, `tail`, the settings accessor `(*Engine) config() config.Config`, `state.Attachments.Upsert`) and v1 test helpers (`fakeReader` with its `source` field, `eventually`, `dot`, `pane`, `critical`, `newRig`).
 - Produces:
   - `engine.Deps.Memory *memory.Store` (nil = memory off; every v1 test unchanged) and `engine.Deps.ResolveProject func(cwd string) (memory.Project, error)` (nil with a store = `memory.ResolveProject` with git).
   - `type MemoryInput struct{ Dot dots.Dot; Att state.DotAttachment; NewTurns []transcript.Turn; PausedAll, MemoryEnabled bool; DotCalls, PaneCalls, PaneBudget int }`; `DecideMemory(in MemoryInput) bool`.
   - `runOpts.memoryPass bool`, `runOpts.seenTo int`; `job.memoryPass`, `job.seenTo`.
   - `(*Engine) Remember(cardID string, as memory.RememberAs, reason string) error`; `(*Engine) MemoryChanged()`; `Handle` routes `ipc.CmdRemember` and `ipc.CmdMemoryChanged`.
   - `queue.Card.Project string` (JSON `project,omitempty`).
-  - Behavior: `Attach` resolves the project before the pane lock and records it (`meta.json`) in the background; `runDot` loads memory outside every engine lock, sends `Memory`/`Learn`, touches the selected entries, applies `remember` ops (feed `learned N`), suppresses repeats (feed `suppressed` with `similar to d:mN`, never for summons); observe dots get memory passes from `processPaneLocked`; approved sends and all dismissals record outcomes in a spawned goroutine; `checkSession` resets `MemorySeenTurn` and re-resolves the project; `Start` prunes attached projects now and every 24 hours; `Snapshot` fills the memory counts from a cache refreshed outside `e.mu`.
-  - Lock order is unchanged (paneLock → e.mu → stores; dmu separate): memory I/O never happens under `e.mu`, a pane lock or `e.dmu`.
+  - Behavior: `Attach` resolves the project after the agent check and before the pane lock, puts it in the `Upsert` base (and sets it in the `Upsert` function when missing), and records it (`meta.json`) in the background; `runDot` loads memory outside every engine lock, sends `Memory`/`Learn`, touches the selected entries, applies `remember` ops (feed `learned N`), suppresses repeats (feed `suppressed` with `similar to d:mN`, never for summons); observe dots get memory passes from `processPaneLocked`; approved sends and all dismissals record outcomes in a spawned goroutine; `checkSession` resets `MemorySeenTurn` and `MemoryPasses` and re-resolves the project; `upgradeFromScrollback` moves `MemorySeenTurn` with `LastSeenTurn`; `Start` starts the pruning loop whenever a store exists, and each pass (now and every 24 hours) runs only while `e.config().MemoryEnabled`; `Snapshot` fills the memory counts from a cache refreshed outside `e.mu`.
+  - Settings come from `e.config()` (Plan decision 30): `memory_enabled = false` written to `config.toml` takes memory out of the next run without a restart.
+  - Lock order is unchanged (paneLock → e.mu → stores; dmu separate, and under dmu only e.mu and stores): memory I/O never happens under `e.mu`, a pane lock or `e.dmu` (Dismiss and Edit hold `e.dmu` since the v1 fix wave).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -7079,6 +7413,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -7142,6 +7477,8 @@ const testProject = "g-0123456789abcdef"
 type memOpts struct {
 	cfg         func(*config.Config)
 	lockTimeout time.Duration
+	configPath  string                                   // config.toml re-read every 10ms; "" = never
+	reader      func(state.Attachment) transcript.Reader // nil = r.readers by session
 }
 
 type memRig struct {
@@ -7178,17 +7515,23 @@ func newMemRig(t *testing.T, o memOpts, ds ...dots.Dot) *memRig {
 	if o.cfg != nil {
 		o.cfg(&cfg)
 	}
+	reader := func(a state.Attachment) transcript.Reader {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if rd, ok := r.readers[a.SessionValue]; ok {
+			return rd
+		}
+		return &fakeReader{}
+	}
+	if o.reader != nil {
+		reader = o.reader
+	}
 	r.e = New(Deps{
-		Herdr:   &herdr.SocketClient{Path: srv.Path, PluginID: "herdr-dots"},
-		Backend: func(string) (backend.Backend, error) { return r.be, nil },
-		Reader: func(a state.Attachment) transcript.Reader {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			if rd, ok := r.readers[a.SessionValue]; ok {
-				return rd
-			}
-			return &fakeReader{}
-		},
+		Herdr:        &herdr.SocketClient{Path: srv.Path, PluginID: "herdr-dots"},
+		Backend:      func(string) (backend.Backend, error) { return r.be, nil },
+		Reader:       reader,
+		ConfigPath:   o.configPath,
+		ConfigCheck:  10 * time.Millisecond,
 		LoadDots:     func() ([]dots.Dot, []dots.LoadError) { return ds, nil },
 		SaveDot:      func(dots.Dot) error { return nil },
 		Config:       cfg,
@@ -7491,6 +7834,93 @@ func TestObserveLearningResumesAfterNewSession(t *testing.T) {
 	eventually(t, "counter tracks the new session", func() bool { return r.dotAtt("copy").MemorySeenTurn == 2 })
 }
 
+// Ruling 12's "per session": the pass budget restarts with a new agent
+// session, like the call budgets (reset on a new session since the v1 fix
+// wave).
+func TestMemoryPassBudgetResetsOnNewSession(t *testing.T) {
+	d := dot("Copy", dots.ModeObserve)
+	d.Memory.EveryTurns, d.Memory.MaxPassesPerSession = 1, 1
+	r := newMemRig(t, memOpts{}, d)
+	r.attach(t, "copy")
+	r.turnEnds("s1", transcript.Turn{User: "one"})
+	eventually(t, "first pass", func() bool { return r.dotAtt("copy").MemoryPasses == 1 })
+	r.turnEnds("s1", transcript.Turn{User: "two"})
+	eventually(t, "turn two consumed", func() bool { return r.dotAtt("copy").LastSeenTurn == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if r.be.passes() != 1 {
+		t.Fatalf("passes %d, want 1 (max_passes_per_session = 1)", r.be.passes())
+	}
+	r.setReader("s2", &fakeReader{})
+	p, _ := (&herdr.SocketClient{Path: r.srv.Path}).PaneGet(context.Background(), pane)
+	p.AgentSession = &herdr.AgentSession{Kind: "id", Value: "s2"}
+	r.srv.SetPane(p)
+	r.srv.Push(pane, herdr.StatusIdle)
+	eventually(t, "session followed, pass budget reset", func() bool {
+		a, _ := r.atts.Get(pane)
+		return a.SessionValue == "s2" && r.dotAtt("copy").MemoryPasses == 0
+	})
+	r.turnEnds("s2", transcript.Turn{User: "fresh"})
+	eventually(t, "a pass in the new session", func() bool { return r.be.passes() == 2 })
+}
+
+// config.toml reloads at runtime (v1 fix wave): memory_enabled = false takes
+// memory out of the next run without an engine restart.
+func TestMemoryKillSwitchAppliesAtRuntime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	r := newMemRig(t, memOpts{configPath: path}, dot("Security", dots.ModeQueue))
+	if _, err := r.mem.Add(testProject, memory.Entry{Scope: memory.ScopeProject, Kind: memory.KindDecision,
+		Text: "Auth tokens live in httpOnly cookies.", Source: memory.SourceUser}); err != nil {
+		t.Fatal(err)
+	}
+	r.reader("s1").add(transcript.Turn{User: "add login"})
+	r.attach(t, "security")
+	eventually(t, "first review", func() bool { return r.be.n() == 1 })
+	if req := r.be.last(); req.Memory == "" || !req.Learn {
+		t.Fatalf("memory on: %+v", req)
+	}
+	if err := os.WriteFile(path, []byte("turn_debounce_ms = 0\nmemory_enabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "config reloaded", func() bool { return !r.e.config().MemoryEnabled })
+	r.turnEnds("s1", transcript.Turn{User: "add logout"})
+	eventually(t, "second review", func() bool { return r.be.n() == 2 })
+	if req := r.be.last(); req.Memory != "" || req.Learn {
+		t.Fatalf("memory_enabled = false must take memory out of the run: %+v", req)
+	}
+	if err := r.e.Remember("any", memory.AsFinding, ""); err == nil || !strings.Contains(err.Error(), "memory_enabled") {
+		t.Fatalf("Remember with memory off: %v", err)
+	}
+}
+
+// A scrollback fallback upgraded to the transcript moves MemorySeenTurn with
+// LastSeenTurn: scrollback turn numbers don't carry over to the transcript.
+func TestScrollbackUpgradeMovesMemorySeenTurn(t *testing.T) {
+	var ready atomic.Bool
+	claude := &fakeReader{}
+	for _, u := range []string{"one", "two", "three", "four"} {
+		claude.add(transcript.Turn{User: u})
+	}
+	d := dot("Copy", dots.ModeObserve)
+	d.Memory.EveryTurns = 10 // no memory pass in this test
+	r := newMemRig(t, memOpts{reader: func(state.Attachment) transcript.Reader {
+		if ready.Load() {
+			return claude
+		}
+		return &fakeReader{source: transcript.SourceScrollback}
+	}}, d)
+	r.attach(t, "copy")
+	ready.Store(true) // the transcript now exists
+	r.srv.Push(pane, herdr.StatusWorking)
+	r.srv.Push(pane, herdr.StatusIdle)
+	eventually(t, "upgraded and caught up", func() bool {
+		a, _ := r.atts.Get(pane)
+		return a.Source == transcript.SourceClaude && r.dotAtt("copy").LastSeenTurn == 4
+	})
+	if da := r.dotAtt("copy"); da.MemorySeenTurn != 3 {
+		t.Fatalf("MemorySeenTurn %d, want 3 (every transcript turn but the last counts as seen)", da.MemorySeenTurn)
+	}
+}
+
 func TestRememberCommandEachKind(t *testing.T) {
 	r := newMemRig(t, memOpts{}, dot("Security", dots.ModeQueue))
 	r.be.set(backend.Result{Verdict: critical})
@@ -7706,7 +8136,7 @@ type memRun struct {
 }
 
 func (e *Engine) memOn(d dots.Dot) bool {
-	return e.d.Memory != nil && e.d.Config.MemoryEnabled && d.Memory.Enabled
+	return e.d.Memory != nil && e.config().MemoryEnabled && d.Memory.Enabled
 }
 
 // loadMemory builds the run's memory block. A lock timeout means this run
@@ -7910,7 +8340,7 @@ func (e *Engine) spawnOutcome(c queue.Card, kind string) {
 	orig, edited := e.origBody[c.ID]
 	delete(e.origBody, c.ID)
 	e.mu.Unlock()
-	if e.d.Memory == nil || !e.d.Config.MemoryEnabled {
+	if e.d.Memory == nil || !e.config().MemoryEnabled {
 		return
 	}
 	e.spawn(func() { e.recordOutcome(c, kind, orig, edited) })
@@ -7949,7 +8379,7 @@ func (e *Engine) recordOutcome(c queue.Card, kind, orig string, edited bool) {
 
 // Remember turns a card into a memory entry the developer chose (Dots pane M).
 func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) error {
-	if e.d.Memory == nil || !e.d.Config.MemoryEnabled {
+	if e.d.Memory == nil || !e.config().MemoryEnabled {
 		return errors.New("memory is turned off (memory_enabled = false)")
 	}
 	if !as.Valid() {
@@ -8001,7 +8431,9 @@ func (e *Engine) attachedProjects() []string {
 	return out
 }
 
-// memoryLoop prunes attached projects at start and every pruneInterval.
+// memoryLoop prunes attached projects at start and every pruneInterval. It
+// runs whenever a store exists: config.toml reloads at runtime, so
+// maintainMemory reads memory_enabled on every pass.
 func (e *Engine) memoryLoop() {
 	e.maintainMemory()
 	t := time.NewTicker(pruneInterval)
@@ -8017,6 +8449,9 @@ func (e *Engine) memoryLoop() {
 }
 
 func (e *Engine) maintainMemory() {
+	if !e.config().MemoryEnabled {
+		return
+	}
 	for _, pid := range e.attachedProjects() {
 		rep, err := e.d.Memory.Prune(pid, time.Now())
 		switch {
@@ -8061,7 +8496,7 @@ func turnsText(turns []transcript.Turn) string {
 ```diff
 --- a/internal/engine/engine.go
 +++ b/internal/engine/engine.go
-@@ -12,6 +12,7 @@
+@@ -13,6 +13,7 @@ import (
  	"herdr-dots/internal/config"
  	"herdr-dots/internal/dots"
  	"herdr-dots/internal/herdr"
@@ -8069,7 +8504,7 @@ func turnsText(turns []transcript.Turn) string {
  	"herdr-dots/internal/queue"
  	"herdr-dots/internal/state"
  	"herdr-dots/internal/transcript"
-@@ -32,6 +33,9 @@
+@@ -35,6 +36,9 @@ type Deps struct {
  	Logf         func(format string, args ...any)
  	PollInterval time.Duration // 0 → 3s
  	MaxFailures  int           // 0 → 3
@@ -8079,7 +8514,7 @@ func turnsText(turns []transcript.Turn) string {
  }
  
  type key struct{ pane, slug string }
-@@ -40,6 +44,8 @@
+@@ -43,6 +47,8 @@ type runOpts struct {
  	forceQueue bool   // the turn was started by a dot: never auto-inject
  	summon     bool   // manual summon: always a card, bypasses running flags
  	question   string // summon question
@@ -8088,7 +8523,7 @@ func turnsText(turns []transcript.Turn) string {
  }
  
  // Engine owns all live state. Lock order: e.mu → store mutexes (stores never
-@@ -67,6 +73,12 @@
+@@ -75,6 +81,12 @@ type Engine struct {
  
  	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
  
@@ -8101,19 +8536,19 @@ func turnsText(turns []transcript.Turn) string {
  	// wmu/wg/closed track background goroutines so Wait can drain them.
  	wmu    sync.Mutex
  	wg     sync.WaitGroup
-@@ -106,6 +118,11 @@
- 	}
+@@ -115,6 +127,11 @@ func New(d Deps) *Engine {
  	if d.MaxFailures <= 0 {
  		d.MaxFailures = 3
-+	}
+ 	}
 +	if d.Memory != nil && d.ResolveProject == nil {
 +		d.ResolveProject = func(cwd string) (memory.Project, error) {
 +			return memory.ResolveProject(context.Background(), cwd, memory.ExecGit)
 +		}
- 	}
++	}
  	e := &Engine{
  		d:        d,
-@@ -120,6 +137,9 @@
+ 		ctx:      context.Background(),
+@@ -128,6 +145,9 @@ func New(d Deps) *Engine {
  		watchers: map[int]chan view.Snapshot{},
  		paneMu:   map[string]*sync.Mutex{},
  		sem:      make(chan struct{}, max(1, d.Config.MaxParallelRuns)),
@@ -8121,61 +8556,70 @@ func turnsText(turns []transcript.Turn) string {
 +		memStats: map[string]memory.Stats{},
 +		origBody: map[string]string{},
  	}
- 	e.ReloadDots()
- 	return e
-@@ -170,12 +190,20 @@
+ 	if e.d.ConfigCheck <= 0 {
+ 		e.d.ConfigCheck = 3 * time.Second
+@@ -184,6 +204,9 @@ func (e *Engine) Start(ctx context.Context) {
  		e.subscribe(a.PaneID)
  	}
  	e.spawn(e.pollLoop)
-+	if e.d.Memory != nil && e.d.Config.MemoryEnabled {
++	if e.d.Memory != nil {
 +		e.spawn(e.memoryLoop)
 +	}
  }
  
  func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) error {
- 	p, err := e.d.Herdr.PaneGet(ctx, paneID)
- 	if err != nil {
- 		return fmt.Errorf("pane %s: %w", paneID, err)
-+	}
+@@ -194,6 +217,11 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
+ 	if p.Agent == "" {
+ 		return fmt.Errorf("pane %s has no coding agent: dots attach to agent panes only", paneID)
+ 	}
 +	// Resolve the memory project before taking the pane lock (it runs git).
 +	var pr memory.Project
 +	if prev, ok := e.d.Attachments.Get(paneID); e.d.Memory != nil && (!ok || prev.ProjectID == "") {
 +		pr = e.resolve(p.WorkDir())
- 	}
++	}
  	pl := e.paneLock(paneID)
  	pl.Lock()
-@@ -187,6 +215,9 @@
- 			att.SessionKind, att.SessionValue = p.AgentSession.Kind, p.AgentSession.Value
- 		}
+ 	defer pl.Unlock()
+@@ -204,6 +232,7 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
+ 	if p.AgentSession != nil {
+ 		base.SessionKind, base.SessionValue = p.AgentSession.Kind, p.AgentSession.Value
  	}
-+	if att.ProjectID == "" && pr.ID != "" {
-+		att.ProjectID, att.ProjectName = pr.ID, pr.Name
-+	}
- 	r := e.reader(att)
- 	att.Source = r.Source()
- 	turns, err := r.Turns(ctx)
-@@ -203,13 +234,18 @@
- 		if att.Find(slug) != nil {
- 			continue
++	base.ProjectID, base.ProjectName = pr.ID, pr.Name
+ 	att, ok := e.d.Attachments.Get(paneID)
+ 	if !ok {
+ 		att = base
+@@ -221,13 +250,18 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
+ 			e.mu.Unlock()
+ 			return fmt.Errorf("unknown dot %q", slug)
  		}
 -		// Catch-up: the newest Context.Turns turns count as "new" for this dot.
--		att.Dots = append(att.Dots, state.DotAttachment{Slug: slug, LastSeenTurn: max(0, len(turns)-d.Context.Turns)})
+-		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: max(0, len(turns)-d.Context.Turns)})
 +		// Catch-up: the newest Context.Turns turns count as "new" for this dot
 +		// (memory passes start counting from the same place).
 +		seen := max(0, len(turns)-d.Context.Turns)
-+		att.Dots = append(att.Dots, state.DotAttachment{Slug: slug, LastSeenTurn: seen, MemorySeenTurn: seen})
- 		delete(e.warned, key{paneID, slug})
++		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: seen, MemorySeenTurn: seen})
  	}
- 	e.mu.Unlock()
- 	if err := e.d.Attachments.Put(att); err != nil {
+ 	// Update-or-create in one store call: runFailed, cooldown or Detach updates
+ 	// made while the transcript was read are kept, not overwritten.
+ 	err = e.d.Attachments.Upsert(base, func(x *state.Attachment) {
+ 		x.Source = r.Source()
++		if x.ProjectID == "" && pr.ID != "" {
++			x.ProjectID, x.ProjectName = pr.ID, pr.Name
++		}
+ 		for _, da := range add {
+ 			if x.Find(da.Slug) == nil {
+ 				x.Dots = append(x.Dots, da)
+@@ -239,6 +273,9 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
+ 	if err != nil {
  		return err
-+	}
+ 	}
 +	if pr.ID != "" {
 +		e.spawn(func() { e.seeProject(pr) })
- 	}
++	}
  	e.subscribe(paneID)
- 	e.spawn(func() { e.processPane(paneID) })
-@@ -325,6 +361,8 @@
+ 	e.spawn(func() { e.processPaneIfIdle(paneID) })
+ 	e.broadcast()
+@@ -365,6 +402,8 @@ type job struct {
  	dot        dots.Dot
  	turns      []transcript.Turn
  	forceQueue bool
@@ -8184,8 +8628,8 @@ func turnsText(turns []transcript.Turn) string {
  }
  
  // processPane reads the transcript and starts a run for every dot whose
-@@ -339,7 +377,9 @@
- 		e.notify(d, "budget reached; skipping turns until the budget resets")
+@@ -379,7 +418,9 @@ func (e *Engine) processPane(paneID string) {
+ 		e.notify(d, "budget reached; resets on a new agent session or press r")
  	}
  	for _, j := range jobs {
 -		e.spawn(func() { e.runDot(paneID, j.dot, j.turns, runOpts{forceQueue: j.forceQueue}) })
@@ -8195,7 +8639,7 @@ func turnsText(turns []transcript.Turn) string {
  	}
  	e.broadcast()
  }
-@@ -382,6 +422,9 @@
+@@ -423,6 +464,9 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
  			}
  			start := min(da.LastSeenTurn, len(turns))
  			newTurns := turns[start:]
@@ -8205,15 +8649,15 @@ func turnsText(turns []transcript.Turn) string {
  			if len(newTurns) == 0 {
  				da.LastSeenTurn = len(turns)
  				continue
-@@ -407,6 +450,18 @@
+@@ -448,6 +492,18 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
  					budgetHit = append(budgetHit, d)
  				}
  			}
 +			if dec.Reason == ReasonObserve && e.memOn(d) {
 +				memTurns := turns[da.MemorySeenTurn:]
 +				if DecideMemory(MemoryInput{
-+					Dot: d, Att: *da, NewTurns: memTurns, PausedAll: e.pausedAll, MemoryEnabled: e.d.Config.MemoryEnabled,
-+					DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls, PaneBudget: e.d.Config.SessionBudgetCalls,
++					Dot: d, Att: *da, NewTurns: memTurns, PausedAll: e.pausedAll, MemoryEnabled: e.config().MemoryEnabled,
++					DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls, PaneBudget: e.config().SessionBudgetCalls,
 +				}) {
 +					e.running[k] = true
 +					paneCalls++
@@ -8224,7 +8668,15 @@ func turnsText(turns []transcript.Turn) string {
  			if !dec.Run {
  				continue
  			}
-@@ -436,7 +491,12 @@
+@@ -493,6 +549,7 @@ func (e *Engine) upgradeFromScrollback(att state.Attachment) state.Attachment {
+ 		a.Source = nr.Source()
+ 		for i := range a.Dots {
+ 			a.Dots[i].LastSeenTurn = seen
++			a.Dots[i].MemorySeenTurn = seen // scrollback turn numbers don't carry over
+ 		}
+ 	})
+ 	if err != nil || !applied {
+@@ -524,7 +581,12 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
  	}
  	defer func() { <-e.sem }()
  
@@ -8238,11 +8690,11 @@ func turnsText(turns []transcript.Turn) string {
  	att, _ := e.d.Attachments.Get(paneID)
  	turn := 0
  	if len(turns) > 0 {
-@@ -447,26 +507,54 @@
+@@ -535,26 +597,54 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
  		e.runFailed(k, d, turn, err)
  		return
  	}
--	ctx, cancel := context.WithTimeout(e.ctx, e.d.Config.RunTimeout())
+-	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
 -	defer cancel()
 -	res, err := be.Run(ctx, backend.Request{
 +	mem := e.loadMemory(&att, d, turns) // outside every engine lock
@@ -8256,7 +8708,7 @@ func turnsText(turns []transcript.Turn) string {
 +	if o.memoryPass {
 +		req.Pass, req.RepoRead, req.Question, req.Force = backend.PassMemory, false, "", false
 +	}
-+	ctx, cancel := context.WithTimeout(e.ctx, e.d.Config.RunTimeout())
++	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
 +	defer cancel()
 +	res, err := be.Run(ctx, req)
  	_ = e.d.Usage.Record(paneID, d.Slug, res.InputTokens, res.OutputTokens)
@@ -8298,8 +8750,8 @@ func turnsText(turns []transcript.Turn) string {
  	if !res.Verdict.Relevant {
  		e.feed(paneID, d.Slug, turn, state.OutcomePass, "")
  		e.setStatus(k, view.StatusPassed)
-@@ -516,8 +604,9 @@
- 	if mode == dots.ModeInject && (o.forceQueue || !e.d.Config.InjectEnabled) {
+@@ -604,8 +694,9 @@ func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o
+ 	if mode == dots.ModeInject && (o.forceQueue || !e.config().InjectEnabled) {
  		mode = dots.ModeQueue
  	}
 +	att, _ := e.d.Attachments.Get(paneID)
@@ -8309,19 +8761,19 @@ func turnsText(turns []transcript.Turn) string {
  	if mode == dots.ModeInject {
  		c.Status = queue.StatusAuto
  	}
-@@ -575,8 +664,10 @@
+@@ -663,8 +754,10 @@ func (e *Engine) Snapshot() view.Snapshot {
  	}
  	seen := map[string]bool{}
  	for _, a := range e.d.Attachments.List() {
 +		ms := e.memStats[a.ProjectID]
  		pv := view.Pane{PaneID: a.PaneID, Agent: a.Agent, Source: a.Source,
--			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.d.Config.SessionBudgetCalls}
-+			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.d.Config.SessionBudgetCalls,
+-			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls}
++			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls,
 +			ProjectID: a.ProjectID, ProjectName: a.ProjectName, MemoryEntries: ms.Total(), MemoryProposals: ms.Proposals}
  		for _, da := range a.Dots {
  			d, ok := e.dots[da.Slug]
  			if !ok {
-@@ -591,7 +682,8 @@
+@@ -679,7 +772,8 @@ func (e *Engine) Snapshot() view.Snapshot {
  			}
  			pv.Dots = append(pv.Dots, view.DotState{Slug: da.Slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
  				Mode: string(d.Delivery.Mode), Status: st, Paused: da.Paused,
@@ -8338,15 +8790,15 @@ func turnsText(turns []transcript.Turn) string {
 ```diff
 --- a/internal/engine/deliver.go
 +++ b/internal/engine/deliver.go
-@@ -8,6 +8,7 @@
+@@ -8,6 +8,7 @@ import (
  	"herdr-dots/internal/delivery"
  	"herdr-dots/internal/dots"
  	"herdr-dots/internal/herdr"
 +	"herdr-dots/internal/memory"
  	"herdr-dots/internal/queue"
  	"herdr-dots/internal/state"
- )
-@@ -44,7 +45,11 @@
+ 	"herdr-dots/internal/view"
+@@ -45,7 +46,11 @@ func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
  		case err != nil:
  			_ = e.d.Queue.Fail(c.ID, err.Error())
  		case gate == delivery.Now:
@@ -8359,7 +8811,7 @@ func turnsText(turns []transcript.Turn) string {
  		case c.Status == queue.StatusPending:
  			_ = e.d.Queue.SetStatus(c.ID, queue.StatusAuto)
  		}
-@@ -93,14 +98,23 @@
+@@ -98,6 +103,7 @@ func (e *Engine) Dismiss(id string) error {
  	if err := e.d.Queue.SetStatus(id, queue.StatusDismissed); err != nil {
  		return err
  	}
@@ -8367,41 +8819,44 @@ func turnsText(turns []transcript.Turn) string {
  	e.reportPending(c.PaneID)
  	e.broadcast()
  	return nil
- }
- 
+@@ -106,9 +112,17 @@ func (e *Engine) Dismiss(id string) error {
  func (e *Engine) Edit(id, body string) error {
+ 	e.dmu.Lock()
+ 	defer e.dmu.Unlock()
 +	before, ok := e.d.Queue.Get(id)
  	if err := e.d.Queue.Edit(id, body); err != nil {
  		return err
-+	}
+ 	}
 +	if ok {
 +		e.mu.Lock()
 +		if _, seen := e.origBody[id]; !seen {
 +			e.origBody[id] = before.Body // the ledger keeps what the dot said
 +		}
 +		e.mu.Unlock()
- 	}
++	}
  	e.broadcast()
  	return nil
-@@ -174,6 +188,7 @@
+ }
+@@ -183,6 +197,8 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
  		x.ForceScrollback = false
  		for i := range x.Dots {
  			x.Dots[i].LastSeenTurn = 0
 +			x.Dots[i].MemorySeenTurn = 0 // turn indexes restart with the session
++			x.Dots[i].MemoryPasses = 0   // a per-session budget, like the call budgets
+ 			slugs = append(slugs, x.Dots[i].Slug)
  		}
  	})
- 	if errors.Is(err, state.ErrNoAttachment) || !changed {
-@@ -183,6 +198,10 @@
- 	if att, ok := e.d.Attachments.Get(a.PaneID); ok {
+@@ -207,6 +223,10 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
  		r := e.reader(att)
  		_ = e.d.Attachments.Update(a.PaneID, func(x *state.Attachment) { x.Source = r.Source() })
-+	}
+ 	}
 +	if e.d.Memory != nil {
 +		cwd := p.WorkDir()
 +		e.spawn(func() { e.reresolve(a.PaneID, cwd) }) // runs git: never under the pane lock
- 	}
++	}
  }
  
+ func (e *Engine) reportPending(paneID string) {
 ```
 
 `internal/engine/handle.go`:
@@ -8613,7 +9068,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
 ```diff
 --- a/internal/ui/manage/model.go
 +++ b/internal/ui/manage/model.go
-@@ -13,6 +13,8 @@
+@@ -13,6 +13,8 @@ import (
  
  	"herdr-dots/internal/dots"
  	"herdr-dots/internal/ipc"
@@ -8622,7 +9077,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  	"herdr-dots/internal/ui/style"
  	"herdr-dots/internal/view"
  )
-@@ -26,6 +28,9 @@
+@@ -26,6 +28,9 @@ type Deps struct {
  	DotsDir string
  	Check   func(ctx context.Context, kind string) error // backend CLI present?
  	NewDot  func() dots.Dot                              // blank dot with config defaults; nil → dots.New("")
@@ -8632,10 +9087,10 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  }
  
  type SnapshotMsg view.Snapshot
-@@ -35,8 +40,16 @@
- 	errMsg      struct{ err error }
- 	formErrMsg  struct{ err error }
- 	savedMsg    struct{ slug string }
+@@ -38,8 +43,16 @@ type (
+ 		slug  string
+ 		isNew bool
+ 	}
 -	deletedMsg  struct{ name string }
 +	deletedMsg  struct{ name, slug string }
  	reloadedMsg struct{}
@@ -8650,7 +9105,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  )
  
  type screen int
-@@ -46,6 +59,8 @@
+@@ -49,6 +62,8 @@ const (
  	scrTemplates
  	scrEditor
  	scrConfirm
@@ -8659,7 +9114,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  )
  
  type Model struct {
-@@ -65,6 +80,7 @@
+@@ -68,6 +83,7 @@ type Model struct {
  	delSlug   string // dot the confirm screen asks about, fixed when D is pressed
  	delName   string
  	width     int
@@ -8667,7 +9122,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  }
  
  func New(target string, d Deps) Model {
-@@ -89,7 +105,38 @@
+@@ -92,7 +108,38 @@ func (m Model) reload() tea.Cmd {
  }
  
  func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -8706,7 +9161,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  	case tea.WindowSizeMsg:
  		m.width = msg.Width
  	case SnapshotMsg:
-@@ -124,6 +171,9 @@
+@@ -129,6 +176,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
  	case deletedMsg:
  		m.scr = scrLibrary
  		m.status = "deleted " + msg.name
@@ -8716,7 +9171,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  		return m, m.reload()
  	case reloadedMsg:
  	case doneMsg:
-@@ -136,6 +186,8 @@
+@@ -141,6 +191,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
  			return m.keysEditor(msg)
  		case scrConfirm:
  			return m.keysConfirm(msg)
@@ -8725,7 +9180,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  		}
  		return m.keysLibrary(msg)
  	}
-@@ -192,8 +244,48 @@
+@@ -197,10 +249,50 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  		if d, ok := m.current(); ok {
  			m.scr, m.delSlug, m.delName = scrConfirm, d.Slug, d.Name
  		}
@@ -8745,8 +9200,8 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
 +		return m, m.openMemory("", "")
  	}
  	return m, nil
-+}
-+
+ }
+ 
 +// openMemory resolves the target pane's project (snapshot first, then
 +// Deps.Project) off the UI goroutine and opens the memory browser.
 +func (m Model) openMemory(dot, name string) tea.Cmd {
@@ -8771,10 +9226,12 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
 +		}
 +		return memOpenMsg{deps: memui.Deps{Store: st, Project: pr, Dot: dot, DotName: name, Notify: notify}}
 +	}
- }
- 
++}
++
  // apply attaches newly checked dots in one call and detaches unchecked ones.
-@@ -299,10 +391,34 @@
+ func (m Model) apply() tea.Cmd {
+ 	var add []string
+@@ -304,7 +396,7 @@ func (m Model) keysConfirm(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  			if err := dots.Delete(dir, slug); err != nil {
  				return errMsg{err}
  			}
@@ -8783,10 +9240,10 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  		}
  	default:
  		m.scr = scrLibrary
-+	}
-+	return m, nil
-+}
-+
+@@ -312,6 +404,30 @@ func (m Model) keysConfirm(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+ 	return m, nil
+ }
+ 
 +// keysConfirmMemory answers "Also delete its memory in all projects? (Y/n)".
 +func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 +	slug, name, st, caller := m.delSlug, m.delName, m.d.Memory, m.d.Caller
@@ -8807,10 +9264,14 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
 +			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil)
 +			return memDeletedMsg{name: name, files: n}
 +		}
- 	}
- 	return m, nil
- }
-@@ -329,6 +445,13 @@
++	}
++	return m, nil
++}
++
+ func (m Model) View() string {
+ 	switch m.scr {
+ 	case scrEditor:
+@@ -334,6 +450,13 @@ func (m Model) View() string {
  		return b.String()
  	case scrConfirm:
  		return style.Title.Render(fmt.Sprintf("Delete %s?", m.delName)) + "\n\n" + style.Dim.Render("y delete · any other key cancels")
@@ -8824,7 +9285,7 @@ Expected: FAIL to compile (`unknown field Memory in struct literal of type Deps`
  	}
  	var b strings.Builder
  	head := "DOTS LIBRARY ─ target: " + m.target
-@@ -356,6 +479,10 @@
+@@ -361,6 +484,10 @@ func (m Model) View() string {
  	if m.status != "" {
  		b.WriteString("\n" + m.status + "\n")
  	}
@@ -9863,6 +10324,9 @@ import (
 
 // memoryStoreFor opens the dot memory store, or returns nil when
 // memory_enabled = false (the engine and the manage popup then behave as v1).
+// config.toml reloads at runtime, but only in one direction for memory:
+// turning it off applies to the next run (the engine reads memory_enabled per
+// run); turning it on, and the memory_* limits, need an engine restart.
 func memoryStoreFor(p paths.Paths, cfg config.Config, logf func(string, ...any)) *memory.Store {
 	if !cfg.MemoryEnabled {
 		return nil
@@ -9901,7 +10365,7 @@ In `cmd/herdr-dots/engine.go`, function `buildEngine`: add the two memory fields
 ```diff
 --- a/cmd/herdr-dots/engine.go
 +++ b/cmd/herdr-dots/engine.go
-@@ -142,6 +142,9 @@
+@@ -143,6 +143,9 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
  		Usage:       usage,
  		Feed:        feed,
  		Logf:        logf,
@@ -9918,12 +10382,12 @@ In `cmd/herdr-dots/ui.go`, function `runManage`: add `Memory` and `Project` to t
 ```diff
 --- a/cmd/herdr-dots/ui.go
 +++ b/cmd/herdr-dots/ui.go
-@@ -101,7 +101,8 @@
+@@ -129,7 +129,8 @@ func runManage([]string) error {
  	}
  	cfg, _ := config.Load(p.ConfigFile()) // malformed config -> defaults; the engine logs the error
  	newDot := func() dots.Dot { return newDotFromConfig(cfg) }
--	prog := tea.NewProgram(manage.New(resolveTarget(), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot}), tea.WithAltScreen())
-+	prog := tea.NewProgram(manage.New(resolveTarget(), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
+-	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot}), tea.WithAltScreen())
++	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
 +		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject}), tea.WithAltScreen())
  	ctx, cancel := context.WithCancel(context.Background())
  	defer cancel()
@@ -10008,8 +10472,9 @@ How dots learn:
   suppressed and the feed shows `suppressed (d:m17)`. Summoned answers are never suppressed.
 - A dot's reply may carry up to 3 `remember` items (no extra model call). Items for the whole project
   wait as proposals until you approve them.
-- **Observe-mode dots** run a memory-only pass every 5 new turns (at most 10 per pane), so they learn
-  without ever making a card. Set `learn = false` under `[memory]` to stop that.
+- **Observe-mode dots** run a memory-only pass every 5 new turns (at most 10 per agent session; `/clear`
+  starts a new count), so they learn without ever making a card. Set `learn = false` under `[memory]`
+  to stop that.
 - In the Dots pane, `M` on a card remembers it on purpose: `f` accepted finding, `r` rule (with an
   optional reason), `c` project convention, `g` this dot everywhere.
 
@@ -10033,7 +10498,8 @@ herdr-dots memory purge --project . --yes
 Per-dot settings (`[memory]` in the dot's TOML file): `enabled`, `learn`, `read_project`,
 `every_turns` (5), `max_passes_per_session` (10), `prompt_chars` (6000). Global settings in
 `config.toml`: `memory_enabled`, `memory_retention_days` (180), `memory_max_entries` (200),
-`memory_auto_approve_project` (false).
+`memory_auto_approve_project` (false). `memory_enabled = false` takes effect within a few seconds;
+turning memory back on and changing the other `memory_*` settings need an engine restart.
 ````
 
 In "## Files", add a bullet:
@@ -10042,7 +10508,7 @@ In "## Files", add a bullet:
 - Memory: the plugin state dir, under `memory/<project-id>/` (shared by every Herdr session; `0600` files)
 ```
 
-In "## Privacy and safety", add:
+In "## Privacy and safety", change "(except `max_parallel_runs`);" to "(except `max_parallel_runs`, the `memory_*` limits and turning `memory_enabled` back on);", then add:
 
 ```markdown
 - Memory stays on this machine. It leaves it only inside the prompts a dot sends to **its own**
@@ -10053,6 +10519,8 @@ In "## Privacy and safety", add:
   second save (popup) when you add it. A card that quotes a secret is never remembered.
 - Forgetting is real: `forget` removes the entry from disk, `--scrub` also removes its ledger lines,
   and `purge` deletes a project's whole memory.
+- Memory text is stripped of control characters (terminal escape sequences) when it is written and
+  when it is read, like the feed.
 ```
 
 In "## Known gaps in this scaffold", remove the line "No dot memory yet: dots don't learn a project between turns (see Phase 2)." and add:
@@ -10155,6 +10623,8 @@ Run by the plan author against the spec and the real code; findings were fixed i
 | §8.3 tests | listed per task; `go test -race ./...` and `go vet ./...` in every task |
 | §9 V1–V6 | 1 (V6 enforced by Task 7's test) |
 | Version 0.2.0, VITAL, not done | 15, 16, Global Constraints |
+
+**Reconciliation (2026-10-08).** The plan was first verified against `3dddb35` plus the then-unmerged v1 cmd wiring. After the v1 cmd wiring and the 14-item final fix wave were merged, it was replayed task by task, in wave order, on a scratch worktree of `feat/dots-v1` at `924f991`: every code block applied as written (diffs with plain `git apply`), each task's tests passed, and the full replay ended with `go test -race ./...`, `go vet ./...` and `gofmt -l internal cmd` clean. Task 1's live `claude` steps were not run during the replay (its V3 replies were stood in for by hand-written fixtures). Plan decisions 28–34 record what changed and why.
 
 **Placeholder scan.** No "TBD", "TODO", "similar to Task N" or undefined helpers. Every new file is given in full and every change to existing code as an exact diff against the real base code; every code block was compiled and its tests run (`go test -race ./...`, `go vet ./...`, `gofmt -l`) against a copy of the base with the v1 cmd wiring before it was put in this plan. Task 1's data rows are given in full; it also appends real rows, which is the point of V6.
 
