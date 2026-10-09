@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -714,14 +715,26 @@ func (e *Engine) draftViews(paneID string) []view.DraftState {
 	return out
 }
 
+// sameRepo reports whether a and b are the same directory: by file identity
+// (symlinks, case variants and Windows short names all match), or, when
+// either can't be stat'ed, by the cleaned, symlink-resolved paths (compared
+// case-insensitively on Windows, see pathsEqual).
 func sameRepo(a, b string) bool {
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	if aerr == nil && berr == nil {
+		return os.SameFile(ai, bi)
+	}
+	if aerr == nil || berr == nil {
+		return false // one exists and the other doesn't
+	}
 	clean := func(p string) string {
 		if r, err := filepath.EvalSymlinks(p); err == nil {
 			p = r
 		}
 		return filepath.Clean(p)
 	}
-	return clean(a) == clean(b)
+	return pathsEqual(clean(a), clean(b))
 }
 
 func fileWord(n int) string {
