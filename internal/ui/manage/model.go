@@ -61,6 +61,7 @@ type Model struct {
 	templates []dots.Dot
 	form      *Form
 	status    string
+	saving    bool
 	delSlug   string // dot the confirm screen asks about, fixed when D is pressed
 	delName   string
 	width     int
@@ -109,11 +110,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.status = msg.err.Error()
 	case formErrMsg:
+		m.saving = false
 		if m.form != nil {
 			m.form.SetError(msg.err.Error())
 		}
 	case savedMsg:
-		m.scr, m.form = scrLibrary, nil
+		m.scr, m.form, m.saving = scrLibrary, nil, false
 		m.status = "saved " + msg.slug
 		if m.target != "" {
 			m.selected[msg.slug] = true
@@ -240,21 +242,32 @@ func (m Model) keysTemplates(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc":
-		m.form, m.scr = nil, scrLibrary
+		m.form, m.scr, m.saving = nil, scrLibrary, false
 		return m, nil
 	case "ctrl+s":
-		return m, m.save()
+		if m.saving {
+			return m, nil
+		}
+		// Read the form synchronously: the returned cmd runs on another
+		// goroutine and must only see the immutable value.
+		d, err := m.form.Dot()
+		if err != nil {
+			m.form.SetError(err.Error())
+			return m, nil
+		}
+		m.form.SetError("")
+		m.saving = true
+		return m, m.save(d, m.form.IsNew())
+	}
+	if m.saving {
+		return m, nil
 	}
 	return m, m.form.Update(k)
 }
 
-func (m Model) save() tea.Cmd {
-	f, dir, check := m.form, m.d.DotsDir, m.d.Check
+func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
+	dir, check := m.d.DotsDir, m.d.Check
 	return func() tea.Msg {
-		d, err := f.Dot()
-		if err != nil {
-			return formErrMsg{err}
-		}
 		if err := d.Validate(); err != nil {
 			return formErrMsg{err}
 		}
@@ -263,7 +276,7 @@ func (m Model) save() tea.Cmd {
 		if err := check(ctx, d.Backend.Kind); err != nil {
 			return formErrMsg{err}
 		}
-		if err := dots.Save(dir, d, f.IsNew()); err != nil {
+		if err := dots.Save(dir, d, isNew); err != nil {
 			if errors.Is(err, dots.ErrExists) {
 				return formErrMsg{fmt.Errorf("a dot named %q already exists: pick another name", d.Name)}
 			}
@@ -297,7 +310,11 @@ func (m Model) keysConfirm(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	switch m.scr {
 	case scrEditor:
-		return m.form.View(m.width)
+		v := m.form.View(m.width)
+		if m.saving {
+			v += "\n" + style.Dim.Render("saving…")
+		}
+		return v
 	case scrTemplates:
 		var b strings.Builder
 		b.WriteString(style.Title.Render("NEW DOT FROM TEMPLATE") + "\n\n")

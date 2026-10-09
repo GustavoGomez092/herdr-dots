@@ -170,6 +170,49 @@ func TestDeleteNeedsConfirmation(t *testing.T) {
 	}
 }
 
+func TestSaveSnapshotsFormBeforeCmdRuns(t *testing.T) {
+	m, _, dir := setup(t, "w1:p1")
+	m = press(m, "t", "j", "enter") // Copywriter in the editor
+	m, cmd := m.Update(key("ctrl+s"))
+	if cmd == nil || !strings.Contains(m.View(), "saving") {
+		t.Fatalf("want a save cmd and a saving marker:\n%s", m.View())
+	}
+	// The user keeps typing before the cmd runs: the form must not change.
+	before := m.View()
+	m, _ = m.Update(key("X"))
+	m, _ = m.Update(key("tab"))
+	if m.View() != before {
+		t.Fatal("form must ignore edits while saving")
+	}
+	msg := cmd()
+	if _, ok := msg.(savedMsg); !ok {
+		t.Fatalf("want savedMsg, got %#v", msg)
+	}
+	d, err := dots.Load(dir, "copywriter")
+	if err != nil || strings.Contains(d.Name, "X") {
+		t.Fatalf("saved value must be the one at ctrl+s: %+v %v", d, err)
+	}
+	m, _ = m.Update(msg)
+	if strings.Contains(m.View(), "saving") {
+		t.Fatal("saving marker should clear")
+	}
+}
+
+func TestSaveErrorReenablesEditing(t *testing.T) {
+	m, _, _ := setup(t, "w1:p1")
+	m = press(m, "n", "ctrl+s") // blank name fails validation in the cmd
+	if !strings.Contains(m.View(), "name") && !strings.Contains(strings.ToLower(m.View()), "invalid") {
+		t.Logf("view:\n%s", m.View())
+	}
+	if strings.Contains(m.View(), "saving") {
+		t.Fatalf("saving must clear after an error:\n%s", m.View())
+	}
+	m = press(m, "Z")
+	if !strings.Contains(m.View(), "Z") {
+		t.Fatal("typing should work again after an error")
+	}
+}
+
 func TestDeleteTargetsTheDotShownInTheConfirm(t *testing.T) {
 	m, _, dir := setup(t, "w1:p1")
 	for _, n := range []string{"backend", "security"} {
