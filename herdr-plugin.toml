@@ -61,6 +61,12 @@ height = "80%"
 command = ["./bin/herdr-dots", "manage"]
 
 [[panes]]
+id = "diff"
+title = "Dots: patch"
+placement = "zoomed"
+command = ["./bin/herdr-dots", "diff-ui"]
+
+[[panes]]
 id = "summon"
 title = "Dots: summon"
 placement = "popup"
