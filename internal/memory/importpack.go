@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"herdr-dots/internal/dots"
 	"herdr-dots/internal/textutil"
 )
 
@@ -75,6 +76,8 @@ func (s *Store) ImportPack(p, dot string, entries []Entry) (ApplyResult, error) 
 			why = fmt.Sprintf("scope %q can't be imported", clipRunes(stripControls(string(e.Scope)), 20))
 		case !slices.Contains(ImportKinds, e.Kind):
 			why = fmt.Sprintf("kind %q can't be imported", clipRunes(stripControls(string(e.Kind)), 20))
+		case dots.UnsafeText(text, true) != nil:
+			why = "text " + dots.ErrUnsafeText.Error()
 		default:
 			if found, kind := ScanSecrets(text + " " + strings.Join(paths, " ")); found {
 				why = "looks like a secret (" + kind + ")"
