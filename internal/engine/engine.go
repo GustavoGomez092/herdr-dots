@@ -145,6 +145,7 @@ type Engine struct {
 	inboxAt  time.Time             // last inbox sweep
 	toasted  map[string]string     // once-a-day toasts: key -> date
 	idle     map[string]*idleState // pane -> idle research bookkeeping (idle.go)
+	plan     map[string]time.Time  // scheduled dot -> its next slot (schedule.go)
 
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
@@ -212,6 +213,7 @@ func New(d Deps) *Engine {
 		bgSem:    make(chan struct{}, 1),
 		toasted:  map[string]string{},
 		idle:     map[string]*idleState{},
+		plan:     map[string]time.Time{},
 		drafts:   map[string]*draftRun{},
 		applying: map[string]bool{},
 		gens:     map[string]uint64{},
@@ -251,6 +253,7 @@ func (e *Engine) ReloadDots() {
 	}
 	e.mu.Lock()
 	e.dots, e.invalid = m, invalid
+	e.plan = map[string]time.Time{} // re-plan every schedule from the reloaded dots
 	e.mu.Unlock()
 	e.broadcast()
 }
@@ -353,7 +356,8 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	}
 	if a, ok := e.d.Attachments.Get(paneID); ok && a.ProjectID != "" {
 		pid := a.ProjectID
-		e.spawn(func() { e.claimInbox(paneID, pid) }) // scheduled results waiting for this project
+		e.spawn(func() { e.claimInbox(paneID, pid) })  // scheduled results waiting for this project
+		e.spawn(func() { e.seeDots(pid, slugsOf(a)) }) // for schedules with projects = ["attached"]
 	}
 	e.subscribe(paneID)
 	e.spawn(func() { e.processPaneIfIdle(paneID) })

@@ -94,7 +94,8 @@ type bgJob struct {
 	period      int       // research: the pane's idle period when the run was reserved
 	since       time.Time // research: when that idle period began
 	deliver     func(j bgJob, v backend.Verdict)
-	done        func() // called exactly once when the job ends, run or not
+	done        func()      // called exactly once when the job ends, run or not
+	claim       func() bool // scheduled: claims the slot once every gate passed; false = not this engine's to run
 }
 
 // now is the engine's clock (Deps.Clock): every proactive timer reads it.
@@ -291,6 +292,11 @@ func (e *Engine) runBackground(j bgJob) {
 	e.mu.Unlock()
 	if over {
 		e.d.Logf("dot %s: %s skipped (%s on %s)", j.dot.Slug, j.label, ReasonSessionBudget, j.paneID)
+		return
+	}
+	// A scheduled slot is claimed (across sessions) only now, after every gate:
+	// a slot skipped for a budget stays unclaimed, so a later catch-up may run it.
+	if j.claim != nil && !j.claim() {
 		return
 	}
 	be, err := e.d.Backend(j.dot.Backend.Kind)
@@ -619,5 +625,8 @@ func (e *Engine) nextLocked(d dots.Dot, paneID string, now time.Time) string {
 	if e.dailyClosedLocked(now) || OverUSD(e.todayLocked(now).CostUSD, dailyBudget(e.config().DailyBudgetUSD)) {
 		return "paused · daily budget"
 	}
-	return e.researchNextLocked(d, paneID, now)
+	if s := e.researchNextLocked(d, paneID, now); s != "" {
+		return s
+	}
+	return e.scheduleNextLocked(d, now)
 }

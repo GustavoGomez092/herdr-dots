@@ -468,6 +468,9 @@ func (e *Engine) maintainMemory() {
 		}
 		e.refreshStats(pid)
 	}
+	for _, a := range e.d.Attachments.List() {
+		e.seeDots(a.ProjectID, slugsOf(a)) // keeps long-attached dots inside the "attached" window
+	}
 	e.broadcast()
 }
 
