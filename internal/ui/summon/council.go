@@ -90,7 +90,6 @@ func (f *councilForm) current() *council.Preflight {
 
 func (m Model) snapshotCouncil(p view.Pane) Model {
 	f := m.council
-	m.status = ""
 	f.dots = p.Dots
 	f.cursor = max(0, min(f.cursor, len(f.dots)-1))
 	if p.CouncilPreflight != nil {

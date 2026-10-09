@@ -296,8 +296,12 @@ func TestCouncilPopupDropsStaleStatus(t *testing.T) {
 	fc.err = errString("again")
 	m, _ = run(m, "enter")
 	m, _ = m.Update(councilSnap(preflightFor(2, copyPaused...)))
+	if !strings.Contains(m.View(), "again") {
+		t.Fatalf("a send error survives a snapshot:\n%s", m.View())
+	}
+	m, _ = run(m, "j")
 	if strings.Contains(m.View(), "again") {
-		t.Fatalf("an error clears on the next snapshot:\n%s", m.View())
+		t.Fatalf("the next key press clears the error:\n%s", m.View())
 	}
 }
 
