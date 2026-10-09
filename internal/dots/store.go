@@ -7,12 +7,16 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 
+	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/secrets"
 )
 
 var ErrExists = errors.New("a dot with this name already exists")
@@ -38,6 +42,9 @@ func decode(file string) (Dot, error) {
 		return Dot{}, err
 	}
 	d.Slug = strings.TrimSuffix(filepath.Base(file), ".toml")
+	if d.Origin == "" || d.Origin == OriginProject {
+		d.Origin = OriginUser // only DecodeProject makes a project dot
+	}
 	return d, nil
 }
 
@@ -100,27 +107,104 @@ func Save(dir string, d Dot, create bool) error {
 			return fmt.Errorf("%w (%s)", ErrExists, d.Slug)
 		}
 	}
+	data, err := encode(d)
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteFileAtomic(p, data, 0o600)
+}
+
+// Encode renders d as a dot file to share (packs): the TOML encoder's output,
+// with purpose as a multi-line string before the first table, nil lists as []
+// and a user origin left out. Slug and SourcePath are never written. A dot
+// whose text holds something shaped like a credential is refused: the error
+// names the field, never the value.
+func Encode(d Dot) ([]byte, error) {
+	if field := secretField(d); field != "" {
+		return nil, fmt.Errorf("%s looks like it holds a secret (a key, token or password); remove it before sharing this dot", field)
+	}
+	return encode(d)
+}
+
+// encode is Encode without the secret check: Save writes the developer's own
+// file on this machine (0600), which may hold what they put there.
+func encode(d Dot) ([]byte, error) {
 	if d.Backend.Args == nil {
 		d.Backend.Args = []string{}
 	}
 	if d.Trigger.FileGlobs == nil {
 		d.Trigger.FileGlobs = []string{}
 	}
-
-	// Encode a copy of the dot with Purpose omitted (empty string omits due to omitempty tag)
-	dCopy := d
-	purpose := d.Purpose
-	dCopy.Purpose = ""
-
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(dCopy); err != nil {
-		return err
+	if d.Origin == OriginUser {
+		d.Origin = ""
 	}
+	purpose := d.Purpose
+	d.Purpose = "" // omitempty: written by insertPurpose instead
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(d); err != nil {
+		return nil, err
+	}
+	return []byte(insertPurpose(buf.String(), purpose)), nil
+}
 
-	// Manually insert the purpose field as a multiline basic string after top-level keys,
-	// before the first section (line starting with [)
-	output := insertPurpose(buf.String(), purpose)
-	return fsutil.WriteFileAtomic(p, []byte(output), 0o600)
+// looksSecret reports text the secret scanner flags (secrets.Scan, the
+// patterns behind memory.ScanSecrets, PEM private keys included) or that
+// credentials.Redact would change.
+func looksSecret(s string) bool {
+	if found, _ := secrets.Scan(s); found {
+		return true
+	}
+	return credentials.Redact(s) != s
+}
+
+// secretField returns the TOML key of the first serialized string of d that
+// looks secret, or "". Walking by reflection (eachString) means a text field
+// added later is checked too.
+func secretField(d Dot) string {
+	hit := ""
+	eachString(reflect.ValueOf(d), "", func(key, s string) {
+		if hit == "" && looksSecret(s) {
+			hit = key
+		}
+	})
+	return hit
+}
+
+// eachString calls fn with the TOML key and value of every serialized string
+// in v (a Dot or one of its tables), list elements included. Fields tagged
+// toml:"-" (Slug, SourcePath) are skipped.
+func eachString(v reflect.Value, key string, fn func(key, s string)) {
+	switch v.Kind() {
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			f := v.Type().Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("toml"), ",")
+			if name == "-" {
+				continue
+			}
+			if name == "" {
+				name = f.Name
+			}
+			if key != "" {
+				name = key + "." + name
+			}
+			eachString(v.Field(i), name, fn)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			eachString(v.Index(i), key, fn)
+		}
+	case reflect.Map:
+		for it := v.MapRange(); it.Next(); {
+			eachString(it.Value(), key, fn)
+		}
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			eachString(v.Elem(), key, fn)
+		}
+	case reflect.String:
+		fn(key, v.String())
+	}
 }
 
 // multilineBasic escapes a string for use in a TOML multiline basic string (""" ... """).
@@ -150,52 +234,27 @@ func multilineBasic(s string) string {
 	return result.String()
 }
 
-// insertPurpose inserts the purpose field as a multiline basic string after top-level keys,
-// before the first section.
+// PurposeBlock is `purpose = """…"""` as TOML lines: a multi-line basic
+// string with the closing quotes on the last content line.
+func PurposeBlock(purpose string) string {
+	return "purpose = \"\"\"\n" + multilineBasic(purpose) + "\"\"\""
+}
+
+// insertPurpose inserts the purpose block before the first table header of
+// an encoder-produced document (no other line there starts with "["), or
+// appends it when there is no table.
 func insertPurpose(tomlStr, purpose string) string {
 	if purpose == "" {
 		return tomlStr
 	}
-
 	lines := strings.Split(tomlStr, "\n")
-	var result []string
-	inserted := false
-
-	escaped := multilineBasic(purpose)
-	for _, line := range lines {
-		// Insert before the first section (line starting with [)
-		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "[") {
-			// Add purpose as multiline string (closing """ on same line as content)
-			result = append(result, "purpose = \"\"\"")
-			// Split escaped content by newlines and add them
-			contentLines := strings.Split(escaped, "\n")
-			for i, cl := range contentLines {
-				if i == len(contentLines)-1 {
-					// Last line: append closing quotes
-					result = append(result, cl+"\"\"\"")
-				} else {
-					result = append(result, cl)
-				}
-			}
-			inserted = true
-		}
-		result = append(result, line)
-	}
-
-	// If no section was found, append at the end
-	if !inserted {
-		result = append(result, "purpose = \"\"\"")
-		contentLines := strings.Split(escaped, "\n")
-		for i, cl := range contentLines {
-			if i == len(contentLines)-1 {
-				result = append(result, cl+"\"\"\"")
-			} else {
-				result = append(result, cl)
-			}
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			out := append(append(slices.Clone(lines[:i]), PurposeBlock(purpose)), lines[i:]...)
+			return strings.Join(out, "\n")
 		}
 	}
-
-	return strings.Join(result, "\n")
+	return strings.Join(append(lines, PurposeBlock(purpose)), "\n")
 }
 
 func Delete(dir, slug string) error { return os.Remove(path(dir, slug)) }

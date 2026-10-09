@@ -5,8 +5,10 @@ package dots
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -42,19 +44,21 @@ var (
 )
 
 type Dot struct {
-	Slug     string       `toml:"-"`
-	Name     string       `toml:"name"`
-	Glyph    string       `toml:"glyph"`
-	Color    string       `toml:"color"`
-	Purpose  string       `toml:"purpose,omitempty"`
-	Backend  BackendSpec  `toml:"backend"`
-	Delivery DeliverySpec `toml:"delivery"`
-	Trigger  TriggerSpec  `toml:"trigger"`
-	Context  ContextSpec  `toml:"context"`
-	Budget   BudgetSpec   `toml:"budget"`
-	Memory   MemorySpec   `toml:"memory"`
-	Research ResearchSpec `toml:"research"` // Phase 8: idle research
-	Schedule ScheduleSpec `toml:"schedule"` // Phase 8: standing task on a cron schedule
+	Slug       string       `toml:"-"`
+	Name       string       `toml:"name"`
+	Glyph      string       `toml:"glyph"`
+	Color      string       `toml:"color"`
+	Origin     string       `toml:"origin,omitempty"` // template or import in a user file; "" = user; project is set at load
+	SourcePath string       `toml:"-"`                // project dots: the file the dot was loaded from
+	Purpose    string       `toml:"purpose,omitempty"`
+	Backend    BackendSpec  `toml:"backend"`
+	Delivery   DeliverySpec `toml:"delivery"`
+	Trigger    TriggerSpec  `toml:"trigger"`
+	Context    ContextSpec  `toml:"context"`
+	Budget     BudgetSpec   `toml:"budget"`
+	Memory     MemorySpec   `toml:"memory"`
+	Research   ResearchSpec `toml:"research"` // Phase 8: idle research
+	Schedule   ScheduleSpec `toml:"schedule"` // Phase 8: standing task on a cron schedule
 
 	Capabilities CapabilitySpec `toml:"capabilities"`
 }
@@ -103,6 +107,9 @@ const (
 	ReservedSlug = "council"
 )
 
+// DefaultMaxCallsPerSession is a new dot's [budget] max_calls_per_session.
+const DefaultMaxCallsPerSession = 40
+
 // New returns a dot with every default from the spec filled in.
 func New(name string) Dot {
 	return Dot{
@@ -114,7 +121,7 @@ func New(name string) Dot {
 		Delivery: DeliverySpec{Mode: ModeQueue},
 		Trigger:  TriggerSpec{OnTurn: true, FileGlobs: []string{}},
 		Context:  ContextSpec{Turns: 3, RepoRead: true, Verbosity: "normal"},
-		Budget:   BudgetSpec{MaxCallsPerSession: 40},
+		Budget:   BudgetSpec{MaxCallsPerSession: DefaultMaxCallsPerSession},
 		Memory:   DefaultMemory(),
 		Research: DefaultResearch(),
 		Schedule: DefaultSchedule(),
@@ -159,7 +166,21 @@ func (d Dot) Validate() error {
 	if strings.TrimSpace(d.Purpose) == "" {
 		add("purpose is required")
 	}
-	if n := utf8.RuneCountInString(d.Glyph); n < 1 || n > 2 {
+	switch d.Origin {
+	case "", OriginUser, OriginTemplate, OriginImport:
+		if IsProjectSlug(d.Slug) {
+			add("names starting with %q are reserved for project dots", ProjectPrefix)
+		}
+	case OriginProject:
+		if _, _, ok := SplitProjectSlug(d.Slug); !ok {
+			add("project dot slug %q must look like %s<name>--<project>", d.Slug, ProjectPrefix)
+		}
+	default:
+		add("origin %q must be %s, %s or %s", d.Origin, OriginUser, OriginTemplate, OriginImport)
+	}
+	// 1-2 visible characters; an emoji's joiners and variation selectors
+	// don't count, but the whole glyph stays short.
+	if n := glyphWidth(d.Glyph); n < 1 || n > 2 || utf8.RuneCountInString(d.Glyph) > 8 {
 		add("glyph must be 1-2 characters")
 	}
 	if !slices.Contains(BackendKinds, d.Backend.Kind) {
@@ -188,10 +209,76 @@ func (d Dot) Validate() error {
 	if d.Budget.MaxCallsPerSession < 1 {
 		add("budget max_calls_per_session must be >= 1")
 	}
+	errs = append(errs, textErrors(d)...)
 	errs = append(errs, d.Memory.validate()...)
 	errs = append(errs, d.Research.validate()...)
 	errs = append(errs, d.Schedule.validate()...)
 	errs = append(errs, d.Capabilities.validate(d.Backend.Kind)...)
 	errs = append(errs, validateAPI(d)...)
 	return errors.Join(errs...)
+}
+
+// multilineKeys may hold newlines and tabs (CRLF line ends too).
+var multilineKeys = []string{"purpose", "schedule.task"}
+
+// textErrors refuses control, bidi and invisible characters in every string
+// of the dot (P9-R5, fix round 2): names, glyphs, models and the rest reach
+// the terminal, where an escape can rewrite the screen or the clipboard (OSC
+// 52); bidi controls make a preview read differently from what runs; and
+// invisible format characters (zero-width spaces, tag characters, ...) can
+// hide instructions in a purpose that reaches the system prompt. Research
+// topics and the schedule task keep their own control-character messages
+// (Phase 8).
+func textErrors(d Dot) []error {
+	var errs []error
+	if unsafeText(d.Slug, false) || hiddenText(d.Slug, false) {
+		errs = append(errs, fmt.Errorf("slug %q must not contain control, bidi or invisible characters", d.Slug))
+	}
+	seen := map[string]bool{}
+	eachString(reflect.ValueOf(d), "", func(key, s string) {
+		if seen[key] {
+			return
+		}
+		multiline := slices.Contains(multilineKeys, key)
+		if multiline {
+			s = strings.ReplaceAll(s, "\r\n", "\n")
+		}
+		phase8 := key == "research.topics" || key == "schedule.task"
+		if hiddenText(s, key == "glyph") || (!phase8 && unsafeText(s, multiline)) {
+			seen[key] = true
+			errs = append(errs, fmt.Errorf("%s must not contain control, bidi or invisible characters", key))
+		}
+	})
+	return errs
+}
+
+// emojiJoiner reports the zero-width joiner and the text/emoji variation
+// selectors, which build an emoji glyph and are allowed there only.
+func emojiJoiner(r rune) bool { return r == 0x200D || r == 0xFE0E || r == 0xFE0F }
+
+// hiddenText reports a character that doesn't show as itself: every format
+// character (Unicode Cf: the bidi controls U+202A-202E, U+2066-2069, U+200E,
+// U+200F and U+061C, zero-width spaces and joiners, the BOM, tag characters
+// U+E0000-E007F, soft hyphens, ...), the line and paragraph separators
+// U+2028/2029, and variation selectors. In a glyph, a ZWJ and the emoji
+// variation selectors are allowed.
+func hiddenText(s string, glyph bool) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		if emojiJoiner(r) {
+			return !glyph
+		}
+		return unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029
+	})
+}
+
+// glyphWidth counts a glyph's visible characters: runes other than a ZWJ
+// or an emoji variation selector.
+func glyphWidth(g string) int {
+	n := 0
+	for _, r := range g {
+		if !emojiJoiner(r) {
+			n++
+		}
+	}
+	return n
 }

@@ -27,6 +27,7 @@ func Templates() []Dot {
 			continue
 		}
 		d.Slug = strings.TrimSuffix(e.Name(), ".toml")
+		d.Origin = OriginTemplate
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
