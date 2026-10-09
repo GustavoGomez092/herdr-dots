@@ -15,6 +15,7 @@ import (
 	"herdr-dots/internal/paths"
 	"herdr-dots/internal/ui/manage"
 	"herdr-dots/internal/ui/pane"
+	"herdr-dots/internal/ui/summon"
 	"herdr-dots/internal/view"
 )
 
@@ -104,6 +105,19 @@ func runManage([]string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return manage.SnapshotMsg(s) }, nil)
+	_, err = prog.Run()
+	return err
+}
+
+func runSummonUI([]string) error {
+	p, cl, err := uiSetup()
+	if err != nil {
+		return err
+	}
+	prog := tea.NewProgram(summon.New(resolveTarget(), cl))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return summon.SnapshotMsg(s) }, nil)
 	_, err = prog.Run()
 	return err
 }
