@@ -25,7 +25,7 @@ var commands = map[string]handler{
 	},
 	"engine":     runEngine,
 	"pane":       runPane,
-	"manage":     notYet("manage"),
+	"manage":     runManage,
 	"summon-ui":  notYet("summon-ui"),
 	"action":     notYet("action"),
 	"setup-keys": runSetupKeys,
