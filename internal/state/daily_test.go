@@ -221,6 +221,89 @@ func TestDailyBadStoredDateBlocksToday(t *testing.T) {
 	}
 }
 
+// Crash window (a): the corrupt file was moved aside but the blocked record
+// never reached daily.json. A missing daily.json must not read as an empty day.
+func TestDailyRecoversStaleBlockedSideFile(t *testing.T) {
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	for name, content := range map[string]string{
+		"valid":   `{"version":1,"day":"2026-10-21","runs":{},"cost_usd":0,"blocked":true}`,
+		"invalid": `{trunc`,
+	} {
+		d, p := dailyAt(t)
+		_ = os.WriteFile(p+".blocked", []byte(content), 0o600)
+		day, err := d.Today(now)
+		if err != nil || !day.Blocked || day.Date != "2026-10-21" {
+			t.Fatalf("%s: %+v %v", name, day, err)
+		}
+		if _, err := os.Stat(p + ".blocked"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s: side file not promoted: %v", name, err)
+		}
+		if raw, _ := os.ReadFile(p); !strings.Contains(strings.ReplaceAll(string(raw), " ", ""), `"blocked":true`) {
+			t.Fatalf("%s: daily.json not promoted: %s", name, raw)
+		}
+		platformtest.AssertPrivateFile(t, p)
+	}
+}
+
+func TestDailyMissingFileWithCorruptAsideFromTodayIsBlocked(t *testing.T) {
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	d, p := dailyAt(t)
+	_ = os.WriteFile(p+".corrupt-"+strconv.FormatInt(now.UnixNano(), 10), []byte("{x"), 0o600)
+	day, err := d.Today(now)
+	if err != nil || !day.Blocked {
+		t.Fatalf("same day: %+v %v", day, err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("blocked record not written: %v", err)
+	}
+	// An aside from an earlier local day does not block a later day.
+	d2, p2 := dailyAt(t)
+	_ = os.WriteFile(p2+".corrupt-"+strconv.FormatInt(now.AddDate(0, 0, -1).UnixNano(), 10), []byte("{x"), 0o600)
+	if day, err := d2.Today(now); err != nil || day.Blocked {
+		t.Fatalf("older aside: %+v %v", day, err)
+	}
+}
+
+// Crash window (b): the rollback itself fails. Whatever happens, no call may
+// see an unblocked day, and the rollback errors are returned.
+func TestDailyFailedRollbackNeverUnblocks(t *testing.T) {
+	d, p := dailyAt(t)
+	_ = os.WriteFile(p, []byte("{not json"), 0o600)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	d.rename = func(from, to string) error {
+		if to == p {
+			return errors.New("EIO")
+		}
+		return os.Rename(from, to)
+	}
+	_, err := d.Today(now)
+	if err == nil || !strings.Contains(err.Error(), "EIO") {
+		t.Fatalf("err %v, want the rollback errors joined", err)
+	}
+	if _, err := d.Today(now); err == nil {
+		t.Fatal("second call must still error while renames fail")
+	}
+	d.rename = nil
+	day, err := d.Today(now)
+	if err != nil || !day.Blocked {
+		t.Fatalf("after recovery: %+v %v", day, err)
+	}
+}
+
+func TestDailyStaleSideFileNextToValidFileIsRemoved(t *testing.T) {
+	d, p := dailyAt(t)
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
+	_ = d.Add("a", RunResearch, 0.5, now)
+	_ = os.WriteFile(p+".blocked", []byte(`{"version":1,"day":"2026-10-21","blocked":true}`), 0o600)
+	day, err := d.Today(now)
+	if err != nil || day.Blocked || day.Total() != 1 {
+		t.Fatalf("stale side file must be ignored: %+v %v", day, err)
+	}
+	if _, err := os.Stat(p + ".blocked"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale side file not removed: %v", err)
+	}
+}
+
 func TestDailyHugeCostIsClamped(t *testing.T) {
 	d, _ := dailyAt(t)
 	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local)
