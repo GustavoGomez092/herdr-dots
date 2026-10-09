@@ -1,0 +1,1 @@
+{"relevant": true, "severity": "warn", "message": "## Should fix\n- /users/search returns an unbounded result set with no pagination; add LIMIT and pagination parameters (Backend, Performance)"}

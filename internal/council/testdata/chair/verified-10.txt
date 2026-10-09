@@ -1,0 +1,1 @@
+{"relevant": true, "severity": "warn", "message": "## Should fix\n- Headline is in all caps; use sentence case instead (Copy)\n- Hero text contrast on the gradient is about 2.8:1, below the WCAG AA minimum of 4.5:1 (Accessibility)"}
