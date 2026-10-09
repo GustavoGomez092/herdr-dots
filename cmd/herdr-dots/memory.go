@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -617,22 +618,23 @@ func (c *memCLI) edit(args []string) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp("", "herdr-dots-memory-*.toml") // 0600
+	// A private 0700 directory, removed with everything the editor leaves
+	// in it (swap and backup files hold the same memory text).
+	dir, err := os.MkdirTemp("", "herdr-dots-memory-*") // 0700
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+	defer os.RemoveAll(dir)
+	file := filepath.Join(dir, "memory.toml")
+	if err := os.WriteFile(file, data, 0o600); err != nil {
 		return err
 	}
-	tmp.Close()
-	cmd := exec.Command("sh", "-c", c.editor+` "$1"`, "sh", tmp.Name())
+	cmd := exec.Command("sh", "-c", c.editor+` "$1"`, "sh", file)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = c.in, c.out, c.errOut
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("edit: the editor failed: %w (nothing changed)", err)
 	}
-	edited, err := os.ReadFile(tmp.Name())
+	edited, err := os.ReadFile(file)
 	if err != nil {
 		return err
 	}

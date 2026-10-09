@@ -296,6 +296,42 @@ func TestMemorySecretInPathsIsGated(t *testing.T) {
 	}
 }
 
+// Final review minor 8: edit works in a private 0700 directory that is
+// removed afterwards with whatever the editor left in it (swap, backup).
+func TestMemoryEditRemovesItsTempDirectory(t *testing.T) {
+	c, _, _ := newMemCLI(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "Use zod for validation")
+	record := filepath.Join(t.TempDir(), "record")
+	script := filepath.Join(t.TempDir(), "editor.sh")
+	body := "#!/bin/sh\nd=$(dirname \"$1\")\necho \"$d\" > " + record + "\n" +
+		"(stat -f %Lp \"$d\" 2>/dev/null || stat -c %a \"$d\") >> " + record + "\n" +
+		"touch \"$d/.swp-leftover\"\nsed -i.bak 's/zod/valibot/' \"$1\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.editor = script
+	mustRun(t, c, "edit", "--scope", "dot", "--dot", "security")
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Fields(string(data))
+	if len(lines) != 2 {
+		t.Fatalf("record %q", data)
+	}
+	dir, mode := lines[0], lines[1]
+	if filepath.Clean(dir) == filepath.Clean(os.Getenv("TMPDIR")) {
+		t.Fatalf("edit must use its own directory, got the shared temp dir %s", dir)
+	}
+	if mode != "700" {
+		t.Fatalf("temp directory mode %s, want 700", mode)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("temp directory %s survived the edit (err %v)", dir, err)
+	}
+}
+
 // rewriteOnRead simulates a model rewriting the proposal while the developer
 // reads the approve prompt, then answers.
 type rewriteOnRead struct {
