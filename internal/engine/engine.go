@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"herdr-dots/internal/backend"
@@ -24,7 +25,9 @@ type Deps struct {
 	Reader       func(a state.Attachment) transcript.Reader
 	LoadDots     func() ([]dots.Dot, []dots.LoadError)
 	SaveDot      func(d dots.Dot) error
-	Config       config.Config
+	Config       config.Config // initial settings
+	ConfigPath   string        // config.toml, re-read when it changes; "" = never
+	ConfigCheck  time.Duration // how often poll stats ConfigPath; 0 → 3s
 	Queue        *queue.Store
 	Attachments  *state.Attachments
 	Usage        *state.Usage
@@ -64,6 +67,11 @@ type Engine struct {
 
 	dmu sync.Mutex
 	sem chan struct{}
+
+	cfg        atomic.Pointer[config.Config] // current settings; read via e.config()
+	cfgMu      sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked
+	cfgStamp   string
+	cfgChecked time.Time
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
@@ -121,6 +129,12 @@ func New(d Deps) *Engine {
 		paneMu:   map[string]*sync.Mutex{},
 		sem:      make(chan struct{}, max(1, d.Config.MaxParallelRuns)),
 	}
+	if e.d.ConfigCheck <= 0 {
+		e.d.ConfigCheck = 3 * time.Second
+	}
+	cfg := d.Config
+	e.cfg.Store(&cfg)
+	e.cfgStamp = configStamp(d.ConfigPath)
 	e.ReloadDots()
 	return e
 }
@@ -177,6 +191,9 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	if err != nil {
 		return fmt.Errorf("pane %s: %w", paneID, err)
 	}
+	if p.Agent == "" {
+		return fmt.Errorf("pane %s has no coding agent: dots attach to agent panes only", paneID)
+	}
 	pl := e.paneLock(paneID)
 	pl.Lock()
 	defer pl.Unlock()
@@ -188,31 +205,38 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 		}
 	}
 	r := e.reader(att)
-	att.Source = r.Source()
 	turns, err := r.Turns(ctx)
 	if err != nil {
 		e.d.Logf("pane %s: initial transcript read: %v", paneID, err)
 	}
 	e.mu.Lock()
+	add := make([]state.DotAttachment, 0, len(slugs))
 	for _, slug := range slugs {
 		d, ok := e.dots[slug]
 		if !ok {
 			e.mu.Unlock()
 			return fmt.Errorf("unknown dot %q", slug)
 		}
-		if att.Find(slug) != nil {
-			continue
-		}
 		// Catch-up: the newest Context.Turns turns count as "new" for this dot.
-		att.Dots = append(att.Dots, state.DotAttachment{Slug: slug, LastSeenTurn: max(0, len(turns)-d.Context.Turns)})
-		delete(e.warned, key{paneID, slug})
+		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: max(0, len(turns)-d.Context.Turns)})
 	}
+	// Update-or-create in one store call: runFailed, cooldown or Detach updates
+	// made while the transcript was read are kept, not overwritten.
+	err = e.d.Attachments.Upsert(att, func(x *state.Attachment) {
+		x.Source = r.Source()
+		for _, da := range add {
+			if x.Find(da.Slug) == nil {
+				x.Dots = append(x.Dots, da)
+				delete(e.warned, key{paneID, da.Slug})
+			}
+		}
+	})
 	e.mu.Unlock()
-	if err := e.d.Attachments.Put(att); err != nil {
+	if err != nil {
 		return err
 	}
 	e.subscribe(paneID)
-	e.spawn(func() { e.processPane(paneID) })
+	e.spawn(func() { e.processPaneIfIdle(paneID) })
 	e.broadcast()
 	return nil
 }
@@ -299,7 +323,7 @@ func (e *Engine) watchPane(ctx context.Context, paneID string) {
 				timer.Stop()
 			}
 			if ev.Status == herdr.StatusIdle || ev.Status == herdr.StatusDone {
-				timer = time.AfterFunc(e.d.Config.Debounce(), func() { e.spawn(func() { e.onIdle(paneID) }) })
+				timer = time.AfterFunc(e.config().Debounce(), func() { e.spawn(func() { e.onIdle(paneID) }) })
 			}
 		}
 		if timer != nil {
@@ -321,6 +345,18 @@ func (e *Engine) onIdle(paneID string) {
 	e.flushAuto(paneID)
 }
 
+// processPaneIfIdle is processPane for callers that are not onIdle (a rerun
+// after a run, Attach's catch-up). If the agent is working, the transcript's
+// last turn may be half written, so it does nothing: LastSeenTurn hasn't
+// moved, and the next idle/done event reviews the finished turn.
+func (e *Engine) processPaneIfIdle(paneID string) {
+	p, err := e.d.Herdr.PaneGet(e.ctx, paneID)
+	if err != nil || (p.AgentStatus != herdr.StatusIdle && p.AgentStatus != herdr.StatusDone) {
+		return
+	}
+	e.processPane(paneID)
+}
+
 type job struct {
 	dot        dots.Dot
 	turns      []transcript.Turn
@@ -336,7 +372,7 @@ func (e *Engine) processPane(paneID string) {
 	pl.Unlock()
 
 	for _, d := range budgetHit {
-		e.notify(d, "budget reached; skipping turns until the budget resets")
+		e.notify(d, "budget reached; resets on a new agent session or press r")
 	}
 	for _, j := range jobs {
 		e.spawn(func() { e.runDot(paneID, j.dot, j.turns, runOpts{forceQueue: j.forceQueue}) })
@@ -351,6 +387,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 		return nil, nil
 	}
 	session := att.SessionValue
+	att = e.upgradeFromScrollback(att)
 	turns, err := e.reader(att).Turns(e.ctx)
 	if err != nil && !att.ForceScrollback {
 		e.d.Logf("pane %s: transcript read failed (%v); falling back to scrollback", paneID, err)
@@ -394,7 +431,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 			dec := Decide(FilterInput{
 				Dot: d, Att: *da, NewTurns: newTurns, PausedAll: e.pausedAll,
 				DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls,
-				PaneBudget: e.d.Config.SessionBudgetCalls,
+				PaneBudget: e.config().SessionBudgetCalls,
 			})
 			da.LastSeenTurn = len(turns)
 			switch dec.Reason {
@@ -418,6 +455,53 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 	e.mu.Unlock()
 
 	return jobs, budgetHit
+}
+
+// upgradeFromScrollback retries reader selection while the pane's cached reader
+// is a scrollback *fallback* (the session is known and scrollback wasn't
+// forced): Claude writes <session>.jsonl only on the first prompt, so Select
+// falls back to scrollback right after attach or /clear. Runs with the pane
+// lock held.
+//
+// Rule on upgrade: the transcript's existing turns count as already seen,
+// except the last one, which this (idle-only) pass reviews. Turns before it
+// were covered, lossily, by scrollback; the last one is the turn that just
+// finished. At worst that one turn is reviewed twice (once per reader).
+func (e *Engine) upgradeFromScrollback(att state.Attachment) state.Attachment {
+	if att.ForceScrollback || att.SessionValue == "" || e.reader(att).Source() != transcript.SourceScrollback {
+		return att
+	}
+	nr := e.d.Reader(att)
+	if nr.Source() == transcript.SourceScrollback {
+		return att
+	}
+	turns, err := nr.Turns(e.ctx)
+	if err != nil {
+		return att // not readable yet; try again on the next pass
+	}
+	seen := max(0, len(turns)-1)
+	applied := false
+	err = e.d.Attachments.Update(att.PaneID, func(a *state.Attachment) {
+		if a.SessionValue != att.SessionValue {
+			return
+		}
+		applied = true
+		a.Source = nr.Source()
+		for i := range a.Dots {
+			a.Dots[i].LastSeenTurn = seen
+		}
+	})
+	if err != nil || !applied {
+		return att
+	}
+	e.mu.Lock()
+	e.readers[att.PaneID] = nr
+	e.mu.Unlock()
+	e.d.Logf("pane %s: transcript available; switched from scrollback to %s", att.PaneID, nr.Source())
+	if a, ok := e.d.Attachments.Get(att.PaneID); ok {
+		return a
+	}
+	return att
 }
 
 func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o runOpts) {
@@ -447,7 +531,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		e.runFailed(k, d, turn, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(e.ctx, e.d.Config.RunTimeout())
+	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, backend.Request{
 		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
@@ -503,7 +587,7 @@ func (e *Engine) finishRun(k key) {
 	e.mu.Unlock()
 	e.broadcast()
 	if again {
-		e.spawn(func() { e.processPane(k.pane) })
+		e.spawn(func() { e.processPaneIfIdle(k.pane) })
 	}
 }
 
@@ -513,7 +597,7 @@ func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o
 	if o.summon || mode == dots.ModeObserve {
 		mode = dots.ModeQueue
 	}
-	if mode == dots.ModeInject && (o.forceQueue || !e.d.Config.InjectEnabled) {
+	if mode == dots.ModeInject && (o.forceQueue || !e.config().InjectEnabled) {
 		mode = dots.ModeQueue
 	}
 	c := queue.Card{Dot: d.Slug, DotName: d.Name, Glyph: d.Glyph, PaneID: paneID, Turn: turn,
@@ -557,7 +641,7 @@ func (e *Engine) feed(paneID, slug string, turn int, outcome, detail string) {
 func (e *Engine) Snapshot() view.Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := view.Snapshot{InjectEnabled: e.d.Config.InjectEnabled, PausedAll: e.pausedAll}
+	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll}
 	slugs := make([]string, 0, len(e.dots))
 	for slug := range e.dots {
 		slugs = append(slugs, slug)
@@ -576,7 +660,7 @@ func (e *Engine) Snapshot() view.Snapshot {
 	seen := map[string]bool{}
 	for _, a := range e.d.Attachments.List() {
 		pv := view.Pane{PaneID: a.PaneID, Agent: a.Agent, Source: a.Source,
-			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.d.Config.SessionBudgetCalls}
+			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls}
 		for _, da := range a.Dots {
 			d, ok := e.dots[da.Slug]
 			if !ok {

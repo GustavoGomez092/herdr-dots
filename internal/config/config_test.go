@@ -35,12 +35,15 @@ func TestLoadClampsNonsense(t *testing.T) {
 	}
 }
 
-func TestLoadBadTOMLReturnsDefaultsAndError(t *testing.T) {
+// The inject kill switch fails closed: a malformed file disables inject.
+func TestLoadBadTOMLReturnsDefaultsWithInjectOffAndError(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
-	os.WriteFile(p, []byte("max_parallel_runs = = 3"), 0o600)
+	os.WriteFile(p, []byte("inject_enabled = false\nmax_parallel_runs = = 3"), 0o600)
 	c, err := Load(p)
-	if err == nil || c != Default() {
-		t.Fatalf("want defaults + error, got %+v %v", c, err)
+	want := Default()
+	want.InjectEnabled = false
+	if err == nil || c != want {
+		t.Fatalf("want defaults with inject off + error, got %+v %v", c, err)
 	}
 }
 

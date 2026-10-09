@@ -10,6 +10,7 @@ import (
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
+	"herdr-dots/internal/view"
 )
 
 // flushAuto delivers waiting cards: approved ones need an idle agent; inject
@@ -85,7 +86,11 @@ func (e *Engine) SendCards(ids []string) error {
 	return nil
 }
 
+// Dismiss and Edit hold e.dmu so they never interleave with a delivery: a card
+// is either sent as it was, or dismissed/edited before any flush reads it.
 func (e *Engine) Dismiss(id string) error {
+	e.dmu.Lock()
+	defer e.dmu.Unlock()
 	c, ok := e.d.Queue.Get(id)
 	if !ok {
 		return queue.ErrNotFound
@@ -99,6 +104,8 @@ func (e *Engine) Dismiss(id string) error {
 }
 
 func (e *Engine) Edit(id, body string) error {
+	e.dmu.Lock()
+	defer e.dmu.Unlock()
 	if err := e.d.Queue.Edit(id, body); err != nil {
 		return err
 	}
@@ -122,6 +129,7 @@ func (e *Engine) pollLoop() {
 // poll detects closed panes and session changes (Herdr has no pane-closed
 // event in its subscription stream) and flushes auto cards whose guard opened.
 func (e *Engine) poll() {
+	e.maybeReloadConfig()
 	for _, a := range e.d.Attachments.List() {
 		p, err := e.d.Herdr.PaneGet(e.ctx, a.PaneID)
 		if herdr.IsNotFound(err) {
@@ -161,6 +169,7 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 	pl.Lock()
 	defer pl.Unlock()
 	changed := false
+	var slugs []string
 	err := e.d.Attachments.Update(a.PaneID, func(x *state.Attachment) {
 		if x.SessionValue == p.AgentSession.Value {
 			return
@@ -174,11 +183,25 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 		x.ForceScrollback = false
 		for i := range x.Dots {
 			x.Dots[i].LastSeenTurn = 0
+			slugs = append(slugs, x.Dots[i].Slug)
 		}
 	})
 	if errors.Is(err, state.ErrNoAttachment) || !changed {
 		return
 	}
+	// Budgets are per agent session: a new session starts from zero.
+	if err := e.d.Usage.ResetPane(a.PaneID); err != nil {
+		e.d.Logf("reset usage %s: %v", a.PaneID, err)
+	}
+	e.mu.Lock()
+	for _, s := range slugs {
+		k := key{a.PaneID, s}
+		delete(e.warned, k)
+		if e.status[k] == view.StatusBudget {
+			delete(e.status, k)
+		}
+	}
+	e.mu.Unlock()
 	e.dropReader(a.PaneID)
 	if att, ok := e.d.Attachments.Get(a.PaneID); ok {
 		r := e.reader(att)

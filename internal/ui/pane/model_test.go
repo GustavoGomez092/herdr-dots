@@ -176,6 +176,88 @@ func TestDisconnectedBannerPersistsAndBlocksActions(t *testing.T) {
 	}
 }
 
+func queueCard(id, sev string) queue.Card {
+	return queue.Card{ID: id, Dot: "security", DotName: "Security", Glyph: "◆", Severity: sev, Body: "card " + id, Mode: "queue", Status: queue.StatusPending, Turn: 1}
+}
+
+// A new higher-severity card shifts indexes; ⏎ must still act on the card the
+// user selected.
+func TestSelectionFollowsCardIDAcrossSnapshots(t *testing.T) {
+	fc := &fakeCaller{}
+	s := snap()
+	s.Panes[0].Cards = []queue.Card{queueCard("a", "warn"), queueCard("b", "info")}
+	m, _ := New("w1:p1", fc).Update(SnapshotMsg(s))
+	m = press(m, "j") // select b
+	s2 := snap()
+	s2.Panes[0].Cards = []queue.Card{queueCard("c", "critical"), queueCard("a", "warn"), queueCard("b", "info")}
+	m, _ = m.Update(SnapshotMsg(s2))
+	press(m, "enter")
+	if len(fc.calls) != 1 || fc.calls[0].args != `{"ids":["b"]}` {
+		t.Fatalf("enter must send the selected card b, calls %+v", fc.calls)
+	}
+	fc.calls = nil
+	press(m, "x")
+	if len(fc.calls) != 1 || fc.calls[0].args != `{"id":"b"}` {
+		t.Fatalf("x must dismiss the selected card b, calls %+v", fc.calls)
+	}
+}
+
+func TestSelectionFollowsCardWhenItDisappears(t *testing.T) {
+	fc := &fakeCaller{}
+	s := snap()
+	s.Panes[0].Cards = []queue.Card{queueCard("a", "warn"), queueCard("b", "info")}
+	m, _ := New("w1:p1", fc).Update(SnapshotMsg(s))
+	m = press(m, "j") // select b
+	s2 := snap()
+	s2.Panes[0].Cards = []queue.Card{queueCard("a", "warn")}
+	m, _ = m.Update(SnapshotMsg(s2))
+	press(m, "enter")
+	if len(fc.calls) != 1 || fc.calls[0].args != `{"ids":["a"]}` {
+		t.Fatalf("a vanished selection clamps to a remaining card, calls %+v", fc.calls)
+	}
+}
+
+func TestRosterSelectionFollowsDotSlug(t *testing.T) {
+	fc := &fakeCaller{}
+	m := press(ready(fc), "tab", "j") // roster: Frontend
+	s := snap()
+	s.Panes[0].Dots = append([]view.DotState{{Slug: "aaa", Name: "Aaa", Glyph: "★", Mode: "queue", Status: "idle"}}, s.Panes[0].Dots...)
+	m, _ = m.Update(SnapshotMsg(s))
+	press(m, "d")
+	if len(fc.calls) != 1 || fc.calls[0].args != `{"pane_id":"w1:p1","slug":"frontend"}` {
+		t.Fatalf("d must detach the selected dot frontend, calls %+v", fc.calls)
+	}
+}
+
+// The pane must keep the header, roster and selected card on screen.
+func TestViewportKeepsHeaderRosterAndSelectedCard(t *testing.T) {
+	fc := &fakeCaller{}
+	s := snap()
+	long := strings.Repeat("a long finding that wraps across several lines ", 6)
+	s.Panes[0].Cards = nil
+	for _, id := range []string{"1", "2", "3", "4", "5", "6"} {
+		c := queueCard(id, "warn")
+		c.DotName, c.Body = "Dot"+id, long
+		s.Panes[0].Cards = append(s.Panes[0].Cards, c)
+	}
+	var m tea.Model = New("w1:p1", fc)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 46, Height: 15})
+	m, _ = m.Update(SnapshotMsg(s))
+	m = press(m, "j", "j", "j", "j") // select Dot5
+	v := m.View()
+	for _, want := range []string{"DOTS →", "Security", "Frontend", "▸◆", "Dot5 · turn 1"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q:\n%s", want, v)
+		}
+	}
+	if n := strings.Count(v, "\n") + 1; n > 15 {
+		t.Errorf("view is %d lines, want <= 15:\n%s", n, v)
+	}
+	if strings.Contains(v, "Dot1 · turn 1") {
+		t.Errorf("cards far above the selection should scroll off:\n%s", v)
+	}
+}
+
 func TestEmptyAndDisconnectedStates(t *testing.T) {
 	m, _ := New("w1:p9", &fakeCaller{}).Update(SnapshotMsg(snap()))
 	if !strings.Contains(m.View(), "prefix+d") {

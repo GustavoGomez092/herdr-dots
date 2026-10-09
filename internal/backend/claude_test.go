@@ -79,6 +79,34 @@ func TestClaudeBuildCmdIsReadOnlyAndHookless(t *testing.T) {
 	}
 }
 
+// Review: a dot's [backend].args must never override the read-only flags.
+func TestClaudeBuildCmdNeverEmitsDeniedArgs(t *testing.T) {
+	r := req()
+	r.Args = []string{"--verbose", "--dangerously-skip-permissions", "--permission-mode", "bypassPermissions",
+		"--tools", "Bash", "--allowedTools", "Bash", "Edit", "--settings", `{}`, "--mcp-config", "m.json", "--add-dir", "/", "--bare"}
+	cmd := ClaudeCLI{Environ: func() []string { return nil }}.BuildCmd(r)
+	for _, banned := range []string{"--dangerously-skip-permissions", "--permission-mode", "bypassPermissions", "Bash", "Edit", "--mcp-config", "m.json", "--add-dir", "--bare"} {
+		if slices.Contains(cmd.Args, banned) {
+			t.Errorf("BuildCmd emitted %q: %v", banned, cmd.Args)
+		}
+	}
+	for _, ours := range []string{"--tools", "--allowedTools"} {
+		if n := strings.Count(strings.Join(cmd.Args, "\x00"), "\x00"+ours+"\x00"); n != 1 {
+			t.Errorf("%s must appear exactly once (ours), got %d: %v", ours, n, cmd.Args)
+		}
+	}
+	if v, _ := argAfter(cmd.Args, "--settings"); v != `{"disableAllHooks":true}` || slices.Contains(cmd.Args, "{}") {
+		t.Errorf("settings overridden: %v", cmd.Args)
+	}
+	if !slices.Contains(cmd.Args, "--verbose") {
+		t.Error("harmless args are kept")
+	}
+	run := &fakeRunner{stdout: `{"result":"{\"relevant\":false}"}`}
+	if _, err := (ClaudeCLI{Runner: run, Environ: func() []string { return nil }}).Run(context.Background(), r); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("Run with denied args must fail loudly, got %v", err)
+	}
+}
+
 func TestParseClaudeOutput(t *testing.T) {
 	out := `{"type":"result","is_error":false,"result":"{\"relevant\":true,\"severity\":\"warn\",\"message\":\"Use httpOnly\"}","usage":{"input_tokens":120,"output_tokens":30},"total_cost_usd":0.01}`
 	res, err := ParseClaudeOutput([]byte(out))

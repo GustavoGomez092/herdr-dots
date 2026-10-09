@@ -85,6 +85,8 @@ Dots pane keys: `⏎` send card · `a` send all · `e` edit · `x` dismiss · `s
 - Hooks are disabled for dot runs, and Herdr variables are stripped, so dots never affect your panes.
 - Queue mode (you approve) is the default. Inject mode is opt-in per dot and can be turned off for
   all dots with `inject_enabled = false` in `config.toml`.
+- Changes to `config.toml` apply within a few seconds, without a restart (except `max_parallel_runs`);
+  if the file can't be parsed, the last good settings stay and inject is turned off until it is fixed.
 - Per-dot and per-session call budgets cap cost.
 
 ## Known gaps in this scaffold

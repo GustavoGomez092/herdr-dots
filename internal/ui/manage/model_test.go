@@ -125,6 +125,41 @@ func TestCreateFromTemplateSavesAndReloads(t *testing.T) {
 	}
 }
 
+// Editing an unattached dot must not silently check it for attaching; only a
+// newly created dot is pre-selected.
+func TestEditingUnattachedDotDoesNotSelectIt(t *testing.T) {
+	m, fc, dir := setup(t, "w1:p1")
+	d, _ := dots.FromTemplate("backend")
+	_ = dots.Save(dir, d, true)
+	m = press(m, "e", "ctrl+s") // Backend is under the cursor and unattached
+	if !strings.Contains(m.View(), "saved backend") {
+		t.Fatalf("status:\n%s", m.View())
+	}
+	if strings.Contains(m.View(), "[x] ▼ Backend") {
+		t.Fatalf("edited dot must stay unchecked:\n%s", m.View())
+	}
+	fc.calls = nil
+	press(m, "enter")
+	for _, c := range fc.calls {
+		if strings.HasPrefix(c, ipc.CmdAttach) {
+			t.Fatalf("enter after an edit attached a dot: %v", fc.calls)
+		}
+	}
+}
+
+func TestNewDotIsSelectedAfterSave(t *testing.T) {
+	m, fc, _ := setup(t, "w1:p1")
+	m = press(m, "t", "j", "enter", "ctrl+s") // create Copywriter
+	s := lib()
+	s.Library = append(s.Library, view.LibraryDot{Slug: "copywriter", Name: "Copywriter", Glyph: "✎", Backend: "claude-cli", Model: "sonnet", Mode: "suggest"})
+	m, _ = m.Update(SnapshotMsg(s))
+	fc.calls = nil
+	press(m, "enter")
+	if len(fc.calls) == 0 || fc.calls[0] != ipc.CmdAttach+` {"pane_id":"w1:p1","slugs":["copywriter"]}` {
+		t.Fatalf("a new dot is attached on enter: %v", fc.calls)
+	}
+}
+
 func TestDuplicateNameShowsError(t *testing.T) {
 	m, _, dir := setup(t, "w1:p1")
 	d, _ := dots.FromTemplate("security")

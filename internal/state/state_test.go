@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -63,6 +64,61 @@ func TestUsage(t *testing.T) {
 	_ = u2.ResetPane("p1")
 	if u2.PaneCalls("p1") != 0 {
 		t.Fatal("reset")
+	}
+}
+
+func TestAttachmentsUpsert(t *testing.T) {
+	s, _ := OpenAttachments(filepath.Join(t.TempDir(), "attachments.json"))
+	add := func(slug string) func(*Attachment) {
+		return func(a *Attachment) { a.Dots = append(a.Dots, DotAttachment{Slug: slug}) }
+	}
+	if err := s.Upsert(Attachment{PaneID: "w1:p1", Agent: "claude"}, add("a")); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Update("w1:p1", func(a *Attachment) { a.Find("a").Paused = true })
+	// An existing attachment is updated in place; the base is ignored.
+	if err := s.Upsert(Attachment{PaneID: "w1:p1", Agent: "other"}, add("b")); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.Get("w1:p1")
+	if a.Agent != "claude" || len(a.Dots) != 2 || !a.Find("a").Paused || a.Find("b") == nil {
+		t.Fatalf("upsert %+v", a)
+	}
+}
+
+func TestUsageResetDot(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "usage.json")
+	u, _ := OpenUsage(p)
+	_ = u.Record("p1", "a", 1, 1)
+	_ = u.Record("p1", "b", 1, 1)
+	if err := u.ResetDot("p1", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if u.Calls("p1", "a") != 0 || u.Calls("p1", "b") != 1 || u.PaneCalls("p1") != 1 {
+		t.Fatalf("a=%d b=%d pane=%d", u.Calls("p1", "a"), u.Calls("p1", "b"), u.PaneCalls("p1"))
+	}
+	u2, _ := OpenUsage(p)
+	if u2.Calls("p1", "a") != 0 {
+		t.Fatal("reset not persisted")
+	}
+	if err := u.ResetDot("nope", "x"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFeedSanitizesDetail(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "feed.jsonl")
+	// An entry written by an older build, unsanitized, is cleaned on load too.
+	os.WriteFile(p, []byte(`{"pane_id":"p1","dot":"x","outcome":"error","detail":"old\u001b]0;t\u0007"}`+"\n"), 0o600)
+	f, _ := OpenFeed(p)
+	_ = f.Append(FeedEntry{PaneID: "p1", Dot: "x", Outcome: OutcomeError, Detail: "claude error: \u001b]52;c;ZXZpbA==\u0007\u009bboom"})
+	r := f.Recent("p1", 10)
+	if len(r) != 2 || r[0].Detail != "old]0;t" || r[1].Detail != "claude error: ]52;c;ZXZpbA==boom" {
+		t.Fatalf("recent %q", r)
+	}
+	data, _ := os.ReadFile(p)
+	if strings.Contains(string(data[strings.Index(string(data), "\n"):]), `\u001b`) {
+		t.Fatalf("stored detail must be clean: %s", data)
 	}
 }
 
