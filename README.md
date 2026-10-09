@@ -390,8 +390,8 @@ the dot's file. `proactive_enabled` in `config.toml` switches all of it off at o
   digest you haven't expanded expands it first (a second `⏎` sends it), `a` skips digests you haven't
   expanded, and the engine refuses to send a digest that changed since you read it. Observe-mode dots
   research for their memory only and never make a card. Research can write `research` and `question`
-  memory entries (dot scope; project scope stays a proposal until you approve it), and you can add a
-  question yourself to steer the next pass:
+  memory entries (dot scope; project scope stays a proposal until you approve it, unless
+  `memory_auto_approve_project` is on), and you can add a question yourself to steer the next pass:
   `herdr-dots memory add --scope dot --dot <slug> --kind question "…"`.
 - **Web research.** `[research] web = true` gives research passes web tools: web search only (no
   page fetching) for `claude-cli` dots, search and fetch for `anthropic-api` dots, hosted search for
