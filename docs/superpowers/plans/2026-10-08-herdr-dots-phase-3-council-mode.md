@@ -12,12 +12,15 @@
 
 **Binding rulings used here (row 14):** observe-mode dots are council members; the default is 1 round; the chair uses `default_backend` / `default_model` unless `[council]` overrides them; members are not forced to answer. The product keeps the name **Herdr Dots** (row 1).
 
-**Builds on:** v1 as merged (real code at HEAD) **plus Phase 2 (dot memory, VITAL)**, which is executed and merged **before** this plan starts. For v1 symbols this plan uses the real code (runtime settings through `e.config()` in `internal/engine/settings.go`, `textutil.SanitizeModelText`, `dots.SafeArgs`, `Attachments.Upsert`, `e.spawn` / `e.Wait`, `paneLock`, pane selection by id with a scrolled viewport). For memory symbols it uses the Interfaces blocks of `docs/superpowers/plans/2026-10-08-herdr-dots-phase-2-dot-memory.md`.
+**Builds on:** v1 as merged **plus Phase 2 (dot memory, VITAL)** as merged on `feat/dots-v1` (reconciled against `aada60f`, "merge: P2 Task 15 memory wiring, version 0.2.0"). Every symbol this plan uses is the real code at that commit: runtime settings through `e.config()` (atomic accessor), `textutil.SanitizeModelText`, `dots.SafeArgs`, `Attachments.Upsert`, `e.spawn` / `e.Wait`, `paneLock` → `e.mu` → stores with `e.dmu` separate, pane selection by id with a scrolled viewport and a roster cut (`fitRoster`), and Phase 2's memory hooks in `internal/engine/memory.go` (`loadMemory`, `applyMemoryOps` capped at `backend.MaxReviewOps`/`MaxPassOps`, `spawnOutcome` → `recordOutcome`, `suppressedBy`, `clearError`, `DecideMemory`, `Remember`).
+
+**Reconciliation (2026-10-08):** the plan was replayed task by task, in wave order, on a scratch worktree of `aada60f`: every code block was applied exactly as written and every task's tests passed on its wave base; the final replay passed `go test -race ./...`, `go vet ./...` and `gofmt -l internal cmd`. Live steps (Task 3 V1–V4, Task 8 E2E) were not run. The edits it needed are marked "(reconciled)" below and listed in Plan decisions 25–29.
 
 **Preconditions (check before Wave 1; stop and report if any fails):**
 - Phase 2 is merged into the base branch: `ls internal/memory/store.go internal/memory/outcome.go internal/engine/memory.go internal/ui/memui/model.go` lists all four files.
 - These Phase 2 symbols exist with these names (Task 6 depends on them): `grep -n 'func (e \*Engine) recordOutcome(c queue.Card, kind, orig string, edited bool)' internal/engine/memory.go`, `grep -n 'func (e \*Engine) projectOf(att \*state.Attachment) string' internal/engine/memory.go`, `grep -n 'func retryLocked\|func (e \*Engine) memWriteFailed\|func (e \*Engine) refreshStats\|func touchedPaths\|func turnsText\|func (e \*Engine) Remember' internal/engine/memory.go`, `grep -nE 'Project +string' internal/queue/queue.go`, `grep -n 'MemoryEnabled' internal/config/config.go`, `grep -nE 'Memory +string|Learn +bool' internal/backend/backend.go`, `grep -n 'func newMemRig\|type memBackend\|const testProject' internal/engine/memory_test.go`. If the reconciled Phase 2 renamed one of them, use the real name everywhere this plan uses the old one and note it in the task's commit message.
-- `internal/version/version.go` says `0.2.0`.
+- `internal/version/version.go` says `0.2.0`, and `grep -n 'func TestVersionIsPhaseTwo' cmd/herdr-dots/memwire_test.go` finds Phase 2's version pin (Task 8 moves it to 0.3.0). (reconciled)
+- Phase 2's README task (P2 Task 16) is merged: `grep -n '^### Dot memory' README.md` and `grep -n 'feature complete only after Phase 10' README.md` both match, and the status banner says v0.2.0. Task 8's README edits are written against that README; at reconciliation time P2 Task 16 was still running, so those two anchors were checked against P2 Task 16's planned text. (reconciled)
 - `go test -race ./... && go vet ./...` passes on the base and `gofmt -l .` prints nothing.
 
 ## Global Constraints
@@ -34,7 +37,7 @@ Phase 3 constraints:
 - Member runs go through v1's `sem` (`max_parallel_runs`); one council per pane at a time (`ErrCouncilRunning`, "council already running").
 - The chair is read-only: `RepoRead = false`, no `Args`, `Learn = false`; it sees the member answers, the recent turns and the project's active conventions and decisions only. It writes no memory.
 - Council state is in memory only; an engine restart loses an in-flight council (member usage already recorded). This is documented in the README.
-- **Phase 3 starts only after Phase 2 merges.** These files are modified by both phases: `internal/engine/engine.go`, `internal/engine/deliver.go`, `internal/engine/handle.go`, `internal/engine/memory.go` (created by Phase 2, hooked here), `internal/queue/queue.go`, `internal/config/config.go`, `internal/state/feed.go`, `internal/view/view.go`, `internal/ipc/ipc.go`, `internal/dots/dot.go`, `internal/ui/pane/model.go`, `cmd/herdr-dots/ui.go`, `internal/version/version.go`, `herdr-plugin.toml`, `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`.
+- **Phase 3 starts only after Phase 2 merges.** These files are modified by both phases: `internal/engine/engine.go`, `internal/engine/deliver.go`, `internal/engine/handle.go`, `internal/engine/memory.go` (created by Phase 2, hooked here), `internal/queue/queue.go`, `internal/config/config.go`, `internal/state/feed.go`, `internal/view/view.go`, `internal/ipc/ipc.go`, `internal/dots/dot.go`, `internal/ui/pane/model.go`, `cmd/herdr-dots/ui.go`, `cmd/herdr-dots/memwire_test.go` (Phase 2's version pin; reconciled), `internal/version/version.go`, `herdr-plugin.toml`, `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`.
 - Run `go test -race ./...`, `go vet ./...` and `gofmt -l .` (must print nothing) before every commit. Tests are deterministic and race-safe: scripted fake backends, the `herdrtest` fake Herdr, `t.TempDir()`, `eventually` polling instead of fixed sleeps for anything that must happen.
 
 Phase 2 constraints that still apply (copied from `docs/superpowers/plans/2026-10-08-herdr-dots-phase-2-dot-memory.md`):
@@ -86,6 +89,11 @@ No human was available; every ambiguity below was resolved here. Each can be rev
 22. **The chair prompt quotes its section headers exactly.** A planning run showed that headers listed as `## Must fix (critical points)` were copied verbatim; the quoted form produced clean `## Must fix` headers in 10 of 10 councils.
 23. **The version bump to 0.3.0 happens in the last task**, with the README.
 24. **All members failing** → no card, a feed `error` line ("council failed: no member answered") and a toast. A council where at least one member answered always makes a card, even if every answer was a pass ("No dot had anything to add.", severity `info`).
+25. **(reconciled) The council progress line rides with the queue rule.** Phase 2's pane `View` builds `top`, the roster and `queueRule` into `head` (always on screen) and cuts the roster first (`fitRoster`). Task 5 prepends the progress line to `queueRule`, so the roster cut counts it and it never scrolls away; v1's `b.WriteString(rule("QUEUE …"))` find text no longer exists.
+26. **(reconciled) Phase 2 pinned its version in a test** (`TestVersionIsPhaseTwo` in `cmd/herdr-dots/memwire_test.go`). Task 8 renames it `TestVersionIsPhaseThree` and pins `0.3.0`, test first, in the same commit as the bump.
+27. **(reconciled) The memory-pass half of the loop guard gets its own test.** Phase 2's `DecideMemory` skips turns `IsFromDot` reports as the dot's own, so Task 1's council rule already keeps a council-started turn from triggering a memory pass. Task 6 adds `TestCouncilTurnNeverTriggersAMemoryPass` so the Global Constraint is pinned.
+28. **(reconciled) Members keep every Phase 2 run behavior** with no extra code: `runDot` loads each member's own memory block (`loadMemory`, user prompt only), touches the entries it used, applies the member's `remember` ops through `applyMemoryOps` (capped at `backend.MaxReviewOps` = 3 per reply), and skips anti-repeat suppression and memory passes because members are summons (`o.summon`). The chair's `Learn` is false and `runChair` ignores `Result.Remember`, so a chair reply can never write memory. Council cards record outcomes through Phase 2's `spawnOutcome` → `recordOutcome`, which hands council cards to `recordCouncilOutcomes` before its single-dot path (one `RecordOutcome` per contributing part; an edited send records the part's own body as `Body` and the edited digest as `Edited`, mirroring Phase 2's `orig`/edited split).
+29. **(reconciled) Recorded chair replies.** The reconciliation replay used hand-written fixtures for `internal/council/testdata/chair/` (never committed). Task 3 must record the real replies with `RECORD=1` before Wave 3, because `TestRecordedChairReplies` needs at least 10 files.
 
 ## Confirmed while planning
 
@@ -130,7 +138,7 @@ Each task runs in its own git worktree branched from the wave's base (the base b
 - Task 5: `internal/ui/pane/model.go`, `council.go`, `council_test.go`.
 - Task 6: `internal/engine/council.go`, `council_memory.go`, `council_test.go`, `council_memory_test.go`, `engine.go`, `deliver.go`, `handle.go`, `memory.go`; `internal/council/recorded_test.go`.
 - Task 7: `cmd/herdr-dots/council.go`, `council_test.go`, `action.go`, `ui.go`; `herdr-plugin.toml`; `internal/keys/keys.go`, `keys_test.go`.
-- Task 8: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, `internal/version/version.go`, `herdr-plugin.toml` (version line), the Task 3 notes file (E2E section).
+- Task 8: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, `internal/version/version.go`, `herdr-plugin.toml` (version line), `cmd/herdr-dots/memwire_test.go` (version pin; reconciled), the Task 3 notes file (E2E section).
 
 **Gate after Wave 2:** start Wave 3 only after Task 3's notes say "Assumption holds: yes" for **V3** (a 3,000+ character council delivery arrives in Claude Code as one prompt). If V3 says "no", stop and report to the user. V1 "no" (fewer than 8 of 10 verified) does not stop the plan, because the plain merge and the `unverified` footer cover it, but record it in the notes and in the Task 6 commit message. V2 "no" changes Task 7 (it drops the default key; see Task 7 Step 3). V4 is informational (ruling 14 keeps `max_parallel_runs`).
 
@@ -173,7 +181,7 @@ docs/superpowers/notes/2026-10-08-phase-3-verification.md   (new)  V1–V4 and E
 docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md     (mod)  Phase 3 row links this plan
 ```
 
-**Conventions for code steps.** New files are given in full. Changes to existing files are given as **Find / Replace** pairs: find the exact text (it is unique in the file) and replace it. The find texts were chosen from lines Phase 2 does not change, so they apply to the post-Phase-2 code; if one doesn't match (a neighboring line moved during the Phase 2 reconciliation), make the same edit by hand. After editing, run `gofmt -w` on the touched files.
+**Conventions for code steps.** New files are given in full. Changes to existing files are given as **Find / Replace** pairs: find the exact text (it is unique in the file) and replace it. Every find text was checked against the merged Phase 2 code (`aada60f`) during reconciliation and matches exactly once; if one doesn't match on your base (a later commit moved a neighboring line), make the same edit by hand and say so in the commit message. After editing, run `gofmt -w` on the touched files.
 
 ---
 
@@ -2380,7 +2388,7 @@ git commit -m "feat(ui): council popup with member checklist and budget estimate
 - Shared with Phase 2 (already merged; edit on top of it): `internal/ui/pane/model.go`
 
 **Interfaces:**
-- Consumes: `queue.Card.Kind/Parts/Question/Note`, `queue.KindCouncil`, `queue.CardPart`; `view.Pane.Council`, `view.CouncilState`, `view.CouncilMembers/Round2/Merging`; v1 pane internals (`Model`, `selectedCard`, `area`/`areaQueue`, `connected`, `offlineHint`, `errMsg`, `style`) and test helpers `fakeCaller`, `snap()`, `key()`, `press()`, `ready()`.
+- Consumes: `queue.Card.Kind/Parts/Question/Note`, `queue.KindCouncil`, `queue.CardPart`; `view.Pane.Council`, `view.CouncilState`, `view.CouncilMembers/Round2/Merging`; v1 pane internals (`Model`, `selectedCard`, `area`/`areaQueue`, `connected`, `offlineHint`, `errMsg`, `style`); Phase 2's `View` layout (`top` + roster + `queueRule` form `head`, always on screen; `fitRoster` cuts the roster first; `window` scrolls the body to the selected card) and its key gating in `updateKeys` (reconciled); test helpers `fakeCaller`, `snap()`, `key()`, `press()`, `ready()`.
 - Produces:
   - `(pane.Model) WithOpener(open func(target string) error) Model`: how `C` opens the council popup (Task 7 passes `paneOpener`).
   - Key `C` (engine connected; any focus): runs the opener for the target; errors show in the status line; without an opener the status says "council: run the herdr-dots.council action".
@@ -2687,19 +2695,21 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 ```
 
-Find:
+Find (Phase 2's `View` builds the queue rule into `head`, which is always on screen):
 
 ```go
-	b.WriteString(rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w))
+	queueRule := rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w)
 ```
 
 Replace with:
 
 ```go
+	queueRule := rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w)
 	if p.Council != nil {
-		b.WriteString(style.Dim.Render(councilProgress(*p.Council)) + "\n")
+		// The progress line rides with the queue rule, so the roster cut
+		// (fitRoster) counts it and it never scrolls away.
+		queueRule = style.Dim.Render(councilProgress(*p.Council)) + "\n" + queueRule
 	}
-	b.WriteString(rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w))
 ```
 
 Find:
@@ -2802,7 +2812,7 @@ git commit -m "feat(ui): council cards, member expand, progress line and C in th
   - Task 2: `council.Plan`, `PlanInput`, `Candidate`, `Preflight` (`Select`, `Allowed`, `Refusal`, `Members`, `Skipped`, `Reasons`, `Rounds`), `Part`, `Answered`, `Contributing`, `RoundTwoQuestion`, `ParseStance`, `StanceAdd`, `ChairName`, `ChairPurpose`, `ChairQuestion`, `ParseDigest`, `PlainMerge`, `WithNotHeard`, `MaxSeverity`, `NothingToAdd`, `OthersHeader`, `StanceAgree`, `StanceObject`, `ReasonBudget`, `ReasonPaused`; `view.CouncilState`, `view.CouncilMembers/Round2/Merging`, `view.Pane.Council/CouncilPreflight`; `ipc.CmdCouncil`, `ipc.CmdCouncilPreflight`, `ipc.CouncilArgs`.
   - Task 3: `internal/council/testdata/chair/*.txt`.
   - v1 engine internals: `Engine` (`mu`, `dots`, `pausedAll`, `ctx`, `sem`, `d.Backend`, `d.Attachments`, `d.Usage`, `d.Queue`, `d.Herdr`, `d.Logf`), `e.config()`, `e.reader`, `e.spawn`, `runDot`, `runOpts`, `route`, `feed`, `setStatus`, `broadcast`, `reportPending`, `dropPane`, `tail`, `Handle`, `decode`; `textutil.SanitizeModelText`; test helpers `newRigWith`, `rig` (`e`, `srv`, `q`, `atts`, `usage`, `readers`), `dot`, `pane`, `eventually`, `lastSeen`, `(*rig).attach`, `(*rig).turnEnds`.
-  - Phase 2 (merged): `engine.Deps.Memory`, `e.projectOf(att *state.Attachment) string`, `retryLocked(func() error) error`, `e.memWriteFailed(error)`, `e.refreshStats(pid string)`, `touchedPaths`, `turnsText`, `e.recordOutcome(c queue.Card, kind, orig string, edited bool)`, `e.Remember`; `memory.Store.List/RecordOutcome/Ledger/Add`, `memory.Filter`, `memory.Query`, `memory.Select`, `memory.Render`, `memory.Outcome`, `memory.OutcomeSent/Edited/Dismissed`, `memory.ScopeProject/ScopeDot`, `memory.KindConvention/KindDecision/KindFinding/KindDismissed/KindNote`, `memory.StatusActive`, `memory.SourceUser`, `memory.AsConvention`; `queue.Card.Project`, `state.Attachment.ProjectID`, `dots.Dot.Memory.Enabled`, `config.Config.MemoryEnabled`, `backend.Request.Memory/Learn`; Phase 2 test helpers `newMemRig`, `memOpts`, `memRig` (`e`, `q`, `mem`, `be`, `entries`, `reader`, `attach`), `memBackend` (`mu`, `calls`, `set`), `testProject`.
+  - Phase 2 (merged): `engine.Deps.Memory`, `e.projectOf(att *state.Attachment) string`, `retryLocked(func() error) error`, `e.memWriteFailed(error)`, `e.refreshStats(pid string)`, `touchedPaths`, `turnsText`, `e.recordOutcome(c queue.Card, kind, orig string, edited bool)`, `e.Remember`, `DecideMemory(MemoryInput) bool` and `MemoryInput{Dot, NewTurns, MemoryEnabled, PaneBudget, …}` (reconciled); `memory.Store.List/RecordOutcome/Ledger/Add`, `memory.Filter`, `memory.Query`, `memory.Select`, `memory.Render`, `memory.Outcome`, `memory.OutcomeSent/Edited/Dismissed`, `memory.ScopeProject/ScopeDot`, `memory.KindConvention/KindDecision/KindFinding/KindDismissed/KindNote`, `memory.StatusActive`, `memory.SourceUser`, `memory.AsConvention`; `queue.Card.Project`, `state.Attachment.ProjectID`, `dots.Dot.Memory.Enabled`, `config.Config.MemoryEnabled`, `backend.Request.Memory/Learn`; Phase 2 test helpers `newMemRig`, `memOpts`, `memRig` (`e`, `q`, `mem`, `be`, `entries`, `reader`, `attach`), `memBackend` (`mu`, `calls`, `set`), `testProject`.
 - Produces:
   - `var engine.ErrCouncilRunning = errors.New("council already running")`.
   - `(*Engine) CouncilPreflight(paneID string, slugs []string) (council.Preflight, error)`: plans and publishes the result in `view.Pane.CouncilPreflight` (error wraps `state.ErrNoAttachment` for an unattached pane).
@@ -3536,6 +3546,24 @@ func TestCouncilCardRemembersOnlyAsAConvention(t *testing.T) {
 	}
 	if p := r.entries(memory.Filter{Scope: memory.ScopeProject}); len(p) != 1 || p[0].Kind != memory.KindConvention {
 		t.Fatalf("project memory %+v", p)
+	}
+}
+
+// Global constraint (reconciled): a turn a council delivery started never
+// triggers a Phase 2 memory pass on its own, for any observe dot, because
+// DecideMemory skips turns that IsFromDot reports as the dot's own.
+func TestCouncilTurnNeverTriggersAMemoryPass(t *testing.T) {
+	d := member("Copy", dots.ModeObserve)
+	d.Memory.EveryTurns = 1
+	text := transcript.DotPrefix(transcript.CouncilGlyph, transcript.CouncilName) + " ## Must fix\n- JWT in localStorage (Security)"
+	councilTurn := transcript.Turn{Index: 1, User: text, FromDots: transcript.FromDots(text)}
+	in := MemoryInput{Dot: d, NewTurns: []transcript.Turn{councilTurn}, MemoryEnabled: true, PaneBudget: 100}
+	if DecideMemory(in) {
+		t.Fatal("a council-started turn alone must not start a memory pass")
+	}
+	in.NewTurns = append(in.NewTurns, transcript.Turn{Index: 2, User: "now add a logout button"})
+	if !DecideMemory(in) {
+		t.Fatal("a developer turn after it still counts")
 	}
 }
 ```
@@ -4812,18 +4840,42 @@ git commit -m "feat: herdr-dots.council action, council popup entrypoint, pane C
 **Files:**
 - Modify: `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, `internal/version/version.go`, `herdr-plugin.toml` (version line only)
 - Modify: `docs/superpowers/notes/2026-10-08-phase-3-verification.md` (append the E2E results)
-- Shared with Phase 2 (already merged; edit on top of it): `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, `internal/version/version.go`, `herdr-plugin.toml`
+- Test: `cmd/herdr-dots/memwire_test.go` (Phase 2's version pin `TestVersionIsPhaseTwo` becomes `TestVersionIsPhaseThree`; reconciled)
+- Shared with Phase 2 (already merged; edit on top of it): `README.md`, `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, `internal/version/version.go`, `herdr-plugin.toml`, `cmd/herdr-dots/memwire_test.go`
 
 **Interfaces:**
-- Consumes: everything above.
-- Produces: user documentation for council mode (scaffold language; Phase 2 still marked **VITAL**; the product is not done); `version.Version = "0.3.0"`; manifest `version = "0.3.0"`.
+- Consumes: everything above; Phase 2's `TestVersionIsPhaseTwo` in `cmd/herdr-dots/memwire_test.go` (it pins `version.Version == "0.2.0"`).
+- Produces: user documentation for council mode (scaffold language; Phase 2 still marked **VITAL**; the product is not done); `version.Version = "0.3.0"`; manifest `version = "0.3.0"`; `TestVersionIsPhaseThree`.
 
-- [ ] **Step 1: Version 0.3.0**
+- [ ] **Step 1: Version 0.3.0 (test first)**
+
+Phase 2 pinned its version in a test. Move the pin to 0.3.0 before bumping. `cmd/herdr-dots/memwire_test.go`. Find:
+
+```go
+func TestVersionIsPhaseTwo(t *testing.T) {
+	if version.Version != "0.2.0" {
+		t.Fatalf("version %s, want 0.2.0", version.Version)
+	}
+}
+```
+
+Replace with:
+
+```go
+func TestVersionIsPhaseThree(t *testing.T) {
+	if version.Version != "0.3.0" {
+		t.Fatalf("version %s, want 0.3.0", version.Version)
+	}
+}
+```
+
+Run: `go test ./cmd/herdr-dots/ -run TestVersionIsPhaseThree`
+Expected: FAIL with `version 0.2.0, want 0.3.0`.
 
 `internal/version/version.go`: set `const Version = "0.3.0"` (keep the "stay on 0.x" comment). `herdr-plugin.toml`: set `version = "0.3.0"` (the line Phase 2 set to `0.2.0`).
 
-Run: `go build ./... && go run ./cmd/herdr-dots version`
-Expected: `herdr-dots 0.3.0 (scaffold)`.
+Run: `go build ./... && go run ./cmd/herdr-dots version && go test ./cmd/herdr-dots/ -run TestVersionIsPhaseThree`
+Expected: `herdr-dots 0.3.0 (scaffold)`, then PASS.
 
 - [ ] **Step 2: Update `README.md`**
 
@@ -5036,7 +5088,7 @@ Expected: no claim that the project is done, complete or ready (matches like "tu
 
 ```bash
 git status --short   # cmd/council-e2e must not be listed
-git add README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md docs/superpowers/notes/2026-10-08-phase-3-verification.md internal/version/version.go herdr-plugin.toml
+git add README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md docs/superpowers/notes/2026-10-08-phase-3-verification.md internal/version/version.go herdr-plugin.toml cmd/herdr-dots/memwire_test.go
 git commit -m "docs: council mode in the README and roadmap; version 0.3.0; E2E notes (Phase 3; not done)"
 ```
 
@@ -5083,10 +5135,10 @@ Run by the plan author against the spec and the real code; findings were fixed i
 | §9 V1–V4 | 3 (V1 also confirmed while planning; V2 confirmed while planning) |
 | Version 0.3.0, not done, Phase 2 VITAL | 8, Global Constraints |
 
-**Placeholder scan.** No "TBD", "TODO", "similar to Task N" or undefined helpers. Every new file is given in full and every change as a Find / Replace pair. The code of Tasks 1, 2, 4, 5 and 7, the non-memory parts of Task 6 and the live test of Task 3 were compiled and their tests run (`go test -race ./...`, `go vet ./...`, `gofmt`) against a copy of the v1 code at HEAD, with stand-ins for the Phase 2 symbols Task 6 uses (`Card.Project`, `Attachment.ProjectID`, `Config.MemoryEnabled`, `Request.Memory`, `Dot.Memory.Enabled`, `projectOf`, `recordOutcome`, a stub `memory` package); the engine council tests passed five times in a row under `-race`. `council_memory_test.go` and `council_memory.go` are written against Phase 2's Interfaces blocks and its test helpers and run for the first time in Task 6.
+**Placeholder scan.** No "TBD", "TODO", "similar to Task N" or undefined helpers. Every new file is given in full and every change as a Find / Replace pair. (reconciled) Every task was replayed in wave order on a scratch worktree of the merged Phase 2 code (`aada60f`), with no stand-ins: each code block was applied as written, each task's tests passed on its wave base, `council_memory_test.go` ran against the real Phase 2 store and test helpers, the engine council tests passed three times in a row under `-race`, the `live`-tagged test and the throwaway E2E driver compiled (`go vet -tags live ./internal/council/`, `go vet ./cmd/council-e2e/`), and the final replay passed `go test -race ./...`, `go vet ./...` and `gofmt -l internal cmd`. Task 8's README edits were checked against P2 Task 16's planned README.
 
 **Type consistency.** `council.Part`, `Preflight`, `Candidate`, `PlanInput`, `queue.CardPart`, `view.CouncilState`, `ipc.CouncilArgs`, `config.CouncilConfig`, `runOpts.noForce/ctx/sink`, `Engine.Council`/`CouncilPreflight`/`councilWait`, `summon.NewCouncil` and `pane.Model.WithOpener` are spelled the same in every Interfaces block, test and implementation.
 
 **Review Focus.** Five uncovered failure modes are listed at the top, each with a test in its owning task (Tasks 2 and 6).
 
-**Existing tests.** No v1 or Phase 2 test file changes, except two assertions in `internal/keys/keys_test.go` that count the default bindings (Task 7, Plan decision 18). `engine.Deps.Memory == nil` still means memory off, `backend.Verdict` is unchanged, and `config.Config` stays comparable.
+**Existing tests.** No v1 or Phase 2 test file changes, except two assertions in `internal/keys/keys_test.go` that count the default bindings (Task 7, Plan decision 18) and Phase 2's version pin in `cmd/herdr-dots/memwire_test.go`, which moves to 0.3.0 (Task 8, Plan decision 26; reconciled). `engine.Deps.Memory == nil` still means memory off, `backend.Verdict` is unchanged, and `config.Config` stays comparable.
