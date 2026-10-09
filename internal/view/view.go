@@ -120,6 +120,8 @@ type LibraryDot struct {
 
 	Write               bool `json:"write,omitempty"`                 // [capabilities] write (Phase 7)
 	WriteTimeoutSeconds int  `json:"write_timeout_seconds,omitempty"` // shown in the draft confirm
+
+	Origin string `json:"origin,omitempty"` // Phase 9: user, template, import or project
 }
 
 type Invalid struct {
