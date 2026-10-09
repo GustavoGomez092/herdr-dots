@@ -129,6 +129,7 @@ func (e *Engine) pollLoop() {
 // poll detects closed panes and session changes (Herdr has no pane-closed
 // event in its subscription stream) and flushes auto cards whose guard opened.
 func (e *Engine) poll() {
+	e.maybeReloadConfig()
 	for _, a := range e.d.Attachments.List() {
 		p, err := e.d.Herdr.PaneGet(e.ctx, a.PaneID)
 		if herdr.IsNotFound(err) {

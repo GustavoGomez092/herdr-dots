@@ -24,6 +24,7 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 		return nil
 	case ipc.CmdReloadDots:
 		e.ReloadDots()
+		e.ReloadConfig()
 		return nil
 	case ipc.CmdPauseAll:
 		e.TogglePauseAll()

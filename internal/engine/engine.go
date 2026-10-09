@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"herdr-dots/internal/backend"
@@ -24,7 +25,9 @@ type Deps struct {
 	Reader       func(a state.Attachment) transcript.Reader
 	LoadDots     func() ([]dots.Dot, []dots.LoadError)
 	SaveDot      func(d dots.Dot) error
-	Config       config.Config
+	Config       config.Config // initial settings
+	ConfigPath   string        // config.toml, re-read when it changes; "" = never
+	ConfigCheck  time.Duration // how often poll stats ConfigPath; 0 → 3s
 	Queue        *queue.Store
 	Attachments  *state.Attachments
 	Usage        *state.Usage
@@ -64,6 +67,11 @@ type Engine struct {
 
 	dmu sync.Mutex
 	sem chan struct{}
+
+	cfg        atomic.Pointer[config.Config] // current settings; read via e.config()
+	cfgMu      sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked
+	cfgStamp   string
+	cfgChecked time.Time
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
@@ -121,6 +129,12 @@ func New(d Deps) *Engine {
 		paneMu:   map[string]*sync.Mutex{},
 		sem:      make(chan struct{}, max(1, d.Config.MaxParallelRuns)),
 	}
+	if e.d.ConfigCheck <= 0 {
+		e.d.ConfigCheck = 3 * time.Second
+	}
+	cfg := d.Config
+	e.cfg.Store(&cfg)
+	e.cfgStamp = configStamp(d.ConfigPath)
 	e.ReloadDots()
 	return e
 }
@@ -309,7 +323,7 @@ func (e *Engine) watchPane(ctx context.Context, paneID string) {
 				timer.Stop()
 			}
 			if ev.Status == herdr.StatusIdle || ev.Status == herdr.StatusDone {
-				timer = time.AfterFunc(e.d.Config.Debounce(), func() { e.spawn(func() { e.onIdle(paneID) }) })
+				timer = time.AfterFunc(e.config().Debounce(), func() { e.spawn(func() { e.onIdle(paneID) }) })
 			}
 		}
 		if timer != nil {
@@ -404,7 +418,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 			dec := Decide(FilterInput{
 				Dot: d, Att: *da, NewTurns: newTurns, PausedAll: e.pausedAll,
 				DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls,
-				PaneBudget: e.d.Config.SessionBudgetCalls,
+				PaneBudget: e.config().SessionBudgetCalls,
 			})
 			da.LastSeenTurn = len(turns)
 			switch dec.Reason {
@@ -457,7 +471,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		e.runFailed(k, d, turn, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(e.ctx, e.d.Config.RunTimeout())
+	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, backend.Request{
 		DotName: d.Name, Purpose: d.Purpose, Verbosity: d.Context.Verbosity,
@@ -523,7 +537,7 @@ func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o
 	if o.summon || mode == dots.ModeObserve {
 		mode = dots.ModeQueue
 	}
-	if mode == dots.ModeInject && (o.forceQueue || !e.d.Config.InjectEnabled) {
+	if mode == dots.ModeInject && (o.forceQueue || !e.config().InjectEnabled) {
 		mode = dots.ModeQueue
 	}
 	c := queue.Card{Dot: d.Slug, DotName: d.Name, Glyph: d.Glyph, PaneID: paneID, Turn: turn,
@@ -567,7 +581,7 @@ func (e *Engine) feed(paneID, slug string, turn int, outcome, detail string) {
 func (e *Engine) Snapshot() view.Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := view.Snapshot{InjectEnabled: e.d.Config.InjectEnabled, PausedAll: e.pausedAll}
+	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll}
 	slugs := make([]string, 0, len(e.dots))
 	for slug := range e.dots {
 		slugs = append(slugs, slug)
@@ -586,7 +600,7 @@ func (e *Engine) Snapshot() view.Snapshot {
 	seen := map[string]bool{}
 	for _, a := range e.d.Attachments.List() {
 		pv := view.Pane{PaneID: a.PaneID, Agent: a.Agent, Source: a.Source,
-			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.d.Config.SessionBudgetCalls}
+			Calls: e.d.Usage.PaneCalls(a.PaneID), Budget: e.config().SessionBudgetCalls}
 		for _, da := range a.Dots {
 			d, ok := e.dots[da.Slug]
 			if !ok {

@@ -137,6 +137,7 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
 		LoadDots:    func() ([]dots.Dot, []dots.LoadError) { return dots.LoadAll(p.DotsDir()) },
 		SaveDot:     func(d dots.Dot) error { return dots.Save(p.DotsDir(), d, false) },
 		Config:      cfg,
+		ConfigPath:  p.ConfigFile(),
 		Queue:       q,
 		Attachments: atts,
 		Usage:       usage,
@@ -158,7 +159,7 @@ func serveEngine(p paths.Paths) error {
 
 	cfg, err := config.Load(p.ConfigFile())
 	if err != nil {
-		logger.Printf("config: %v (using defaults)", err)
+		logger.Printf("config: %v (using defaults with inject disabled)", err)
 	}
 	hc, err := herdr.NewFromEnv()
 	if err != nil {

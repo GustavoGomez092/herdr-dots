@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/herdr/herdrtest"
+	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
@@ -114,6 +116,12 @@ func dot(name string, mode dots.Mode) dots.Dot {
 
 func newRig(t *testing.T, ds ...dots.Dot) *rig {
 	t.Helper()
+	return newRigWith(t, nil, ds...)
+}
+
+// newRigWith lets a test adjust the engine's Deps before it starts.
+func newRigWith(t *testing.T, opt func(*Deps), ds ...dots.Dot) *rig {
+	t.Helper()
 	srv := herdrtest.New(t)
 	srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusIdle, Cwd: "/repo",
 		AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}})
@@ -125,7 +133,7 @@ func newRig(t *testing.T, ds ...dots.Dot) *rig {
 	r := &rig{srv: srv, be: &fakeBackend{}, readers: map[string]*fakeReader{"s1": {}}, q: q, atts: atts, usage: usage}
 	cfg := config.Default()
 	cfg.TurnDebounceMs = 0
-	r.e = New(Deps{
+	deps := Deps{
 		Herdr:   &herdr.SocketClient{Path: srv.Path, PluginID: "herdr-dots"},
 		Backend: func(string) (backend.Backend, error) { return r.be, nil },
 		Reader: func(a state.Attachment) transcript.Reader {
@@ -144,7 +152,11 @@ func newRig(t *testing.T, ds ...dots.Dot) *rig {
 		Usage:        usage,
 		Feed:         feed,
 		PollInterval: 20 * time.Millisecond,
-	})
+	}
+	if opt != nil {
+		opt(&deps)
+	}
+	r.e = New(deps)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(r.e.Wait) // runs after cancel: no engine goroutine may outlive the test's temp dir
 	t.Cleanup(cancel)
@@ -608,6 +620,66 @@ func TestDismissAndEditWaitForInFlightDelivery(t *testing.T) {
 				t.Fatalf("edit after delivery: %+v", c)
 			}
 		}
+	}
+}
+
+// configRig watches a config.toml in a temp dir; check sets ConfigCheck.
+func configRig(t *testing.T, check time.Duration, ds ...dots.Dot) (*rig, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	r := newRigWith(t, func(d *Deps) { d.ConfigPath, d.ConfigCheck = path, check }, ds...)
+	return r, path
+}
+
+func writeConfig(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("turn_debounce_ms = 0\n"+body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The inject kill switch applies at runtime, within the config check interval.
+func TestInjectKillSwitchAppliesAtRuntime(t *testing.T) {
+	r, path := configRig(t, 10*time.Millisecond, dot("Security", dots.ModeInject))
+	r.attach(t, "security")
+	if !r.e.Snapshot().InjectEnabled {
+		t.Fatal("inject starts enabled")
+	}
+	writeConfig(t, path, "inject_enabled = false\n")
+	eventually(t, "config reloaded", func() bool { return !r.e.Snapshot().InjectEnabled })
+	r.be.set(critical)
+	r.turnEnds(t, transcript.Turn{User: "add login"})
+	eventually(t, "a card", func() bool { return len(r.q.Pending(pane)) == 1 })
+	if c := r.q.Pending(pane)[0]; c.Mode != "queue" || c.Status != queue.StatusPending {
+		t.Fatalf("with inject disabled the card must be queued, got %+v", c)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(r.srv.Calls("agent.prompt")) != 0 {
+		t.Fatal("nothing may be typed into the agent")
+	}
+}
+
+func TestReloadDotsAlsoReloadsConfig(t *testing.T) {
+	r, path := configRig(t, time.Hour, dot("Security", dots.ModeInject)) // no mtime checks
+	writeConfig(t, path, "inject_enabled = false\n")
+	if err := r.e.Handle(context.Background(), ipc.CmdReloadDots, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r.e.Snapshot().InjectEnabled {
+		t.Fatal("reload_dots must re-read config.toml")
+	}
+}
+
+// A malformed config keeps the last good settings but forces inject off.
+func TestMalformedConfigKeepsLastGoodButDisablesInject(t *testing.T) {
+	r, path := configRig(t, 10*time.Millisecond, dot("Security", dots.ModeInject))
+	r.attach(t, "security")
+	writeConfig(t, path, "session_budget_calls = 7\n")
+	eventually(t, "good config applied", func() bool { p, _ := r.e.Snapshot().Pane(pane); return p.Budget == 7 })
+	writeConfig(t, path, "session_budget_calls = 9\ninject_enabled = = true\n")
+	eventually(t, "inject forced off", func() bool { return !r.e.Snapshot().InjectEnabled })
+	if p, _ := r.e.Snapshot().Pane(pane); p.Budget != 7 {
+		t.Fatalf("last good settings must stay, budget %d", p.Budget)
 	}
 }
 
