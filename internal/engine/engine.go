@@ -197,12 +197,16 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	pl := e.paneLock(paneID)
 	pl.Lock()
 	defer pl.Unlock()
+	// The Upsert base comes from the live pane with no dots, never from the
+	// stored attachment: a Detach of the last dot during the read below deletes
+	// the attachment, and a base copied from it would bring that dot back.
+	base := state.Attachment{PaneID: paneID, Agent: p.Agent, Cwd: p.WorkDir()}
+	if p.AgentSession != nil {
+		base.SessionKind, base.SessionValue = p.AgentSession.Kind, p.AgentSession.Value
+	}
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
-		att = state.Attachment{PaneID: paneID, Agent: p.Agent, Cwd: p.WorkDir()}
-		if p.AgentSession != nil {
-			att.SessionKind, att.SessionValue = p.AgentSession.Kind, p.AgentSession.Value
-		}
+		att = base
 	}
 	r := e.reader(att)
 	turns, err := r.Turns(ctx)
@@ -222,7 +226,7 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	}
 	// Update-or-create in one store call: runFailed, cooldown or Detach updates
 	// made while the transcript was read are kept, not overwritten.
-	err = e.d.Attachments.Upsert(att, func(x *state.Attachment) {
+	err = e.d.Attachments.Upsert(base, func(x *state.Attachment) {
 		x.Source = r.Source()
 		for _, da := range add {
 			if x.Find(da.Slug) == nil {
