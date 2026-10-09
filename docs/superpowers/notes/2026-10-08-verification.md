@@ -50,23 +50,25 @@ Response of `plugin.pane.open` (target_pane_id w2:p1, direction right, focus fal
 {"id":"1","result":{"type":"plugin_pane_opened","plugin_pane":{"plugin_id":"dots-probe","entrypoint":"side","pane":{"pane_id":"w2:p2","terminal_id":"term_...","workspace_id":"w2","tab_id":"w2:t1","focused":false,"cwd":"/private/tmp/dots-probe","label":"Probe",...}}}}
 ```
 - New pane id at `result.plugin_pane.pane.pane_id`: yes. Opened to the right of w2:p1, unfocused (focused_pane_id stayed w2:p1).
-- `PROBE_TARGET=w2:p1` present in pane env. Also present: `HERDR_PLUGIN_ID`, `HERDR_PLUGIN_ENTRYPOINT_ID`, `HERDR_SESSION=dots-test`, `HERDR_SOCKET_PATH`, `HERDR_ENV=1`, `HERDR_TAB_ID`, `HERDR_PLUGIN_ROOT`, `HERDR_PLUGIN_STATE_DIR`, `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_CONTEXT_JSON` (workspace_id, workspace_cwd, tab_id, focused_pane_id, ...). No `HERDR_PANE_ID` shown in the first 12 lines read; not checked further.
+- `PROBE_TARGET=w2:p1` present in pane env. Also present: `HERDR_PLUGIN_ID`, `HERDR_PLUGIN_ENTRYPOINT_ID`, `HERDR_SESSION=dots-test`, `HERDR_SOCKET_PATH`, `HERDR_ENV=1`, `HERDR_TAB_ID`, `HERDR_PLUGIN_ROOT`, `HERDR_PLUGIN_STATE_DIR`, `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_CONTEXT_JSON` (workspace_id, workspace_cwd, tab_id, focused_pane_id, ...). `HERDR_PANE_ID` was not observed in the probe pane's env; not needed: the plan passes the target pane via the `plugin.pane.open` env (`PROBE_TARGET` confirmed).
 - cwd defaults to plugin root, not the target pane's cwd (pass `cwd` if needed).
 - Default split ratio: **0.5** (divider; 47/47 columns of a 94-column area).
 - **Resize direction differs from the brief.** `pane.resize {"pane_id":"w2:p2","direction":"left","amount":0.15}` moved the divider LEFT, making the new right pane WIDER (ratio 0.5 -> 0.35, pane widths 33/61). `direction":"right"` moves the divider right and NARROWS the new right pane (sequence: left 0.15 -> ratio 0.35; right 0.15 -> 0.50; right 0.15 -> 0.65 with widths 61/33). `amount` is a ratio delta. Response includes the full layout (`splits[].ratio`, `panes[].rect`).
 - `plugin.pane.close {"pane_id":"w2:p2"}` -> `{"type":"plugin_pane_closed","pane_id":"w2:p2"}`; pane gone from `pane list`. `plugin unlink` ok.
 - `plugin link` warns if manifest lacks `platforms`.
-Assumption holds: **yes for open/env/close; NO for resize direction as written** - to narrow a right-hand split pane use `direction:"right"` (the divider moves toward the direction).
+Assumption holds: **yes** for open, env and close. Resize direction is inverted relative to the brief (`right` narrows a right-hand split).
+Plan impact: none, because v1 never resizes. A future width fix must use `direction:"right"` to narrow a right-hand split.
 
 ## V7 - dot CLI runs don't touch Herdr state
 Ran the stripped-env `claude -p ... --no-session-persistence ...` inside a split shell pane (w2:p3) that had 7 `HERDR_*` vars. Result: `{"type":"result","is_error":false,"result":"...","total_cost_usd":0.0008}` (haiku-5-5; model replied conversationally, not with the requested JSON - prompt design must be firmer).
 - No new file in `~/.claude/projects/-private-tmp-dots-test-repo/` (session persistence off works).
 - Main pane w2:p1 stayed `done`, no events for it.
-- BUT `agent list` showed a new entry `("w2:p3","claude","unknown")` while the dot ran: herdr detects `claude` as the foreground process of the pane it runs in (by process, even with HERDR_PANE_ID/SOCKET stripped). It had no agent_session, status `unknown`, and vanished when the process exited. It does not affect other panes. Consequence: a dot run from a visible plugin pane's shell appears as a transient claude agent in that pane; run it from a non-pane daemon/process or accept the transient entry.
-Assumption holds: **partially** - main pane and transcripts untouched; a transient `claude` agent entry appears for the pane hosting the process.
+- BUT `agent list` showed a new entry `("w2:p3","claude","unknown")` while the dot ran: herdr detects `claude` as the foreground process of the pane it runs in (by process; the dot command ran with `HERDR_PANE_ID`, `HERDR_SOCKET_PATH` and `HERDR_ENV` unset via `env -u`, so detection did not depend on them). It had no agent_session, status `unknown`, and vanished when the process exited. It does not affect other panes. Consequence: a dot run from a visible plugin pane's shell appears as a transient claude agent in that pane; run it from a non-pane daemon/process or accept the transient entry.
+Assumption holds: **yes** for the main pane and transcripts. A transient agent entry appears for the pane hosting a dot run.
+Plan impact: the controller ruled no code change, because the engine runs setsid-detached outside any pane; this is re-checked in the Task 22 E2E.
 
 ## V8 - key bindings
-`grep -n 'prefix+d\|prefix+a\|prefix+shift+s' ~/.config/herdr/config.toml` matches only line 13 `key = "prefix+down"` (the herdr-plus plugin binding; a prefix-substring false positive). Exact-match `grep -E '"prefix\+(d|a|shift\+s)"'` on config.toml and on `herdr --default-config`: no matches. Defaults mention `prefix+s` (settings) and `prefix+shift+d` (close_workspace) as built-ins, which the plan avoids. User has `prefix+down` bound to herdr-plus.
+`grep -n 'prefix+d\|prefix+a\|prefix+shift+s' ~/.config/herdr/config.toml` matches only line 13 `key = "prefix+down"` (an existing user plugin binding; a prefix-substring false positive). Exact-match `grep -E '"prefix\+(d|a|shift\+s)"'` on config.toml and on `herdr --default-config`: no matches. Defaults mention `prefix+s` (settings) and `prefix+shift+d` (close_workspace) as built-ins, which the plan avoids. The user has `prefix+down` bound by an existing user plugin binding.
 Assumption holds: **yes**.
 
 ## V9 - sidebar metadata
@@ -83,3 +85,12 @@ Note: the redacted fixture leaves `thinking.signature` blobs (harmless).
 
 ## Cleanup
 `herdr --session dots-test server stop` run; status "not running". User's real session untouched (no `~/.config/herdr/herdr.sock` exists; config.toml only read).
+
+## Plan corrections and controller rulings
+- Post-turn status is `done`, not `idle`. Use `agent prompt --wait` without `--until idle`, or `--until done`. The v1 engine and delivery already accept idle or done.
+- Resize direction: `direction:"right"` narrows a right-hand split; `"left"` widens it. v1 never resizes.
+- V7 ruling: no code change; the engine runs setsid-detached outside any pane, so the transient agent entry should not occur. Re-checked in the Task 22 E2E.
+- CleanEnv also drops `CLAUDE_CODE_CHILD_SESSION`.
+- The first `agent start` in a new directory stops at the Claude folder-trust prompt (`agent_not_ready`).
+- Status events also fire on metadata-only changes (same status, extra `display_agent`); harmless.
+- V2 evidence is thin (2 turns). Re-check the debounce during Task 22.
