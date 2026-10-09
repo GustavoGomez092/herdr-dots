@@ -1,14 +1,31 @@
 package state
 
-import "sync"
+import (
+	"math"
+	"sync"
+)
 
 type Counter struct {
 	Calls        int `json:"calls"`
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+
+	// Phase 4. Old usage.json files load with zeros.
+	CacheReadTokens  int     `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int     `json:"cache_write_tokens,omitempty"`
+	CostUSD          float64 `json:"cost_usd,omitempty"`     // known costs only
+	UnknownCostCalls int     `json:"unknown_cost,omitempty"` // runs whose cost is unknown
 }
 
-// Usage counts backend calls per main pane and dot. Budgets are per pane.
+// Delta is one run's usage. CostUSD counts only when CostKnown.
+type Delta struct {
+	Calls, In, Out, CacheRead, CacheWrite int
+	CostUSD                               float64
+	CostKnown                             bool
+}
+
+// Usage counts backend calls, tokens and dollars per main pane and dot.
+// Budgets are per pane.
 type Usage struct {
 	path string
 	mu   sync.Mutex
@@ -26,7 +43,15 @@ func OpenUsage(path string) (*Usage, error) {
 	return u, nil
 }
 
+// Record is v1's call counter: Add with one call and no cost.
 func (u *Usage) Record(paneID, slug string, in, out int) error {
+	return u.Add(paneID, slug, Delta{Calls: 1, In: in, Out: out})
+}
+
+// Add records one run. A cost that is unknown, negative, NaN or infinite is
+// never added (it counts as an unknown-cost call), so dollar totals stay
+// finite and dollar budgets ignore it.
+func (u *Usage) Add(paneID, slug string, d Delta) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.data[paneID] == nil {
@@ -37,10 +62,48 @@ func (u *Usage) Record(paneID, slug string, in, out int) error {
 		c = &Counter{}
 		u.data[paneID][slug] = c
 	}
-	c.Calls++
-	c.InputTokens += in
-	c.OutputTokens += out
+	c.Calls += d.Calls
+	c.InputTokens += d.In
+	c.OutputTokens += d.Out
+	c.CacheReadTokens += d.CacheRead
+	c.CacheWriteTokens += d.CacheWrite
+	if d.CostKnown && d.CostUSD >= 0 && !math.IsNaN(d.CostUSD) && !math.IsInf(d.CostUSD, 0) {
+		c.CostUSD += d.CostUSD
+	} else if d.Calls > 0 {
+		c.UnknownCostCalls += d.Calls
+	}
 	return writeJSON(u.path, u.data)
+}
+
+// Cost is one dot's known spend on a pane, in USD.
+func (u *Usage) Cost(paneID, slug string) float64 {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if c := u.data[paneID][slug]; c != nil {
+		return c.CostUSD
+	}
+	return 0
+}
+
+// CostKnown is false once any of the dot's runs on the pane had no price.
+func (u *Usage) CostKnown(paneID, slug string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if c := u.data[paneID][slug]; c != nil {
+		return c.UnknownCostCalls == 0
+	}
+	return true
+}
+
+// PaneCost is the pane's known spend across dots, in USD.
+func (u *Usage) PaneCost(paneID string) float64 {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	t := 0.0
+	for _, c := range u.data[paneID] {
+		t += c.CostUSD
+	}
+	return t
 }
 
 func (u *Usage) Calls(paneID, slug string) int {
