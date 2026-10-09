@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -39,10 +37,8 @@ func (f *fakeHandler) Watch() (<-chan view.Snapshot, func()) {
 
 func serve(t *testing.T) (*fakeHandler, Client) {
 	t.Helper()
-	dir, _ := os.MkdirTemp("", "ipc")
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	path := filepath.Join(dir, "d.sock")
-	ln, err := net.Listen("unix", path)
+	path := testEndpoint(t)
+	ln, err := Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +106,30 @@ func TestCallFailsFastWithoutServer(t *testing.T) {
 	c := Client{Path: filepath.Join(t.TempDir(), "none.sock")}
 	if err := c.Call(context.Background(), CmdPing, nil); err == nil {
 		t.Fatal("want dial error")
+	}
+}
+
+// Review Focus: two Herdr sessions of one user run two engines on two
+// endpoints; a client of one never reaches the other.
+func TestTwoEndpointsNeverCrossTalk(t *testing.T) {
+	ha, ca := serve(t)
+	hb, cb := serve(t)
+	if ca.Path == cb.Path {
+		t.Fatal("test endpoints must differ")
+	}
+	ctx := context.Background()
+	if err := ca.Call(ctx, CmdPauseAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := cb.Call(ctx, CmdReloadDots, nil); err != nil {
+		t.Fatal(err)
+	}
+	ha.mu.Lock()
+	hb.mu.Lock()
+	defer ha.mu.Unlock()
+	defer hb.mu.Unlock()
+	if len(ha.got) != 1 || ha.got[0] != CmdPauseAll || len(hb.got) != 1 || hb.got[0] != CmdReloadDots {
+		t.Fatalf("engine A got %v, engine B got %v", ha.got, hb.got)
 	}
 }
 

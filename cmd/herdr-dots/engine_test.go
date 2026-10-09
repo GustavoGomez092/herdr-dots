@@ -43,9 +43,10 @@ func TestBuildEngineLoadsDotsFromConfigDir(t *testing.T) {
 	}
 }
 
-func TestWaitForSocketTimesOut(t *testing.T) {
+func TestWaitForEndpointTimesOut(t *testing.T) {
 	start := time.Now()
-	err := waitForSocket(filepath.Join(t.TempDir(), "none.sock"), 200*time.Millisecond)
+	p := paths.New(filepath.Join(t.TempDir(), "c"), filepath.Join(t.TempDir(), "s"), filepath.Join(t.TempDir(), "none.sock"))
+	err := waitForEndpoint(p.EngineEndpoint(), 200*time.Millisecond)
 	if err == nil || time.Since(start) > 2*time.Second {
 		t.Fatalf("err=%v after %v", err, time.Since(start))
 	}

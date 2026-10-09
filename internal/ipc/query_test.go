@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,17 +37,12 @@ func (q *queryHandler) Query(ctx context.Context, cmd string, args json.RawMessa
 	return q.query(ctx, cmd, args)
 }
 
-// serveHandler serves h on a short socket path (macOS caps unix socket paths
-// at 104 bytes, and t.TempDir() is long there).
+// serveHandler serves h on a fresh test endpoint (testEndpoint: a short unix
+// socket path, or a named pipe on Windows).
 func serveHandler(t *testing.T, h Handler) Client {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "ipcq")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	path := filepath.Join(dir, "q.sock")
-	ln, err := net.Listen("unix", path)
+	path := testEndpoint(t)
+	ln, err := Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,13 +73,8 @@ func TestServeWaitsForRunningQueriesOnShutdown(t *testing.T) {
 		finished.Store(true)
 		return nil, ctx.Err()
 	})
-	dir, err := os.MkdirTemp("", "ipcq")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "q.sock")
-	ln, err := net.Listen("unix", path)
+	path := testEndpoint(t)
+	ln, err := Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +84,7 @@ func TestServeWaitsForRunningQueriesOnShutdown(t *testing.T) {
 	go func() { Serve(ctx, ln, h); close(served) }()
 	go Client{Path: path}.Query(context.Background(), CmdAsk, AskArgs{PaneID: "w1:p1"}, nil)
 	// An idle connection must not keep Serve from returning either.
-	idle, err := net.Dial("unix", path)
+	idle, err := Dial(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +103,7 @@ func TestServeWaitsForRunningQueriesOnShutdown(t *testing.T) {
 
 func TestOversizedRequestIsRefused(t *testing.T) {
 	_, c := serve(t)
-	conn, err := net.Dial("unix", c.Path)
+	conn, err := Dial(context.Background(), c.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,13 +117,8 @@ func TestOversizedRequestIsRefused(t *testing.T) {
 }
 
 func TestFailureWithoutTextStillReportsAnError(t *testing.T) {
-	dir, err := os.MkdirTemp("", "ipcq")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "q.sock")
-	ln, err := net.Listen("unix", path)
+	path := testEndpoint(t)
+	ln, err := Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +189,7 @@ func TestQueryWithoutQuerierIsRefused(t *testing.T) {
 
 func TestV1ResponsesCarryNoData(t *testing.T) {
 	_, c := serve(t)
-	conn, err := net.Dial("unix", c.Path)
+	conn, err := Dial(context.Background(), c.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +323,7 @@ func TestQueryToleratesUnknownFields(t *testing.T) {
 		}
 		return map[string]any{"project_id": a.PaneID, "dots": []any{}, "future_field": 1}, nil
 	}))
-	conn, err := net.Dial("unix", c.Path)
+	conn, err := Dial(context.Background(), c.Path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -139,7 +138,7 @@ func TestServeMCPNeedsAbsoluteDirs(t *testing.T) {
 	}
 }
 
-// mcpFakeEngine answers queries for one pane on the engine socket.
+// mcpFakeEngine answers queries for one pane on the engine endpoint.
 type mcpFakeEngine struct{ asked chan ipc.AskArgs }
 
 func (f mcpFakeEngine) Handle(context.Context, string, json.RawMessage) error { return nil }
@@ -165,13 +164,14 @@ func TestServeMCPAsksThePanesEngine(t *testing.T) {
 	ensured := 0
 	ensure := func(got paths.Paths) error {
 		ensured++
-		if got.EngineSock() != p.EngineSock() {
-			t.Errorf("engine socket %s, want %s", got.EngineSock(), p.EngineSock())
+		if got.EngineEndpoint() != p.EngineEndpoint() {
+			t.Errorf("engine endpoint %s, want %s", got.EngineEndpoint(), p.EngineEndpoint())
 		}
-		ln, err := net.Listen("unix", got.EngineSock())
+		ln, err := ipc.Listen(got.EngineEndpoint())
 		if err != nil {
 			return err
 		}
+		t.Cleanup(func() { ln.Close() }) // also removes the unix socket file
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		go ipc.Serve(ctx, ln, fe)
@@ -188,7 +188,6 @@ func TestServeMCPAsksThePanesEngine(t *testing.T) {
 	if ensured != 1 {
 		t.Fatalf("ensure ran %d times", ensured)
 	}
-	t.Cleanup(func() { os.Remove(p.EngineSock()) })
 }
 
 func TestEngineEnvSetsThePluginDirs(t *testing.T) {

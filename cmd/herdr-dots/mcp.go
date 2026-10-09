@@ -74,14 +74,14 @@ func serveMCP(ctx context.Context, args []string, getenv func(string) string, t 
 		logger.Printf("started outside a Herdr pane (HERDR_PANE_ID %q, HERDR_SOCKET_PATH set: %v): every tool refuses", pane, sock != "")
 	} else {
 		deps.PaneID = pane
-		deps.Engine = mcpserver.NewIPCEngine(ipc.Client{Path: p.EngineSock()}, pane, func() error {
+		deps.Engine = mcpserver.NewIPCEngine(ipc.Client{Path: p.EngineEndpoint()}, pane, func() error {
 			if err := p.Ensure(); err != nil {
 				return err
 			}
 			return ensure(p)
 		})
 		deps.Memory = memoryStoreFor(p, cfg, logger.Printf)
-		logger.Printf("serving pane %s through %s", pane, p.EngineSock())
+		logger.Printf("serving pane %s through %s", pane, p.EngineEndpoint())
 	}
 	err = mcpserver.New(deps).Run(ctx, t)
 	logger.Printf("stopped: %v", err)
