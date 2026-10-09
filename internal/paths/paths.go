@@ -75,13 +75,16 @@ func (p Paths) EngineSock() string {
 }
 
 func (p Paths) Ensure() error {
-	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir} {
+	for _, d := range []string{p.ConfigDir, p.DotsDir(), p.SessionDir, p.MemoryDir()} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
 		if err := os.Chmod(d, 0o700); err != nil {
 			return err
 		}
+	}
+	if err := p.writeStatePointer(); err != nil {
+		return err
 	}
 	// If the primary socket path is too long, create the fallback directory
 	primarySock := filepath.Join(p.SessionDir, "dots.sock")
