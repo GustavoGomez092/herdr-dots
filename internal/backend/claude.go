@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"unicode/utf8"
 
+	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/platform"
 )
@@ -60,6 +62,41 @@ func (c ClaudeCLI) Check(context.Context) error {
 // hooklessSettings disables every hook for a dot run.
 const hooklessSettings = `{"disableAllHooks":true}`
 
+// researchSettings is a research pass's --settings: hooks off, and Read
+// denied for every secret file the API tools deny (toolloop.DefaultDeny),
+// the agent configuration drafts may not touch (toolloop.DraftDeny), and
+// credential files under any name. Each glob is denied at the root and at
+// any depth, like toolloop.Denied.
+var researchSettings = func() string {
+	globs := append(append([]string(nil), toolloop.DefaultDeny...), toolloop.DraftDeny...)
+	globs = append(globs, "credentials*")
+	var deny []string
+	seen := map[string]bool{}
+	add := func(g string) {
+		if r := "Read(" + g + ")"; !seen[r] {
+			seen[r] = true
+			deny = append(deny, r)
+		}
+	}
+	for _, g := range globs {
+		add(g)
+		if !strings.HasPrefix(g, "**/") {
+			add("**/" + g)
+		}
+	}
+	type perms struct {
+		Deny []string `json:"deny"`
+	}
+	b, err := json.Marshal(struct {
+		DisableAllHooks bool  `json:"disableAllHooks"`
+		Permissions     perms `json:"permissions"`
+	}{true, perms{deny}})
+	if err != nil {
+		panic(err) // static data: never fails
+	}
+	return string(b)
+}()
+
 // BuildCmd: print mode, JSON output, no saved session, no MCP servers, hooks
 // disabled (so Herdr's integration hooks never fire for a dot), read-only tools.
 //
@@ -72,8 +109,12 @@ const hooklessSettings = `{"disableAllHooks":true}`
 func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	sys := SystemPrompt(r)
 	settings := hooklessSettings
-	if WriteMode(r) {
+	research := r.Pass == PassResearch && !WriteMode(r)
+	switch {
+	case WriteMode(r):
 		settings = writeSettings
+	case research:
+		settings = researchSettings
 	}
 	settingsArg, promptFlag, promptArg := settings, "--append-system-prompt", sys
 	shim := false
@@ -115,13 +156,27 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 		args = append(args, "--restricted")
 		args = append(args, "--tools", ClaudeWriteTools, "--allowedTools", ClaudeWriteAllowed,
 			"--permission-mode", "acceptEdits", "--disallowedTools", ClaudeWriteDenied)
-	case r.Web && r.Pass == PassResearch:
-		// Idle research with web tools (Phase 8): still no Bash, Edit or Write.
-		list := "WebSearch,WebFetch"
+	case research:
+		// Idle research (Phase 8): no Bash, Edit or Write, and with the web
+		// only WebSearch, never WebFetch, so an unattended run can't fetch a
+		// URL that carries repository data out (P8-R14). --restricted keeps user/project settings
+		// from adding allow rules or directories (as for drafts) and keeps
+		// researchSettings, whose deny rules keep secret files out of the
+		// read tools.
+		args = append(args, "--restricted")
+		var tools []string
 		if r.RepoRead {
-			list = "Read,Grep,Glob," + list
+			tools = append(tools, "Read", "Grep", "Glob")
 		}
-		args = append(args, "--tools", list, "--allowedTools", list)
+		if r.Web {
+			tools = append(tools, "WebSearch")
+		}
+		list := strings.Join(tools, ",")
+		if list == "" {
+			args = append(args, "--tools", "")
+		} else {
+			args = append(args, "--tools", list, "--allowedTools", list)
+		}
 	case r.RepoRead:
 		args = append(args, "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob")
 	default:
