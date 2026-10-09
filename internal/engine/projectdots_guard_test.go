@@ -9,6 +9,7 @@ import (
 	"go/types"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -100,6 +101,24 @@ func namedIs(t types.Type, full string) bool {
 	return n.Obj().Pkg().Path()+"."+n.Obj().Name() == full
 }
 
+// displayFields are the only reads allowed off an Item's Dot or Effective:
+// what a library row or a CLI list shows.
+var displayFields = map[string]bool{
+	"Slug": true, "Name": true, "Glyph": true, "Color": true,
+	"Backend.Kind": true, "Backend.Model": true, "Delivery.Mode": true,
+	"Capabilities.Write": true, "Capabilities.WriteTimeoutSeconds": true,
+}
+
+// itemField reports whether e is a projectdots.Item's field among names.
+func itemField(info *types.Info, e ast.Expr, names ...string) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	s := info.Selections[sel]
+	return s != nil && s.Kind() == types.FieldVal && namedIs(s.Recv(), itemType) && slices.Contains(names, sel.Sel.Name)
+}
+
 // runGuardViolations lists the forbidden uses in files, and counts the
 // allowed plain-field reads of an Item's Dot or Effective.
 func runGuardViolations(fset *token.FileSet, files []*ast.File, info *types.Info) (bad []string, reads int) {
@@ -118,10 +137,32 @@ func runGuardViolations(fset *token.FileSet, files []*ast.File, info *types.Info
 			return true
 		})
 		ast.Inspect(f, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
+			switch x := n.(type) {
+			case *ast.CompositeLit:
+				// projectdots.Item{Trusted: ...}: only a scan decides trust.
+				if tv, ok := info.Types[x]; ok && namedIs(tv.Type, itemType) {
+					for _, el := range x.Elts {
+						if kv, ok := el.(*ast.KeyValueExpr); ok {
+							if k, ok := kv.Key.(*ast.Ident); ok && (k.Name == "Trusted" || k.Name == "Granted") {
+								bad = append(bad, fset.Position(x.Pos()).String()+": builds a projectdots.Item with "+k.Name)
+							}
+						}
+					}
+				}
+				return true
+			case *ast.AssignStmt:
+				for _, l := range x.Lhs {
+					if itemField(info, l, "Trusted", "Granted") {
+						bad = append(bad, fset.Position(x.Pos()).String()+": writes a projectdots.Item's trust")
+					}
+				}
+				return true
+			case *ast.SelectorExpr:
+				// checked below
+			default:
 				return true
 			}
+			sel := n.(*ast.SelectorExpr)
 			s := info.Selections[sel]
 			if s == nil || s.Kind() != types.FieldVal {
 				return true
@@ -135,9 +176,11 @@ func runGuardViolations(fset *token.FileSet, files []*ast.File, info *types.Info
 			if (name != "Dot" && name != "Effective") || !namedIs(s.Recv(), itemType) {
 				return true
 			}
-			// Follow the field chain up: it.Effective.Backend.Kind is fine,
-			// it.Effective (or it.Effective.Backend) as a value is not.
+			// Follow the field chain up: only display fields may be read
+			// (it.Effective.Backend.Kind); the dot as a value, or any payload
+			// field (purpose, args, schedule, capabilities.mcp...), may not.
 			var cur ast.Expr = sel
+			var chain []string
 			for {
 				p, ok := parent[cur].(*ast.SelectorExpr)
 				if !ok || p.X != cur {
@@ -147,14 +190,18 @@ func runGuardViolations(fset *token.FileSet, files []*ast.File, info *types.Info
 				if ps == nil || ps.Kind() != types.FieldVal {
 					break
 				}
+				chain = append(chain, p.Sel.Name)
 				cur = p
 			}
-			tv, ok := info.Types[cur]
-			if _, basic := tv.Type.Underlying().(*types.Basic); ok && basic {
+			if displayFields[strings.Join(chain, ".")] {
 				reads++
 				return true
 			}
-			bad = append(bad, pos+": uses a projectdots.Item's ."+name+" as a dot (run project dots only through Item.Runnable)")
+			what := "as a dot"
+			if len(chain) > 0 {
+				what = "for its " + strings.Join(chain, ".") + " (display fields only)"
+			}
+			bad = append(bad, pos+": uses a projectdots.Item's ."+name+" "+what+": run project dots only through Item.Runnable")
 			return true
 		})
 	}
@@ -236,6 +283,14 @@ func f(it projectdots.Item, s projectdots.Scan, d dots.Dot, o other, m map[strin
 		"struct sub-field": `b := it.Effective.Backend; _ = b`,
 		"source path":      `_, _ = os.ReadFile(d.SourcePath)`,
 		"item source path": `_ = it.Dot.SourcePath`,
+		"payload purpose":  `_ = it.Effective.Purpose`,
+		"payload args":     `_ = it.Dot.Backend.Args`,
+		"payload mcp":      `_ = it.Effective.Capabilities.MCP`,
+		"payload cron":     `_ = it.Effective.Schedule.Cron`,
+		"write trusted":    `it.Trusted = true`,
+		"write granted":    `it.Granted = append(it.Granted, "inject")`,
+		"literal trusted":  `_ = projectdots.Item{Trusted: true}`,
+		"ptr literal":      `_ = &projectdots.Item{Rel: "x", Trusted: false}`,
 	} {
 		if len(check(body)) == 0 {
 			t.Errorf("%s: not caught: %s", name, body)

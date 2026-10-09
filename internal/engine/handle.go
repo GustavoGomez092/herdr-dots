@@ -41,13 +41,13 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 		if err := decode(raw, &a); err != nil {
 			return err
 		}
-		return e.Trust(ctx, a.PaneID, a.Slug, a.SHA256, a.Capabilities)
+		return e.trustAt(ctx, a.PaneID, a.Root, a.Slug, a.SHA256, a.Capabilities)
 	case ipc.CmdUntrust:
-		var a ipc.DotArgs
+		var a ipc.TrustArgs // a DotArgs decodes too
 		if err := decode(raw, &a); err != nil {
 			return err
 		}
-		return e.Untrust(ctx, a.PaneID, a.Slug)
+		return e.untrustAt(ctx, a.PaneID, a.Root, a.Slug)
 	case ipc.CmdPauseAll:
 		e.TogglePauseAll()
 		return nil

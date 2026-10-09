@@ -84,7 +84,7 @@ func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardI
 		return "", fmt.Errorf("dot %q is not attached to %s", slug, paneID)
 	}
 	e.mu.Lock()
-	d, ok := e.dots[slug]
+	d, ok := e.paneDotLocked(paneID, slug)
 	var berr error
 	if ok {
 		berr = e.draftBudgetLocked(paneID, d)

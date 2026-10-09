@@ -142,7 +142,9 @@ type Engine struct {
 	userDots  map[string]dots.Dot      // CONFIG_DIR/dots
 	userBad   []dots.LoadError         // invalid user dot files
 	projects  map[string]*projectState // by repository root
-	paneRoots map[string]string        // pane id → repository root
+	paneRoots map[string]string        // pane id → the checkout it is in (a project dot is checkout + slug)
+	paneSeen  map[string]time.Time     // pane id → when knowPane last saw it (unattached panes are pruned after lookWindow)
+	scanSeq   map[string]uint64        // checkout root → the last scan started (an older scan never installs over a newer one)
 	projOn    bool                     // project dots were on at the last rebuild
 
 	// Drafts (draft.go), guarded by mu. Git and patch I/O never happen under mu.
@@ -257,6 +259,8 @@ func New(d Deps) *Engine {
 		gens:      map[string]uint64{},
 		projects:  map[string]*projectState{},
 		paneRoots: map[string]string{},
+		paneSeen:  map[string]time.Time{},
+		scanSeq:   map[string]uint64{},
 	}
 	if e.d.ConfigCheck <= 0 {
 		e.d.ConfigCheck = 3 * time.Second
@@ -327,14 +331,8 @@ func (e *Engine) Start(ctx context.Context) {
 		e.spawn(e.draftLoop)
 	}
 	if e.projectDotsOn() {
-		// Restored attachments' repositories (git runs here, off every lock).
-		atts := e.d.Attachments.List()
-		e.spawn(func() {
-			for _, a := range atts {
-				e.knowPane(a.PaneID, a.Cwd)
-			}
-			e.broadcast()
-		})
+		// Restored attachments' checkouts (git runs there, off every lock).
+		e.spawn(e.knowAttachedPanes)
 	}
 }
 
@@ -381,20 +379,29 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	e.mu.Lock()
 	add := make([]state.DotAttachment, 0, len(slugs))
 	for _, slug := range slugs {
-		d, ok := e.dots[slug]
-		if !ok {
-			err := fmt.Errorf("unknown dot %q", slug)
-			if e.untrustedLocked(slug) {
-				err = fmt.Errorf("%w: %s (review it in the library with T, or run herdr-dots dots trust)", ErrUntrusted, dots.DisplaySlug(slug))
+		var d dots.Dot
+		var ok bool
+		if dots.IsProjectSlug(slug) {
+			// A project dot is the copy of the checkout the pane is in.
+			if !e.projOn {
+				e.mu.Unlock()
+				return fmt.Errorf("%s: project dots are turned off (project_dots_enabled = false)", dots.DisplaySlug(slug))
 			}
-			e.mu.Unlock()
-			return err
-		}
-		if d.Origin == dots.OriginProject {
 			if _, tag, _ := dots.SplitProjectSlug(slug); tag != dots.ProjectTag(repo.ID) {
 				e.mu.Unlock()
 				return fmt.Errorf("%s belongs to another repository", dots.DisplaySlug(slug))
 			}
+			d, ok = e.rootDotLocked(repo.Root, slug)
+		} else {
+			d, ok = e.dots[slug]
+		}
+		if !ok {
+			err := fmt.Errorf("unknown dot %q", dots.DisplaySlug(slug))
+			if e.untrustedAtLocked(repo.Root, slug) {
+				err = fmt.Errorf("%w: %s (review it in the library with T, or run herdr-dots dots trust)", ErrUntrusted, dots.DisplaySlug(slug))
+			}
+			e.mu.Unlock()
+			return err
 		}
 		// Catch-up: the newest Context.Turns turns count as "new" for this dot
 		// (memory passes start counting from the same place).
@@ -670,7 +677,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 		}
 		for i := range a.Dots {
 			da := &a.Dots[i]
-			d, ok := e.dots[da.Slug]
+			d, ok := e.paneDotLocked(paneID, da.Slug)
 			if !ok {
 				continue
 			}
@@ -1027,6 +1034,9 @@ func (e *Engine) routeCard(paneID string, d dots.Dot, turn int, v backend.Verdic
 	if o.summon || mode == dots.ModeObserve {
 		mode = dots.ModeQueue
 	}
+	if mode == dots.ModeInject && e.projectDotGone(d) {
+		mode = dots.ModeQueue // untrusted or changed since the run started: the developer decides
+	}
 	if mode == dots.ModeInject && (o.forceQueue || !e.config().InjectEnabled) {
 		mode = dots.ModeQueue
 	}
@@ -1150,7 +1160,7 @@ func (e *Engine) Snapshot() view.Snapshot {
 			Origin: d.Origin})
 	}
 	s.Library = append(s.Library, e.projectLibraryLocked()...)
-	s.PaneProjects = e.paneProjectsLocked()
+	s.PaneProjects, s.PaneRoots = e.paneProjectsLocked()
 	for _, le := range e.invalid {
 		s.Invalid = append(s.Invalid, view.Invalid{File: le.File, Line: le.Line, Error: le.Err.Error()})
 	}
@@ -1163,9 +1173,9 @@ func (e *Engine) Snapshot() view.Snapshot {
 			BudgetUSD: e.config().SessionBudgetUSD,
 			ProjectID: a.ProjectID, ProjectName: a.ProjectName, MemoryEntries: ms.Total(), MemoryProposals: ms.Proposals}
 		for _, da := range a.Dots {
-			d, ok := e.dots[da.Slug]
+			d, ok := e.paneDotLocked(a.PaneID, da.Slug)
 			if !ok {
-				d = dots.Dot{Slug: da.Slug, Name: da.Slug, Glyph: "?"}
+				d = dots.Dot{Slug: da.Slug, Name: dots.DisplaySlug(da.Slug), Glyph: "?"}
 			}
 			st := e.status[key{a.PaneID, da.Slug}]
 			if st == "" {
@@ -1182,7 +1192,7 @@ func (e *Engine) Snapshot() view.Snapshot {
 				BudgetUSD: d.Budget.MaxUSDPerSession})
 		}
 		for i := range pv.Dots { // Phase 8: proactive hint and background run per dot
-			if d, ok := e.dots[pv.Dots[i].Slug]; ok {
+			if d, ok := e.paneDotLocked(a.PaneID, pv.Dots[i].Slug); ok {
 				pv.Dots[i].Next = e.nextLocked(d, a.PaneID, now)
 			}
 			pv.Dots[i].Background = e.bgBusy[key{a.PaneID, pv.Dots[i].Slug}]

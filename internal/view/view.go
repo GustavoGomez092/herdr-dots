@@ -131,6 +131,7 @@ type LibraryDot struct {
 	SHA256      string   `json:"sha256,omitempty"`       // project dots: hex hash of the file as scanned
 	Rel         string   `json:"rel,omitempty"`          // project dots: the file from the repository root (for display)
 	TrustedAt   string   `json:"trusted_at,omitempty"`   // project dots: where trust was given when it was another checkout ("~"-abbreviated); "" = here
+	Root        string   `json:"root,omitempty"`         // project dots: the checkout this entry is from; a project dot is (Root, Slug) (ruling P9-R13)
 }
 
 type Invalid struct {
@@ -154,6 +155,7 @@ type Snapshot struct {
 	DailyBudgetUSD float64 `json:"daily_budget_usd"`
 
 	PaneProjects map[string]string `json:"pane_projects,omitempty"` // Phase 9: pane id → project id of its scanned repository
+	PaneRoots    map[string]string `json:"pane_roots,omitempty"`    // Phase 9: pane id → its checkout's root (match LibraryDot.Root)
 }
 
 func (s Snapshot) Pane(id string) (Pane, bool) {

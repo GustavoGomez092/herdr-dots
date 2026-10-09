@@ -20,10 +20,10 @@ func (e *Engine) Summon(ctx context.Context, paneID, slug, question string) erro
 		return fmt.Errorf("dot %q is not attached to %s", slug, paneID)
 	}
 	e.mu.Lock()
-	d, ok := e.dots[slug]
+	d, ok := e.paneDotLocked(paneID, slug)
 	e.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("unknown dot %q", slug)
+		return fmt.Errorf("unknown dot %q", dots.DisplaySlug(slug))
 	}
 	turns, err := e.reader(att).Turns(ctx)
 	if err != nil {

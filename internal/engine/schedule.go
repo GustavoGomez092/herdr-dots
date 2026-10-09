@@ -265,6 +265,12 @@ const maxScheduleTargets = 10
 // first, then "attached" projects, the most recently attached first. The rest
 // are logged once a day. Missing roots are skipped with a daily toast.
 func (e *Engine) scheduleTargets(d dots.Dot) []schedTarget {
+	if d.Origin == dots.OriginProject {
+		// A project dot runs on its own checkout only (ruling P9-R13).
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.projectTargetLocked(d)
+	}
 	var out []schedTarget
 	var dropped []string
 	seen := map[string]bool{}

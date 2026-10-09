@@ -104,7 +104,7 @@ func (e *Engine) councilPlan(att state.Attachment, slugs []string) (council.Pref
 	// already made (the shared inFlightLocked).
 	inFlight := e.inFlightLocked(att.PaneID, key{})
 	for _, da := range att.Dots {
-		if d, ok := e.dots[da.Slug]; ok {
+		if d, ok := e.paneDotLocked(att.PaneID, da.Slug); ok {
 			known[da.Slug] = d
 		}
 		asked[da.Slug] = e.asking[key{att.PaneID, da.Slug}]

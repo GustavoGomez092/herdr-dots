@@ -196,10 +196,17 @@ func (t *TrustStore) mutate(fn func(*trustDoc)) error {
 	return nil
 }
 
+// MaxTrustPerFile caps the entries one file (project and rel) keeps: one per
+// checkout that trusted it, the newest kept.
+const MaxTrustPerFile = 16
+
 // Trust records this content of project/rel as trusted with caps (which must
-// be known capabilities), replacing any earlier entry for the same file.
-// project must be a memory project id (ruling 11), so trust given in one
-// repository never applies to another.
+// be known capabilities). It replaces the entry for the same bytes and the
+// earlier entry given at the same path (this checkout's older content); other
+// checkouts' entries for other content stay (ruling P9-R13: each checkout of
+// a repository trusts its own files, and identical bytes trusted in one are
+// trusted in all). project must be a memory project id (ruling 11), so trust
+// given in one repository never applies to another.
 func (t *TrustStore) Trust(project, rel, path string, sum [32]byte, caps []string) error {
 	if !projectIDRe.MatchString(project) || rel == "" {
 		return errors.New("trust needs a project id (g- or p- and 16 hex digits) and a file")
@@ -215,20 +222,60 @@ func (t *TrustStore) Trust(project, rel, path string, sum [32]byte, caps []strin
 	if caps == nil {
 		caps = []string{}
 	}
+	h := Hex(sum)
 	return t.mutate(func(d *trustDoc) {
-		d.Entries = slices.DeleteFunc(d.Entries, func(e TrustEntry) bool { return e.Project == project && e.Rel == rel })
-		d.Entries = append(d.Entries, TrustEntry{Project: project, Rel: rel, Path: path, SHA256: Hex(sum), Capabilities: caps, TrustedAt: now.UTC()})
+		d.Entries = slices.DeleteFunc(d.Entries, func(e TrustEntry) bool {
+			return e.Project == project && e.Rel == rel && (e.SHA256 == h || e.Path == path)
+		})
+		d.Entries = append(d.Entries, TrustEntry{Project: project, Rel: rel, Path: path, SHA256: h, Capabilities: caps, TrustedAt: now.UTC()})
+		var same []int
+		for i, e := range d.Entries {
+			if e.Project == project && e.Rel == rel {
+				same = append(same, i)
+			}
+		}
+		if extra := len(same) - MaxTrustPerFile; extra > 0 {
+			sort.SliceStable(same, func(i, j int) bool { return d.Entries[same[i]].TrustedAt.Before(d.Entries[same[j]].TrustedAt) })
+			drop := map[int]bool{}
+			for _, i := range same[:extra] {
+				drop[i] = true
+			}
+			kept := d.Entries[:0]
+			for i, e := range d.Entries {
+				if !drop[i] {
+					kept = append(kept, e)
+				}
+			}
+			d.Entries = kept
+		}
 	})
+}
+
+// RevokeSum forgets the trust of this content of project/rel (every
+// checkout's), and reports whether there was one.
+func (t *TrustStore) RevokeSum(project, rel string, sum [32]byte) (bool, error) {
+	h := Hex(sum)
+	return t.revoke(func(e TrustEntry) bool { return e.Project == project && e.Rel == rel && e.SHA256 == h })
+}
+
+// RevokePath forgets the trust given at path for project/rel (one checkout's
+// entry, whatever its content: the file may be gone or broken).
+func (t *TrustStore) RevokePath(project, rel, path string) (bool, error) {
+	return t.revoke(func(e TrustEntry) bool { return e.Project == project && e.Rel == rel && e.Path == path })
+}
+
+func (t *TrustStore) revoke(match func(TrustEntry) bool) (bool, error) {
+	found := false
+	err := t.mutate(func(d *trustDoc) {
+		n := len(d.Entries)
+		d.Entries = slices.DeleteFunc(d.Entries, match)
+		found = len(d.Entries) != n
+	})
+	return found, err
 }
 
 // Revoke forgets every trust entry for project/rel and reports whether one
 // existed.
 func (t *TrustStore) Revoke(project, rel string) (bool, error) {
-	found := false
-	err := t.mutate(func(d *trustDoc) {
-		n := len(d.Entries)
-		d.Entries = slices.DeleteFunc(d.Entries, func(e TrustEntry) bool { return e.Project == project && e.Rel == rel })
-		found = len(d.Entries) != n
-	})
-	return found, err
+	return t.revoke(func(e TrustEntry) bool { return e.Project == project && e.Rel == rel })
 }
