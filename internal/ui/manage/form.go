@@ -33,16 +33,21 @@ type field struct {
 	choices []string
 	idx     int
 	on      bool
+	kinds   []string // backend kinds this field applies to; nil = all
 }
 
 // Form edits every setting of one dot. orig keeps fields the form doesn't
 // show (backend args), so saving never drops them.
 type Form struct {
-	orig   dots.Dot
-	isNew  bool
-	fields []field
-	focus  int
-	err    string
+	orig     dots.Dot
+	isNew    bool
+	fields   []field
+	focus    int
+	err      string
+	estimate func(dots.Dot) string // editor cost line; nil = none
+	models   []string              // ctrl+space choices for the current kind
+	modelsOf string                // kind the choices belong to
+	modelIdx int
 }
 
 func textField(label, v string) field {
@@ -94,9 +99,74 @@ func NewForm(d dots.Dot, isNew bool) *Form {
 		{label: "Read repo (read-only)", kind: kBool, on: d.Context.RepoRead},
 		choiceField("Verbosity", dots.Verbosities, d.Context.Verbosity),
 		intField("Budget (calls/session)", d.Budget.MaxCallsPerSession),
+		// Phase 4: shown only for the kinds they apply to (field.kinds).
+		withKinds(choiceField("Effort", effortChoices, effortLabel(d.Backend.Effort)), dots.KindAnthropicAPI, dots.KindOpenAIAPI),
+		withKinds(intField("Max tokens (0 = 4096)", d.Backend.MaxTokens), dots.KindAnthropicAPI, dots.KindOpenAIAPI, dots.KindOpenRouter, dots.KindOllama),
+		withKinds(textField("Base URL", d.Backend.BaseURL), dots.KindOllama, dots.KindOpenRouter),
+		withKinds(intField("Context window (0 = 16384)", d.Backend.ContextWindow), dots.KindOllama),
+		withKinds(choiceField("Refusal fallbacks", dots.FallbackModes, fallbackLabel(d.Backend.Fallbacks)), dots.KindAnthropicAPI),
+		textField("Budget ($/session, 0 = off)", strconv.FormatFloat(d.Budget.MaxUSDPerSession, 'f', -1, 64)),
 	}}
 	f.setFocus(0)
 	return f
+}
+
+// effortChoices shows "" as "default" (the provider's own default effort).
+var effortChoices = append([]string{"default"}, dots.Efforts...)
+
+func effortLabel(e string) string {
+	if e == "" {
+		return "default"
+	}
+	return e
+}
+
+func fallbackLabel(fb string) string {
+	if fb == "" {
+		return "default"
+	}
+	return fb
+}
+
+func withKinds(fl field, kinds ...string) field {
+	fl.kinds = kinds
+	return fl
+}
+
+// SetEstimator sets the function behind the editor's cost line.
+func (f *Form) SetEstimator(fn func(dots.Dot) string) { f.estimate = fn }
+
+// Kind is the backend kind currently selected.
+func (f *Form) Kind() string { return f.fields[iBackend].choices[f.fields[iBackend].idx] }
+
+// OnModel reports whether the Model field has focus (ctrl+space completes it).
+func (f *Form) OnModel() bool { return f.focus == iModel }
+
+// SetModels loads ctrl+space choices for kind and fills in the first one.
+func (f *Form) SetModels(kind string, ids []string) {
+	if kind != f.Kind() || len(ids) == 0 {
+		return
+	}
+	f.models, f.modelsOf, f.modelIdx = ids, kind, 0
+	f.fields[iModel].input.SetValue(ids[0])
+	f.fields[iModel].input.CursorEnd()
+}
+
+// NextModel cycles the loaded choices; false means none are loaded for the
+// current kind (the caller fetches them).
+func (f *Form) NextModel() bool {
+	if f.modelsOf != f.Kind() || len(f.models) == 0 {
+		return false
+	}
+	f.modelIdx = (f.modelIdx + 1) % len(f.models)
+	f.fields[iModel].input.SetValue(f.models[f.modelIdx])
+	f.fields[iModel].input.CursorEnd()
+	return true
+}
+
+func (f *Form) visible(i int) bool {
+	ks := f.fields[i].kinds
+	return ks == nil || slices.Contains(ks, f.Kind())
 }
 
 func (f *Form) IsNew() bool       { return f.isNew }
@@ -104,7 +174,15 @@ func (f *Form) SetError(s string) { f.err = s }
 
 func (f *Form) setFocus(i int) {
 	n := len(f.fields)
-	f.focus = ((i % n) + n) % n
+	step := 1
+	if i < f.focus {
+		step = -1
+	}
+	i = ((i % n) + n) % n
+	for tries := 0; tries < n && !f.visible(i); tries++ {
+		i = ((i+step)%n + n) % n // skip fields hidden for this kind
+	}
+	f.focus = i
 	for j := range f.fields {
 		fl := &f.fields[j]
 		fl.input.Blur()
@@ -145,11 +223,23 @@ func (f *Form) Update(k tea.KeyMsg) tea.Cmd {
 	var cmd tea.Cmd
 	switch cur.kind {
 	case kChoice:
+		prevKind := f.Kind()
 		switch k.String() {
 		case "right", "l", " ":
 			cur.idx = (cur.idx + 1) % len(cur.choices)
 		case "left", "h":
 			cur.idx = (cur.idx - 1 + len(cur.choices)) % len(cur.choices)
+		}
+		if f.focus == iBackend && f.Kind() != prevKind {
+			// A base URL belongs to one kind: never carry it to another host
+			// (an OpenRouter key must not be sent to an Ollama address).
+			if len(f.fields[iBaseURL].kinds) > 0 && slices.Contains(f.fields[iBaseURL].kinds, prevKind) {
+				f.fields[iBaseURL].input.SetValue("")
+			}
+			// Swap the model only if it was the old kind's default.
+			if m := &f.fields[iModel].input; strings.TrimSpace(m.Value()) == dots.DefaultModelFor(prevKind) {
+				m.SetValue(dots.DefaultModelFor(f.Kind()))
+			}
 		}
 	case kBool:
 		switch k.String() {
@@ -200,6 +290,12 @@ const (
 	iRepoRead
 	iVerbosity
 	iBudget
+	iEffort
+	iMaxTokens
+	iBaseURL
+	iContextWindow
+	iFallbacks
+	iBudgetUSD
 )
 
 func (f *Form) Dot() (dots.Dot, error) {
@@ -226,6 +322,42 @@ func (f *Form) Dot() (dots.Dot, error) {
 	if d.Budget.MaxCallsPerSession, err = f.num(iBudget); err != nil {
 		return d, err
 	}
+	// Hidden fields are written as zero values, so switching kinds never
+	// leaves a setting the new kind rejects.
+	d.Backend.Effort, d.Backend.MaxTokens, d.Backend.BaseURL, d.Backend.ContextWindow, d.Backend.Fallbacks = "", 0, "", 0, ""
+	if f.visible(iEffort) {
+		if e := fl[iEffort].choices[fl[iEffort].idx]; e != "default" {
+			d.Backend.Effort = e
+		}
+	}
+	if f.visible(iMaxTokens) {
+		if d.Backend.MaxTokens, err = f.num(iMaxTokens); err != nil {
+			return d, err
+		}
+	}
+	if f.visible(iBaseURL) {
+		d.Backend.BaseURL = f.val(iBaseURL)
+	}
+	if f.visible(iContextWindow) {
+		if d.Backend.ContextWindow, err = f.num(iContextWindow); err != nil {
+			return d, err
+		}
+	}
+	if f.visible(iFallbacks) {
+		if fb := fl[iFallbacks].choices[fl[iFallbacks].idx]; fb != "default" || f.orig.Backend.Fallbacks == "default" {
+			d.Backend.Fallbacks = fb
+		}
+	}
+	if dots.IsAPIKind(d.Backend.Kind) {
+		d.Backend.Args = []string{} // CLI flags mean nothing to an API backend
+	}
+	usd := f.val(iBudgetUSD)
+	if usd == "" {
+		usd = "0"
+	}
+	if d.Budget.MaxUSDPerSession, err = strconv.ParseFloat(usd, 64); err != nil {
+		return d, fmt.Errorf("%s must be a number like 0.50", f.fields[iBudgetUSD].label)
+	}
 	if f.isNew {
 		d.Slug = dots.Slugify(d.Name)
 	}
@@ -240,6 +372,9 @@ func (f *Form) View(width int) string {
 	}
 	b.WriteString(style.Title.Render(title) + "\n\n")
 	for i, fl := range f.fields {
+		if !f.visible(i) {
+			continue
+		}
 		label := fmt.Sprintf("%-24s", fl.label)
 		if i == f.focus {
 			label = style.Selected.Render(label)
@@ -260,10 +395,21 @@ func (f *Form) View(width int) string {
 		}
 		b.WriteString(label + " " + v + "\n")
 	}
+	if f.estimate != nil {
+		if d, err := f.Dot(); err == nil {
+			if line := f.estimate(d); line != "" {
+				b.WriteString("\n" + style.Dim.Render(line) + "\n")
+			}
+		}
+	}
 	if f.err != "" {
 		b.WriteString("\n" + style.Err.Render(f.err) + "\n")
 	}
-	b.WriteString("\n" + style.Dim.Render("tab/shift+tab move · ←/→ change · space toggle · ctrl+s save · esc cancel"))
+	help := "tab/shift+tab move · ←/→ change · space toggle · ctrl+s save · esc cancel"
+	if f.OnModel() {
+		help = "ctrl+space pick a model · " + help
+	}
+	b.WriteString("\n" + style.Dim.Render(help))
 	_ = width
 	return b.String()
 }
