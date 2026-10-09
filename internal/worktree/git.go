@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,7 +51,26 @@ type Git struct {
 	// (filter.<n>.clean/smudge/process emptied, required=false). Set it
 	// with WithoutFilters.
 	NoFilters []string
+
+	// Draft marks the runner for commands inside a draft worktree (set by
+	// WithoutFilters): submodules are ignored by diff and never recursed into.
+	Draft bool
+
+	// LFSSmudge leaves GIT_LFS_SKIP_SMUDGE unset, so the user's own LFS
+	// filter runs. Only Apply uses it: it writes into the user's repository.
+	LFSSmudge bool
+
+	// Config adds config overrides (key, value) through the environment.
+	Config [][2]string
 }
+
+var (
+	// ErrDenied means the patch touches a path the dot may not read or write
+	// (secrets such as .env or id_rsa): Caps.Deny said so.
+	ErrDenied = errors.New("the patch touches a denied path")
+	// ErrNoDenyCheck means Validate got no Caps.Deny: it fails closed.
+	ErrNoDenyCheck = errors.New("worktree: no deny check configured")
+)
 
 // WithoutFilters returns g with every filter driver configured for repo
 // switched off. Use it for every command that runs in a draft worktree: a
@@ -57,7 +78,7 @@ type Git struct {
 // files (and its .gitattributes) are model-written. The snapshot is taken
 // with the plain Git so the user's clean filters still define blob content.
 func (g Git) WithoutFilters(ctx context.Context, repo string) (Git, error) {
-	out, err := g.Output(ctx, repo, nil, "config", "--name-only", "--get-regexp", `^filter\.`)
+	out, err := g.Output(ctx, repo, nil, "config", "-z", "--name-only", "--get-regexp", `^filter\.`)
 	if err != nil {
 		var ce *CmdError
 		if !errors.As(err, &ce) || strings.TrimSpace(ce.Stderr) != "" {
@@ -67,7 +88,8 @@ func (g Git) WithoutFilters(ctx context.Context, repo string) (Git, error) {
 	}
 	seen := map[string]bool{}
 	var names []string
-	for _, key := range strings.Fields(string(out)) {
+	// -z: a filter name may hold whitespace or "=", so keys are NUL-separated.
+	for _, key := range strings.Split(string(out), "\x00") {
 		rest := strings.TrimPrefix(key, "filter.")
 		i := strings.LastIndex(rest, ".")
 		if i <= 0 || rest == key {
@@ -79,6 +101,7 @@ func (g Git) WithoutFilters(ctx context.Context, repo string) (Git, error) {
 		}
 	}
 	g.NoFilters = append([]string(nil), names...)
+	g.Draft = true
 	return g, nil
 }
 
@@ -136,6 +159,11 @@ func (g Git) Run(ctx context.Context, dir string, env []string, args ...string) 
 
 // Output runs git in dir and returns its raw stdout.
 func (g Git) Output(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return g.OutputIn(ctx, dir, env, nil, args...)
+}
+
+// OutputIn is Output with stdin fed to git.
+func (g Git) OutputIn(ctx context.Context, dir string, env []string, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, g.timeout())
 	defer cancel()
 	full := []string{"-C", dir,
@@ -145,12 +173,6 @@ func (g Git) Output(ctx context.Context, dir string, env []string, args ...strin
 		"-c", "maintenance.auto=false",
 		"-c", "core.quotePath=false",
 	}
-	for _, n := range g.NoFilters {
-		for _, k := range []string{"clean", "smudge", "process"} {
-			full = append(full, "-c", "filter."+n+"."+k+"=")
-		}
-		full = append(full, "-c", "filter."+n+".required=false")
-	}
 	full = append(full, args...)
 	// platform.CommandContext, not exec: on Windows it resolves git.exe on
 	// PATH (never a repo-local git.exe in the cwd) and runs a .cmd shim safely.
@@ -158,7 +180,14 @@ func (g Git) Output(ctx context.Context, dir string, env []string, args ...strin
 	if err != nil {
 		return nil, &CmdError{Args: args, Err: err}
 	}
-	cmd.Env = platform.ChildEnv(append(gitEnv(g.environ()), env...))
+	base := gitEnv(g.environ())
+	if g.LFSSmudge {
+		base = slices.DeleteFunc(base, func(kv string) bool { return strings.HasPrefix(kv, "GIT_LFS_SKIP_SMUDGE=") })
+	}
+	cmd.Env = platform.ChildEnv(append(append(base, g.configEnv()...), env...))
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	cmd.WaitDelay = 500 * time.Millisecond
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -174,6 +203,31 @@ func (g Git) Output(ctx context.Context, dir string, env []string, args ...strin
 		return stdout.Bytes(), &CmdError{Args: args, Stderr: stderr.String(), Err: err}
 	}
 	return stdout.Bytes(), nil
+}
+
+// configEnv carries the draft overrides as GIT_CONFIG_COUNT/KEY_n/VALUE_n, not
+// `-c` arguments: a filter name holding "=" or whitespace would be split or
+// misread on a command line, while a key from the environment is taken whole.
+func (g Git) configEnv() []string {
+	kv := append([][2]string(nil), g.Config...)
+	for _, n := range g.NoFilters {
+		for _, k := range []string{"clean", "smudge", "process"} {
+			kv = append(kv, [2]string{"filter." + n + "." + k, ""})
+		}
+		kv = append(kv, [2]string{"filter." + n + ".required", "false"})
+	}
+	if g.Draft {
+		kv = append(kv, [2]string{"diff.ignoreSubmodules", "all"}, [2]string{"submodule.recurse", "false"})
+	}
+	if len(kv) == 0 {
+		return nil
+	}
+	env := []string{"GIT_CONFIG_COUNT=" + strconv.Itoa(len(kv))}
+	for i, p := range kv {
+		n := strconv.Itoa(i)
+		env = append(env, "GIT_CONFIG_KEY_"+n+"="+p[0], "GIT_CONFIG_VALUE_"+n+"="+p[1])
+	}
+	return env
 }
 
 // gitEnv drops variables that would point git elsewhere (GIT_DIR,

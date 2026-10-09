@@ -88,9 +88,10 @@ func Add(ctx context.Context, g Git, s Snapshot, dir string) (Checkout, error) {
 		gitDir = filepath.Join(dir, gitDir)
 	}
 	co := Checkout{Dir: dir, Repo: s.Repo, Defanged: map[string]string{}, git: gf, gitDir: gitDir, dotGit: dotGit}
+	// Past this point the worktree is registered: any failure removes it.
 	out, err := co.GitOutput(ctx, "ls-files", "-s", "-z")
 	if err != nil {
-		return co, err
+		return fail(err)
 	}
 	for _, rec := range bytes.Split(out, []byte{0}) {
 		meta, rel, ok := strings.Cut(string(rec), "\t")
@@ -103,10 +104,10 @@ func Add(ctx context.Context, g Git, s Snapshot, dir string) (Checkout, error) {
 			continue // core.symlinks=false checks links out as plain files
 		}
 		if err := os.Remove(p); err != nil {
-			return co, err
+			return fail(err)
 		}
 		if err := os.WriteFile(p, []byte(DefangNote), 0o600); err != nil {
-			return co, err
+			return fail(err)
 		}
 		co.Defanged[rel] = target
 	}
