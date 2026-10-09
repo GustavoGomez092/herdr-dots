@@ -32,6 +32,8 @@ var (
 	ErrDraftRunning    = errors.New("this dot is already drafting")
 	ErrAgentBusy       = errors.New("agent is working; try when idle")
 	ErrNotPatch        = errors.New("not a patch card")
+	// ErrPatchNotRemembered: a patch card summarizes a diff; it is not advice.
+	ErrPatchNotRemembered = errors.New("a patch card can't be remembered: remember the advice card it came from")
 )
 
 // maxSnapshotIndex caps a draft's snapshot index (spec §8.1: 500 MB).

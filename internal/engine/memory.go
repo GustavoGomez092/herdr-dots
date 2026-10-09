@@ -372,6 +372,9 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	if !ok {
 		return fmt.Errorf("card %s: %w", cardID, queue.ErrNotFound)
 	}
+	if c.Kind == queue.KindPatch {
+		return fmt.Errorf("card %s: %w", cardID, ErrPatchNotRemembered)
+	}
 	if c.Kind == queue.KindCouncil && as != memory.AsConvention {
 		return errors.New("a council card can only be remembered as a project convention (c)")
 	}
