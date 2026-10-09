@@ -15,6 +15,7 @@ import (
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/delivery"
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/patchstore"
 	"herdr-dots/internal/queue"
@@ -270,6 +271,11 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		turn = turns[len(turns)-1].Index
 	}
 	quiet := func() bool { return e.ctx.Err() != nil || e.draftAbandoned(id) }
+	// Phase 9: a draft that fails before its backend call and ends quietly
+	// (pane gone, engine stopping) leaves no record; once the call happened it
+	// is recorded, "dropped" when it ends quietly (runTrace.usage).
+	tr := e.trace(att.PaneID, d, history.KindDraft, att.ProjectID)
+	defer tr.done()
 	fail := func(err error) {
 		if quiet() {
 			// The engine is stopping or the pane is gone: nobody to tell.
@@ -281,6 +287,7 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		msg := textutil.SanitizeModelText(redactErr(err).Error())
 		e.d.Logf("draft %s by %s on %s: %s", id, d.Slug, att.PaneID, msg)
 		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "draft failed: "+msg)
+		tr.mark(turn, state.OutcomeError, "draft failed: "+msg)
 		e.notify(d, "draft failed: "+msg)
 	}
 	// The metadata comes first, so a crash at any later point leaves a
@@ -356,7 +363,9 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 	req.Turns, req.Question, req.Memory = turns, instruction, mem.block
 	req.Pass, req.Write, req.RepoRead, req.Learn, req.Force = backend.PassWrite, true, true, false, false
 	rctx, cancel := context.WithTimeout(ctx, d.Capabilities.WriteTimeout())
+	started := time.Now()
 	res, err := be.Run(rctx, req)
+	tr.usage(res, time.Since(started))
 	cancel()
 	e.chargeDraft(id, att.PaneID, d.Slug, deltaOf(res)) // not for an abandoned draft or a closed pane (Phase 5)
 	if err != nil {
@@ -379,6 +388,7 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		if errors.Is(err, worktree.ErrEmptyPatch) {
 			if !quiet() {
 				e.feed(att.PaneID, d.Slug, turn, state.OutcomePass, "draft produced no changes")
+				tr.mark(turn, state.OutcomePass, "draft produced no changes")
 			}
 			return
 		}
@@ -391,6 +401,7 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 			keepRecord = true
 		}
 		e.feed(att.PaneID, d.Slug, turn, state.OutcomeError, "patch rejected ("+reason+")")
+		tr.mark(turn, state.OutcomeError, "patch rejected ("+reason+")")
 		e.notify(d, "patch rejected: "+reason)
 		return
 	}
@@ -449,6 +460,8 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 	}
 	keepRef, keepRecord = true, true
 	e.feed(att.PaneID, d.Slug, turn, state.OutcomeDrafted, p.Stat)
+	tr.mark(turn, state.OutcomeDrafted, summary) // the redacted summary on the card, never the raw model text
+	tr.card(c)
 	e.reportPending(att.PaneID)
 	e.broadcast()
 }

@@ -15,6 +15,7 @@ import (
 	"herdr-dots/internal/council"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
+	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/patchstore"
 	"herdr-dots/internal/queue"
@@ -44,6 +45,9 @@ type Deps struct {
 
 	Memory         *memory.Store                            // nil = memory off (v1 behavior)
 	ResolveProject func(cwd string) (memory.Project, error) // nil = memory.ResolveProject with git
+
+	History    *history.Store // Phase 9: per-dot run and card history; nil = none
+	SessionKey string         // Phase 9: this Herdr session's key; card ids are unique only within it
 
 	// Proactive dots (Phase 8). A nil Daily turns research, schedules and
 	// commit triggers off; a nil Inbox drops results for unattached projects.
@@ -75,6 +79,8 @@ type runOpts struct {
 	question   string // summon question
 	memoryPass bool   // observe dot's memory-only pass: never a card
 	seenTo     int    // memory pass: MemorySeenTurn once it succeeds
+
+	trace *runTrace // Phase 9: set by runDot; route links the card to the run
 }
 
 // Engine owns all live state. Lock order: e.mu → store mutexes (stores never
@@ -410,6 +416,7 @@ func (e *Engine) Detach(paneID, slug string) error {
 	}
 	orphaned := 0
 	var oerr error
+	var waiting []queue.Card // Phase 9: the cards OrphanPane orphans, for their history
 	if empty {
 		// The attachment ends as in dropPane, in the same e.mu section as the
 		// delete: a draft registering after it sees the attachment gone, one
@@ -424,6 +431,7 @@ func (e *Engine) Detach(paneID, slug string) error {
 		delete(e.preflights, paneID)
 		e.gens[paneID]++
 		delete(e.idle, paneID) // a later attach starts a fresh idle period (idle.go)
+		waiting = e.d.Queue.Pending(paneID)
 		orphaned, oerr = e.d.Queue.OrphanPane(paneID)
 		_ = e.d.Usage.ResetPane(paneID)
 		_ = e.d.Attachments.Delete(paneID)
@@ -442,6 +450,9 @@ func (e *Engine) Detach(paneID, slug string) error {
 			e.d.Logf("orphan cards for %s: %v", paneID, oerr)
 		} else if orphaned > 0 {
 			e.d.Logf("pane %s: last dot detached: %d card(s) orphaned", paneID, orphaned)
+			for _, c := range waiting {
+				e.spawnResolve(c, history.ResOrphaned)
+			}
 		}
 		e.unwatch(paneID)
 		// After the attachment is gone, as in dropPane: in-flight MCP asks
@@ -777,6 +788,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		e.setStatus(k, view.StatusThinking)
 	}
 	att, _ := e.d.Attachments.Get(paneID)
+	tr := e.trace(paneID, d, o.historyKind(), att.ProjectID)
+	o.trace = tr
+	defer tr.done()
 	turn := 0
 	if len(turns) > 0 {
 		turn = turns[len(turns)-1].Index
@@ -785,6 +799,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	if err != nil {
 		err = redactErr(err)
 		sinkErr = err
+		tr.mark(turn, state.OutcomeError, err.Error())
 		e.runFailed(k, d, turn, err)
 		return
 	}
@@ -803,7 +818,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	}
 	ctx, cancel := context.WithTimeout(base, e.config().RunTimeout())
 	defer cancel()
+	started := time.Now()
 	res, err := be.Run(ctx, req)
+	tr.usage(res, time.Since(started)) // a run that ends unmarked from here on is recorded "dropped"
 	e.chargeRun(k, paneID, d.Slug, deltaOf(res), !o.summon)
 	e.hook("run-charged")
 	if err != nil {
@@ -819,6 +836,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 			}
 			return
 		}
+		tr.mark(turn, state.OutcomeError, err.Error())
 		e.runFailed(k, d, turn, err)
 		return
 	}
@@ -853,8 +871,11 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	})
 	if o.memoryPass {
 		e.clearError(k) // a pass sets no status of its own; drop a stale failure
-		if e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, true) == 0 {
+		if n := e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, true); n == 0 {
 			e.feed(paneID, d.Slug, turn, state.OutcomePass, "memory pass: nothing new")
+			tr.mark(turn, state.OutcomePass, "memory pass: nothing new")
+		} else {
+			tr.mark(turn, state.OutcomeLearned, fmt.Sprintf("learned %d", n))
 		}
 		return
 	}
@@ -872,6 +893,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 			return
 		}
 		e.feed(paneID, d.Slug, turn, state.OutcomeAsked, askDetail(d, res))
+		tr.markVerdict(turn, verdictOutcome(res.Verdict), res.Verdict)
 		e.setStatus(k, view.StatusConsulted)
 		return // MCP ask: the answer goes back to the agent, never into the queue
 	}
@@ -880,16 +902,19 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		// just applied never suppress their own verdict.
 		if ref, ok := suppressedBy(mem, res.Verdict.Message, turn, att.SessionValue); ok {
 			e.feed(paneID, d.Slug, turn, state.OutcomeSuppressed, "similar to "+ref)
+			tr.markVerdict(turn, state.OutcomeSuppressed, res.Verdict)
 			e.setStatus(k, view.StatusPassed)
 			return
 		}
 	}
 	if !res.Verdict.Relevant {
 		e.feed(paneID, d.Slug, turn, state.OutcomePass, costDetail(d, res))
+		tr.mark(turn, state.OutcomePass, "")
 		e.setStatus(k, view.StatusPassed)
 		return
 	}
 	e.feed(paneID, d.Slug, turn, state.OutcomeFlagged, withCost(res.Verdict.Message, costDetail(d, res)))
+	tr.markVerdict(turn, state.OutcomeFlagged, res.Verdict)
 	e.setStatus(k, view.StatusFlagged)
 	if o.sink != nil {
 		return // council member: the council turns every answer into one card
@@ -935,10 +960,12 @@ func (e *Engine) finishRun(k key) {
 // route turns a relevant verdict into a card according to the dot's mode.
 func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o runOpts) {
 	c, mode := e.routeCard(paneID, d, turn, v, o)
-	if _, err := e.d.Queue.Add(c); err != nil {
+	added, err := e.d.Queue.Add(c)
+	if err != nil {
 		e.d.Logf("queue add: %v", err)
 		return
 	}
+	o.trace.card(added)
 	e.routed(paneID, d, v, mode)
 }
 
