@@ -151,12 +151,22 @@ func (e *Engine) dropPane(paneID string) {
 }
 
 // checkSession follows a new agent session in the same pane (/clear, restart).
+// Holds the pane lock for its whole body, and re-checks the session inside the
+// update so concurrent callers with a stale snapshot reset LastSeenTurn once.
 func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
-	if p.AgentSession == nil || p.AgentSession.Value == a.SessionValue {
+	if p.AgentSession == nil {
 		return
 	}
-	e.d.Logf("pane %s: agent session %q → %q", a.PaneID, a.SessionValue, p.AgentSession.Value)
+	pl := e.paneLock(a.PaneID)
+	pl.Lock()
+	defer pl.Unlock()
+	changed := false
 	err := e.d.Attachments.Update(a.PaneID, func(x *state.Attachment) {
+		if x.SessionValue == p.AgentSession.Value {
+			return
+		}
+		changed = true
+		e.d.Logf("pane %s: agent session %q → %q", a.PaneID, x.SessionValue, p.AgentSession.Value)
 		x.SessionKind, x.SessionValue = p.AgentSession.Kind, p.AgentSession.Value
 		if p.Agent != "" {
 			x.Agent = p.Agent
@@ -166,7 +176,7 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 			x.Dots[i].LastSeenTurn = 0
 		}
 	})
-	if errors.Is(err, state.ErrNoAttachment) {
+	if errors.Is(err, state.ErrNoAttachment) || !changed {
 		return
 	}
 	e.dropReader(a.PaneID)

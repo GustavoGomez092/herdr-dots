@@ -65,6 +65,8 @@ type Engine struct {
 	dmu sync.Mutex
 	sem chan struct{}
 
+	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
+
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
 	wg     sync.WaitGroup
@@ -116,10 +118,27 @@ func New(d Deps) *Engine {
 		status:   map[key]string{},
 		warned:   map[key]bool{},
 		watchers: map[int]chan view.Snapshot{},
+		paneMu:   map[string]*sync.Mutex{},
 		sem:      make(chan struct{}, max(1, d.Config.MaxParallelRuns)),
 	}
 	e.ReloadDots()
 	return e
+}
+
+// paneLock returns the per-pane mutex that serializes checkSession, Attach and
+// processPane (transcript read through LastSeenTurn update) for one pane.
+// Lock order: paneLock -> e.mu -> store mutexes. e.dmu is taken independently
+// of paneLock; under dmu the engine only takes e.mu (via broadcast) and stores.
+// Never hold a paneLock while calling the backend.
+func (e *Engine) paneLock(paneID string) *sync.Mutex {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m, ok := e.paneMu[paneID]
+	if !ok {
+		m = &sync.Mutex{}
+		e.paneMu[paneID] = m
+	}
+	return m
 }
 
 func (e *Engine) ReloadDots() {
@@ -140,8 +159,13 @@ func (e *Engine) Start(ctx context.Context) {
 	e.ctx = ctx
 	for _, a := range e.d.Attachments.List() {
 		if _, err := e.d.Herdr.PaneGet(ctx, a.PaneID); err != nil {
-			e.dropPane(a.PaneID)
-			continue
+			if herdr.IsNotFound(err) {
+				e.dropPane(a.PaneID)
+				continue
+			}
+			// Transient failure (slow socket, timeout): keep the attachment;
+			// poll drops the pane later if it is really gone.
+			e.d.Logf("pane %s: start check failed (%v); keeping attachment", a.PaneID, err)
 		}
 		e.subscribe(a.PaneID)
 	}
@@ -153,6 +177,9 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	if err != nil {
 		return fmt.Errorf("pane %s: %w", paneID, err)
 	}
+	pl := e.paneLock(paneID)
+	pl.Lock()
+	defer pl.Unlock()
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
 		att = state.Attachment{PaneID: paneID, Agent: p.Agent, Cwd: p.WorkDir()}
@@ -303,10 +330,27 @@ type job struct {
 // processPane reads the transcript and starts a run for every dot whose
 // filter passes on the turns it hasn't seen.
 func (e *Engine) processPane(paneID string) {
+	pl := e.paneLock(paneID)
+	pl.Lock()
+	jobs, budgetHit := e.processPaneLocked(paneID)
+	pl.Unlock()
+
+	for _, d := range budgetHit {
+		e.notify(d, "budget reached; skipping turns until the budget resets")
+	}
+	for _, j := range jobs {
+		e.spawn(func() { e.runDot(paneID, j.dot, j.turns, runOpts{forceQueue: j.forceQueue}) })
+	}
+	e.broadcast()
+}
+
+// processPaneLocked runs with the pane lock held.
+func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 	att, ok := e.d.Attachments.Get(paneID)
 	if !ok {
-		return
+		return nil, nil
 	}
+	session := att.SessionValue
 	turns, err := e.reader(att).Turns(e.ctx)
 	if err != nil && !att.ForceScrollback {
 		e.d.Logf("pane %s: transcript read failed (%v); falling back to scrollback", paneID, err)
@@ -319,7 +363,7 @@ func (e *Engine) processPane(paneID string) {
 	}
 	if err != nil {
 		e.d.Logf("pane %s: read: %v", paneID, err)
-		return
+		return nil, nil
 	}
 
 	var jobs []job
@@ -327,6 +371,9 @@ func (e *Engine) processPane(paneID string) {
 	e.mu.Lock()
 	paneCalls := e.d.Usage.PaneCalls(paneID)
 	_ = e.d.Attachments.Update(paneID, func(a *state.Attachment) {
+		if a.SessionValue != session {
+			return // the session changed under us; this read is stale
+		}
 		for i := range a.Dots {
 			da := &a.Dots[i]
 			d, ok := e.dots[da.Slug]
@@ -336,7 +383,7 @@ func (e *Engine) processPane(paneID string) {
 			start := min(da.LastSeenTurn, len(turns))
 			newTurns := turns[start:]
 			if len(newTurns) == 0 {
-				da.LastSeenTurn = len(turns)
+				da.LastSeenTurn = max(da.LastSeenTurn, len(turns))
 				continue
 			}
 			k := key{paneID, da.Slug}
@@ -349,7 +396,7 @@ func (e *Engine) processPane(paneID string) {
 				DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls,
 				PaneBudget: e.d.Config.SessionBudgetCalls,
 			})
-			da.LastSeenTurn = len(turns)
+			da.LastSeenTurn = max(da.LastSeenTurn, len(turns))
 			switch dec.Reason {
 			case ReasonCooldown:
 				da.CooldownLeft--
@@ -370,13 +417,7 @@ func (e *Engine) processPane(paneID string) {
 	})
 	e.mu.Unlock()
 
-	for _, d := range budgetHit {
-		e.notify(d, "budget reached; skipping turns until the budget resets")
-	}
-	for _, j := range jobs {
-		e.spawn(func() { e.runDot(paneID, j.dot, j.turns, runOpts{forceQueue: j.forceQueue}) })
-	}
-	e.broadcast()
+	return jobs, budgetHit
 }
 
 func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o runOpts) {

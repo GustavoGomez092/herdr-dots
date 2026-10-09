@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -56,13 +57,32 @@ func (f *fakeBackend) Run(_ context.Context, r backend.Request) (backend.Result,
 type fakeReader struct {
 	mu    sync.Mutex
 	turns []transcript.Turn
+
+	// Optional gate: after arm(), the next Turns call takes its snapshot, signals
+	// entered and blocks until release is closed (a stale in-flight read).
+	armed   bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *fakeReader) arm() {
+	r.mu.Lock()
+	r.armed, r.entered, r.release = true, make(chan struct{}), make(chan struct{})
+	r.mu.Unlock()
 }
 
 func (r *fakeReader) Source() string { return transcript.SourceClaude }
 func (r *fakeReader) Turns(context.Context) ([]transcript.Turn, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]transcript.Turn(nil), r.turns...), nil
+	ts := append([]transcript.Turn(nil), r.turns...)
+	armed, entered, release := r.armed, r.entered, r.release
+	r.armed = false
+	r.mu.Unlock()
+	if armed {
+		close(entered)
+		<-release
+	}
+	return ts, nil
 }
 func (r *fakeReader) add(t transcript.Turn) {
 	r.mu.Lock()
@@ -395,5 +415,82 @@ func TestAttachUnknownDotFails(t *testing.T) {
 	}
 	if err := r.e.Attach(context.Background(), "w9:p9", []string{"security"}); err == nil {
 		t.Fatal("unknown pane must fail")
+	}
+}
+
+// A session change racing a processPane that already read the old session must
+// not make the engine skip the new session's turns or re-review the old ones.
+func TestSessionChangeDuringInFlightProcessPane(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue))
+	r.attach(t, "security")
+	old := r.readers["s1"]
+	old.arm()
+	old.add(transcript.Turn{User: "old"})
+	r.srv.Push(pane, herdr.StatusWorking)
+	r.srv.Push(pane, herdr.StatusIdle)
+	select {
+	case <-old.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("processPane never read the old session")
+	}
+	fresh := &fakeReader{}
+	fresh.add(transcript.Turn{User: "fresh"})
+	r.setReader("s2", fresh)
+	p, _ := (&herdr.SocketClient{Path: r.srv.Path}).PaneGet(context.Background(), pane)
+	p.AgentSession = &herdr.AgentSession{Kind: "id", Value: "s2"}
+	r.srv.SetPane(p)
+	r.srv.Push(pane, herdr.StatusIdle)
+	time.Sleep(30 * time.Millisecond) // let the second pass queue behind the pane lock
+	close(old.release)
+	eventually(t, "dot reviews the new session", func() bool {
+		return r.be.n() >= 2 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "fresh"
+	})
+	time.Sleep(60 * time.Millisecond)
+	r.be.mu.Lock()
+	var users []string
+	for _, c := range r.be.calls {
+		users = append(users, c.Turns[len(c.Turns)-1].User)
+	}
+	r.be.mu.Unlock()
+	if strings.Join(users, ",") != "old,fresh" {
+		t.Fatalf("reviews = %v, want [old fresh] (no re-review, no skipped turn)", users)
+	}
+}
+
+// failingGet makes PaneGet fail with a transient (non not_found) error.
+type failingGet struct{ *herdr.SocketClient }
+
+func (failingGet) PaneGet(context.Context, string) (herdr.PaneInfo, error) {
+	return herdr.PaneInfo{}, errors.New("socket timeout")
+}
+
+func TestStartKeepsAttachmentOnTransientPaneGetError(t *testing.T) {
+	srv := herdrtest.New(t)
+	dir := t.TempDir()
+	q, _ := queue.Open(filepath.Join(dir, "queue.json"))
+	atts, _ := state.OpenAttachments(filepath.Join(dir, "attachments.json"))
+	usage, _ := state.OpenUsage(filepath.Join(dir, "usage.json"))
+	feed, _ := state.OpenFeed(filepath.Join(dir, "feed.jsonl"))
+	if err := atts.Put(state.Attachment{PaneID: pane, Agent: "claude", SessionValue: "s1",
+		Dots: []state.DotAttachment{{Slug: "security"}}}); err != nil {
+		t.Fatal(err)
+	}
+	e := New(Deps{
+		Herdr:   failingGet{&herdr.SocketClient{Path: srv.Path, PluginID: "herdr-dots"}},
+		Backend: func(string) (backend.Backend, error) { return &fakeBackend{}, nil },
+		Reader:  func(state.Attachment) transcript.Reader { return &fakeReader{} },
+		LoadDots: func() ([]dots.Dot, []dots.LoadError) {
+			return []dots.Dot{dot("Security", dots.ModeQueue)}, nil
+		},
+		SaveDot: func(dots.Dot) error { return nil },
+		Config:  config.Default(), Queue: q, Attachments: atts, Usage: usage, Feed: feed,
+		PollInterval: time.Hour,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(e.Wait)
+	t.Cleanup(cancel)
+	e.Start(ctx)
+	if _, ok := atts.Get(pane); !ok {
+		t.Fatal("a transient PaneGet error at Start must not drop the attachment")
 	}
 }
