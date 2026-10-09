@@ -138,6 +138,44 @@ func TestDismissEditSummonModePause(t *testing.T) {
 	_ = m
 }
 
+func TestDotActionsNeedRosterFocus(t *testing.T) {
+	fc := &fakeCaller{}
+	m := press(ready(fc), "d")
+	if len(fc.calls) != 0 || !strings.Contains(m.View(), "tab to the roster to act on a dot") {
+		t.Fatalf("calls %+v\n%s", fc.calls, m.View())
+	}
+	press(m, "tab", "d")
+	if len(fc.calls) != 1 || fc.calls[0].cmd != ipc.CmdDetach {
+		t.Fatalf("calls %+v", fc.calls)
+	}
+}
+
+func TestCardActionsNeedQueueFocus(t *testing.T) {
+	fc := &fakeCaller{}
+	m := press(ready(fc), "tab", "x", "enter", "e")
+	if len(fc.calls) != 0 || !strings.Contains(m.View(), "tab to the queue to act on a card") {
+		t.Fatalf("calls %+v\n%s", fc.calls, m.View())
+	}
+}
+
+func TestDisconnectedBannerPersistsAndBlocksActions(t *testing.T) {
+	fc := &fakeCaller{}
+	m := ready(fc)
+	m, _ = m.Update(DisconnectedMsg{})
+	m = press(m, "j", "enter", "a", "x")
+	m = press(m, "tab", "d", "p")
+	if !strings.Contains(m.View(), "engine down") {
+		t.Fatal("banner must survive keypresses")
+	}
+	if len(fc.calls) != 0 {
+		t.Fatalf("calls while disconnected: %+v", fc.calls)
+	}
+	m, _ = m.Update(SnapshotMsg(snap()))
+	if strings.Contains(m.View(), "engine down") {
+		t.Fatal("snapshot should clear banner")
+	}
+}
+
 func TestEmptyAndDisconnectedStates(t *testing.T) {
 	m, _ := New("w1:p9", &fakeCaller{}).Update(SnapshotMsg(snap()))
 	if !strings.Contains(m.View(), "prefix+d") {

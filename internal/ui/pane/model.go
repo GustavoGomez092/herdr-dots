@@ -53,7 +53,12 @@ type Model struct {
 	question  textinput.Model
 	width     int
 	status    string
+	seen      bool // a snapshot or disconnect has been received
 }
+
+const offlineHint = "offline: actions unavailable until the engine restarts"
+
+const engineDownMsg = "engine down, restarting…"
 
 func New(target string, c Caller) Model {
 	ta := textarea.New()
@@ -137,15 +142,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.editor.SetWidth(max(20, msg.Width-2))
 		return m, nil
 	case SnapshotMsg:
-		m.snap, m.connected = view.Snapshot(msg), true
-		if m.status == "engine down, restarting…" {
+		m.snap, m.connected, m.seen = view.Snapshot(msg), true, true
+		if m.status == offlineHint {
 			m.status = ""
 		}
 		m.clamp()
 		return m, nil
 	case DisconnectedMsg:
-		m.connected = false
-		m.status = "engine down, restarting…"
+		m.connected, m.seen = false, true
 		return m, nil
 	case errMsg:
 		m.status = msg.err.Error()
@@ -193,6 +197,25 @@ func (m Model) updateQuestion(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
+	switch k.String() {
+	case "enter", "a", "x", "e", "s", "m", "p", "d", "r":
+		if !m.connected {
+			m.status = offlineHint
+			return m, nil
+		}
+	}
+	switch k.String() {
+	case "enter", "x", "e":
+		if m.area != areaQueue {
+			m.status = "tab to the queue to act on a card"
+			return m, nil
+		}
+	case "s", "m", "p", "d", "r":
+		if m.area != areaRoster {
+			m.status = "tab to the roster to act on a dot"
+			return m, nil
+		}
+	}
 	switch k.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -313,8 +336,8 @@ func (m Model) View() string {
 	if p.Source == "scrollback" {
 		b.WriteString(style.Dim.Render("(reading scrollback: transcript unavailable)") + "\n")
 	}
-	if !m.connected && m.status != "" {
-		b.WriteString(style.Err.Render(m.status) + "\n")
+	if m.seen && !m.connected {
+		b.WriteString(style.Err.Render(engineDownMsg) + "\n")
 	}
 	if len(p.Dots) == 0 {
 		b.WriteString(style.Dim.Render("No dots here yet. Press prefix+d to add some.") + "\n")
@@ -380,7 +403,7 @@ func (m Model) View() string {
 		b.WriteString(rule("HELP", w) + helpText + "\n")
 	}
 	footer := "j/k move · ⏎ send · a all · s summon · ? help"
-	if m.connected && m.status != "" {
+	if m.status != "" {
 		footer = m.status
 	}
 	b.WriteString(style.Dim.Render(footer))
