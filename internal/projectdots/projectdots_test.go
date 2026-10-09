@@ -507,3 +507,79 @@ func TestErrorsNameNoAbsolutePaths(t *testing.T) {
 		t.Fatalf("trust error %v", err)
 	}
 }
+
+// A trusted item says where its trust was given (display only), so the UI
+// can tell a clone's trust from trust given in this checkout.
+func TestTrustedItemCarriesWhereItWasTrusted(t *testing.T) {
+	root := pdRepo(t, map[string]string{"helper.toml": helperTOML})
+	ts := pdTrust(t)
+	it := ScanProject(root, pdProject, ts).Items[0]
+	if it.TrustedPath != "" {
+		t.Fatalf("untrusted item has a trusted path %q", it.TrustedPath)
+	}
+	other := filepath.Join(t.TempDir(), "clone", ".herdr-dots", "dots", "helper.toml")
+	if err := ts.Trust(pdProject, it.Rel, other, it.Sum, nil); err != nil {
+		t.Fatal(err)
+	}
+	if it := ScanProject(root, pdProject, ts).Items[0]; !it.Trusted || it.TrustedPath != other {
+		t.Fatalf("trusted item %+v", it)
+	}
+}
+
+// Ruling P9-R13: two checkouts of one repository may hold different
+// contents of the same file, each trusted in its own checkout. Trusting in
+// one checkout replaces only that checkout's earlier entry (and an entry for
+// the same bytes); untrust can target one content or one checkout.
+func TestTrustPerCheckoutKeepsTheOtherCheckoutsEntry(t *testing.T) {
+	a := pdRepo(t, map[string]string{"helper.toml": helperTOML})
+	b := pdRepo(t, map[string]string{"helper.toml": strings.Replace(helperTOML, "Be helpful.", "Be careful.", 1)})
+	ts := pdTrust(t)
+	ia, ib := ScanProject(a, pdProject, ts).Items[0], ScanProject(b, pdProject, ts).Items[0]
+	pa, pb := filepath.Join(a, "x.toml"), filepath.Join(b, "x.toml")
+	if err := ts.Trust(pdProject, ib.Rel, pb, ib.Sum, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.Trust(pdProject, ia.Rel, pa, ia.Sum, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !ScanProject(a, pdProject, ts).Items[0].Trusted || !ScanProject(b, pdProject, ts).Items[0].Trusted {
+		t.Fatal("each checkout's own content is trusted")
+	}
+	// A moves on: its old entry goes, B's stays.
+	edited := Sum([]byte("other bytes"))
+	if err := ts.Trust(pdProject, ia.Rel, pa, edited, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ScanProject(a, pdProject, ts).Items[0].Trusted || !ScanProject(b, pdProject, ts).Items[0].Trusted {
+		t.Fatal("a checkout's new trust replaces its own old entry only")
+	}
+	if found, err := ts.RevokeSum(pdProject, ib.Rel, ib.Sum); !found || err != nil {
+		t.Fatalf("revoke B's content: %v %v", found, err)
+	}
+	if ScanProject(b, pdProject, ts).Items[0].Trusted {
+		t.Fatal("revoked by content")
+	}
+	if found, err := ts.RevokePath(pdProject, ia.Rel, pa); !found || err != nil {
+		t.Fatalf("revoke A's entry by path: %v %v", found, err)
+	}
+	if es, _ := ts.List(); len(es) != 0 {
+		t.Fatalf("left %+v", es)
+	}
+}
+
+// One file's entries are bounded however often it is re-trusted from new
+// places.
+func TestTrustEntriesPerFileAreCapped(t *testing.T) {
+	ts := pdTrust(t)
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	ts.Now = func() time.Time { now = now.Add(time.Second); return now }
+	for i := range MaxTrustPerFile + 5 {
+		if err := ts.Trust(pdProject, ".herdr-dots/dots/helper.toml", fmt.Sprintf("/c%d/helper.toml", i), Sum([]byte{byte(i)}), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	es, _ := ts.List()
+	if len(es) != MaxTrustPerFile || es[0].Path != fmt.Sprintf("/c%d/helper.toml", MaxTrustPerFile+4) {
+		t.Fatalf("%d entries, newest %+v", len(es), es)
+	}
+}

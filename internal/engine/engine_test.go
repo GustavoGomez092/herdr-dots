@@ -137,6 +137,13 @@ func newRig(t *testing.T, ds ...dots.Dot) *rig {
 // newRigWith lets a test adjust the engine's Deps before it starts.
 func newRigWith(t *testing.T, opt func(*Deps), ds ...dots.Dot) *rig {
 	t.Helper()
+	return newRigFull(t, opt, nil, ds...)
+}
+
+// newRigFull also lets a test adjust the Engine (a test hook) before Start,
+// so no engine goroutine races with the change.
+func newRigFull(t *testing.T, opt func(*Deps), eng func(*Engine), ds ...dots.Dot) *rig {
+	t.Helper()
 	srv := herdrtest.New(t)
 	srv.SetPane(herdr.PaneInfo{PaneID: pane, Agent: "claude", AgentStatus: herdr.StatusIdle, Cwd: "/repo",
 		AgentSession: &herdr.AgentSession{Kind: "id", Value: "s1"}})
@@ -172,6 +179,9 @@ func newRigWith(t *testing.T, opt func(*Deps), ds ...dots.Dot) *rig {
 		opt(&deps)
 	}
 	r.e = New(deps)
+	if eng != nil {
+		eng(r.e)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r.stop = cancel
 	t.Cleanup(r.e.Wait) // runs after cancel: no engine goroutine may outlive the test's temp dir

@@ -144,7 +144,7 @@ func (e *Engine) checkCommits() {
 		a, ok := e.d.Attachments.Get(listed.PaneID)
 		gen := e.gens[listed.PaneID]
 		for _, da := range a.Dots {
-			if d, found := e.dots[da.Slug]; ok && found && d.Trigger.OnCommit {
+			if d, found := e.paneDotLocked(a.PaneID, da.Slug); ok && found && d.Trigger.OnCommit {
 				ds = append(ds, d)
 				live[key{a.PaneID, d.Slug}] = true
 			}

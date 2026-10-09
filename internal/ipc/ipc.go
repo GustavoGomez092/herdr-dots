@@ -34,6 +34,33 @@ const (
 	CmdMemoryChanged = "memory_changed" // no args: a UI edited memory; refresh snapshot counts
 )
 
+// Project dot commands (Phase 9).
+const (
+	CmdTrust   = "trust"   // TrustArgs: trust a project dot file as reviewed
+	CmdUntrust = "untrust" // TrustArgs (or DotArgs): forget a project dot's trust (attached copies pause)
+)
+
+// TrustArgs trusts the project dot Slug of PaneID's repository. SHA256 is the
+// hex hash of the file the developer reviewed; the engine refuses a file that
+// changed since. Capabilities are the ones the developer kept (each must be
+// one the file asks for). Root is the checkout the reviewed entry came from
+// (LibraryDot.Root): the engine refuses it when the pane is in another one.
+// untrust takes the same arguments (SHA256 and Capabilities unused), so a
+// plain DotArgs still works.
+type TrustArgs struct {
+	PaneID       string   `json:"pane_id"`
+	Root         string   `json:"root,omitempty"`
+	Slug         string   `json:"slug"`
+	SHA256       string   `json:"sha256"`
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// ReloadArgs is reload_dots' optional argument: also scan this pane's
+// repository for project dots (the manage popup sends its target).
+type ReloadArgs struct {
+	PaneID string `json:"pane_id,omitempty"`
+}
+
 // RememberArgs.As is finding, rule, convention or global.
 type RememberArgs struct {
 	CardID string `json:"card_id"`

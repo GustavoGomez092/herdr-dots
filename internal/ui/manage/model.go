@@ -572,7 +572,9 @@ func (m Model) View() string {
 		b.WriteString(line + "\n")
 	}
 	for _, inv := range m.snap.Invalid {
-		b.WriteString(style.Err.Render(fmt.Sprintf("⚠ %s:%d: %s", inv.File, inv.Line, inv.Error)) + "\n")
+		// File names and errors can come from a repository (project dots):
+		// cleaned, so no control character reaches the terminal.
+		b.WriteString(style.Err.Render(fmt.Sprintf("⚠ %s:%d: %s", style.Clean(inv.File), inv.Line, style.Clean(inv.Error))) + "\n")
 	}
 	if m.status != "" {
 		b.WriteString("\n" + m.status + "\n")

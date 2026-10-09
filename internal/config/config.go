@@ -46,6 +46,8 @@ type Config struct {
 	Providers        map[string]ProviderConfig `toml:"providers"`          // [providers.<name>]
 	ToolDenyGlobs    []string                  `toml:"tool_deny_globs"`    // added to the built-in deny-list
 	PricesFile       string                    `toml:"prices_file"`        // "" = CONFIG_DIR/prices.toml
+
+	ProjectDotsEnabled bool `toml:"project_dots_enabled"` // Phase 9: load trusted .herdr-dots/dots from repositories; false on a malformed file
 }
 
 // ProviderConfig is one [providers.<name>] table (anthropic, openai,
@@ -126,13 +128,16 @@ func Default() Config {
 		CommitPollSeconds: DefaultCommitPollSeconds,
 
 		MaxConcurrentDrafts: 2,
+
+		ProjectDotsEnabled: true,
 	}
 }
 
 // Load returns Default() when the file is missing. Keys present in the file
 // override defaults; absent keys keep them. An unreadable or malformed file
-// yields Default() with InjectEnabled, MemoryEnabled, WriteEnabled and
-// ProactiveEnabled false (the kill switches fail closed) plus an error so the
+// yields Default() with InjectEnabled, MemoryEnabled, WriteEnabled,
+// ProactiveEnabled and ProjectDotsEnabled false (the kill switches fail
+// closed) plus an error so the
 // caller can log it and keep running.
 func Load(path string) (Config, error) {
 	c := Default()
@@ -142,11 +147,13 @@ func Load(path string) (Config, error) {
 	}
 	if err != nil {
 		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
+		c.ProjectDotsEnabled = false
 		return c, err
 	}
 	if _, err := toml.Decode(string(data), &c); err != nil {
 		c = Default()
 		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
+		c.ProjectDotsEnabled = false
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.MaxParallelRuns < 1 {

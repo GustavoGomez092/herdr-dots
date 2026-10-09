@@ -226,14 +226,21 @@ func (e *Engine) askable(paneID, slug string) (dots.Dot, error) {
 		return dots.Dot{}, fmt.Errorf("%w '%s'; attached: %s", ErrNotAttached, slug, strings.Join(names, ", "))
 	}
 	e.mu.Lock()
-	d, known := e.dots[slug]
+	d, known := e.paneDotLocked(paneID, slug)
 	var err error
 	if known {
 		err = e.askBlockedLocked(paneID, d, da.Paused)
 	}
+	untrusted := !known && e.untrustedAtLocked(e.paneRoots[paneID], slug)
 	e.mu.Unlock()
+	if untrusted {
+		return dots.Dot{}, fmt.Errorf("%w '%s': %w: the developer reviews and trusts it in the library first", ErrNotAttached, dots.DisplaySlug(slug), ErrUntrusted)
+	}
 	if !known {
-		return dots.Dot{}, fmt.Errorf("%w '%s': its dot file is missing or invalid", ErrNotAttached, slug)
+		return dots.Dot{}, fmt.Errorf("%w '%s': its dot file is missing or invalid", ErrNotAttached, dots.DisplaySlug(slug))
+	}
+	if !d.Capabilities.MCP {
+		return d, fmt.Errorf("%w '%s': it is not available to the MCP server (capabilities.mcp = false; imported and project dots start that way)", ErrNotAttached, dots.DisplaySlug(slug))
 	}
 	return d, err
 }
@@ -450,9 +457,9 @@ func (e *Engine) ListDots(paneID string) (ipc.DotsResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, da := range att.Dots {
-		d, ok := e.dots[da.Slug]
+		d, ok := e.paneDotLocked(paneID, da.Slug)
 		if !ok {
-			d = dots.Dot{Slug: da.Slug, Name: da.Slug}
+			d = dots.Dot{Slug: da.Slug, Name: dots.DisplaySlug(da.Slug)}
 		}
 		st := e.status[key{paneID, da.Slug}]
 		if st == "" {
@@ -461,7 +468,13 @@ func (e *Engine) ListDots(paneID string) (ipc.DotsResult, error) {
 		if da.Paused && st != view.StatusError {
 			st = view.StatusPaused
 		}
-		out.Dots = append(out.Dots, ipc.DotInfo{Slug: da.Slug, Name: d.Name, PurposeSummary: purposeSummary(d.Purpose),
+		summary := purposeSummary(d.Purpose)
+		if !ok || !d.Capabilities.MCP {
+			// Phase 9: ask_dot would refuse it (capabilities.mcp off, or an
+			// untrusted project dot): say so, and show none of its text.
+			st, summary = dotUnavailable, ""
+		}
+		out.Dots = append(out.Dots, ipc.DotInfo{Slug: da.Slug, Name: d.Name, PurposeSummary: summary,
 			Mode: string(d.Delivery.Mode), Status: st, Paused: da.Paused || e.pausedAll,
 			Calls: e.d.Usage.Calls(paneID, da.Slug), Budget: d.Budget.MaxCallsPerSession, CostUSD: e.d.Usage.Cost(paneID, da.Slug)})
 	}

@@ -27,6 +27,10 @@ func (e *Engine) flushAuto(paneID string) {
 		}
 		if c.Approved {
 			approved = append(approved, c)
+		} else if e.projectCardStale(paneID, c.Dot) {
+			// Its project dot is untrusted or changed now: never injected
+			// unapproved; it waits in the queue for the developer.
+			_ = e.d.Queue.SetStatus(c.ID, queue.StatusPending)
 		} else {
 			inject = append(inject, c)
 		}
@@ -177,6 +181,9 @@ func (e *Engine) pollLoop() {
 // event in its subscription stream) and flushes auto cards whose guard opened.
 func (e *Engine) poll() {
 	e.maybeReloadConfig()
+	if e.rescanProjects(false) {
+		e.broadcast()
+	}
 	for _, a := range e.d.Attachments.List() {
 		p, err := e.d.Herdr.PaneGet(e.ctx, a.PaneID)
 		if herdr.IsNotFound(err) {
@@ -216,6 +223,9 @@ func (e *Engine) dropPane(paneID string) {
 	e.gens[paneID]++
 	delete(e.idle, paneID)               // collected research for a closed pane is dropped (idle.go)
 	waiting := e.d.Queue.Pending(paneID) // Phase 9: OrphanPane orphans exactly these
+	delete(e.paneRoots, paneID)          // a reused pane id is resolved again
+	delete(e.paneSeen, paneID)
+	e.pruneLocked(e.now()) // its checkout, if no other pane is in it
 	orphaned, oerr := e.d.Queue.OrphanPane(paneID)
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)

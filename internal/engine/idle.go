@@ -181,7 +181,7 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 	paneCalls := e.d.Usage.PaneCalls(a.PaneID) + e.inFlightLocked(a.PaneID, key{})
 	gen := e.gens[a.PaneID] // the attachment these runs are for
 	for _, da := range a.Dots {
-		d, ok := e.dots[da.Slug]
+		d, ok := e.paneDotLocked(a.PaneID, da.Slug)
 		if !ok || !d.Research.Enabled {
 			continue
 		}

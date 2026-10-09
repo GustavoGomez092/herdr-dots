@@ -343,7 +343,7 @@ func (e *Engine) recordOutcome(c queue.Card, kind, orig string, edited, secret b
 		return
 	}
 	e.mu.Lock()
-	d, known := e.dots[c.Dot]
+	d, known := e.cardDotLocked(c.PaneID, c.Dot)
 	e.mu.Unlock()
 	if known && !d.Memory.Enabled {
 		return

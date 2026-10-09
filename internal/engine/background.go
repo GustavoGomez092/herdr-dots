@@ -300,6 +300,12 @@ func (e *Engine) runBackground(j bgJob) {
 		e.d.Logf("dot %s: %s skipped (%s on %s)", j.dot.Slug, j.label, ReasonSessionBudget, j.paneID)
 		return
 	}
+	// Fresh trust (Phase 9): an untrusted or changed project dot never runs in
+	// the background either; its slot stays unclaimed.
+	if e.projectDotGone(j.dot) {
+		e.d.Logf("dot %s: %s skipped (its project file changed or lost its trust)", j.dot.Slug, j.label)
+		return
+	}
 	// A scheduled slot is claimed (across sessions) only now, after every gate:
 	// a slot skipped for a budget stays unclaimed, so a later catch-up may run it.
 	if j.claim != nil && !j.claim() {

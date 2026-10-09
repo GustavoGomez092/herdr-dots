@@ -55,7 +55,7 @@ func (e *Engine) recordCouncilOutcomes(c queue.Card, kind string, edited bool) {
 	e.mu.Lock()
 	known := make(map[string]dots.Dot, len(c.Parts))
 	for _, p := range c.Parts {
-		if d, ok := e.dots[p.Dot]; ok {
+		if d, ok := e.cardDotLocked(c.PaneID, p.Dot); ok {
 			known[p.Dot] = d
 		}
 	}

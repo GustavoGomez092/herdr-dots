@@ -17,11 +17,13 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/engine"
 	"herdr-dots/internal/herdr"
+	"herdr-dots/internal/history"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/lockfile"
 	"herdr-dots/internal/patchstore"
 	"herdr-dots/internal/paths"
 	"herdr-dots/internal/platform"
+	"herdr-dots/internal/projectdots"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
@@ -159,30 +161,39 @@ func rotateLog(path string) {
 }
 
 func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(string, ...any)) (*engine.Engine, error) {
-	q, err := queue.Open(p.QueueFile())
+	d, err := engineDeps(p, hc, cfg, logf)
 	if err != nil {
 		return nil, err
+	}
+	return engine.New(d), nil
+}
+
+// engineDeps opens the session's stores and wires every engine dependency.
+func engineDeps(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(string, ...any)) (engine.Deps, error) {
+	q, err := queue.Open(p.QueueFile())
+	if err != nil {
+		return engine.Deps{}, err
 	}
 	atts, err := state.OpenAttachments(p.AttachmentsFile())
 	if err != nil {
-		return nil, err
+		return engine.Deps{}, err
 	}
 	usage, err := state.OpenUsage(p.UsageFile())
 	if err != nil {
-		return nil, err
+		return engine.Deps{}, err
 	}
 	feed, err := state.OpenFeed(p.FeedFile())
 	if err != nil {
-		return nil, err
+		return engine.Deps{}, err
 	}
 	daily, err := state.OpenDaily(p.DailyFile()) // shared by every Herdr session
 	if err != nil {
-		return nil, err
+		return engine.Deps{}, err
 	}
 	daily.Logf = logf
 	home, _ := os.UserHomeDir()
 	backends := newBackendSet(p, configLoaderLogged(p.ConfigFile(), logf), logf)
-	return engine.New(engine.Deps{
+	return engine.Deps{
 		Herdr:   hc,
 		Backend: backends.Get,
 		Reader: func(a state.Attachment) transcript.Reader {
@@ -204,13 +215,25 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
 		Memory:         memoryStoreFor(p, cfg, logf),
 		ResolveProject: resolveProject,
 
+		History:     historyStoreFor(p),
+		SessionKey:  paths.SessionKey(p.SocketPath),
+		Trust:       &projectdots.TrustStore{Path: p.TrustFile()},
+		ResolveRoot: resolveProject,
+
 		Daily: daily,                          // proactive dots: daily runs and dollar budget
 		Inbox: queue.OpenInbox(p.InboxFile()), // scheduled results for unattached projects
 
 		Patches:      patchstore.Open(p.PatchesDir()),
 		WorktreesDir: p.WorktreesDir(),
 		Git:          worktree.Git{},
-	}), nil
+	}, nil
+}
+
+// historyStoreFor opens per-dot history (Phase 9). Excerpts are redacted with
+// credentials.Redact, the history store's default (credentials.Redact is
+// variadic, so it can't be assigned to Store.Redact).
+func historyStoreFor(p paths.Paths) *history.Store {
+	return history.Open(p.HistoryDir())
 }
 
 func serveEngine(p paths.Paths) error {
