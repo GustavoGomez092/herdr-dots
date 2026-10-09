@@ -36,7 +36,7 @@ func (m Mode) Next() Mode {
 }
 
 var (
-	BackendKinds = []string{"claude-cli", "codex-cli"}
+	BackendKinds = []string{"claude-cli", "codex-cli", KindAnthropicAPI, KindOpenAIAPI, KindOpenRouter, KindOllama}
 	Verbosities  = []string{"terse", "normal", "detailed"}
 	Colors       = []string{"red", "green", "yellow", "blue", "magenta", "cyan", "white"}
 )
@@ -59,6 +59,14 @@ type BackendSpec struct {
 	Kind  string   `toml:"kind"`
 	Model string   `toml:"model"`
 	Args  []string `toml:"args"`
+
+	// API backends (Phase 4); zero values mean provider defaults and are
+	// omitted from the file.
+	Effort        string `toml:"effort,omitempty"`        // anthropic-api, openai-api
+	MaxTokens     int    `toml:"max_tokens,omitzero"`     // API kinds; 0 = 4096
+	BaseURL       string `toml:"base_url,omitempty"`      // ollama, openrouter
+	ContextWindow int    `toml:"context_window,omitzero"` // ollama; 0 = 16384
+	Fallbacks     string `toml:"fallbacks,omitempty"`     // anthropic-api: default | off
 }
 
 type DeliverySpec struct {
@@ -78,7 +86,8 @@ type ContextSpec struct {
 }
 
 type BudgetSpec struct {
-	MaxCallsPerSession int `toml:"max_calls_per_session"`
+	MaxCallsPerSession int     `toml:"max_calls_per_session"`
+	MaxUSDPerSession   float64 `toml:"max_usd_per_session,omitzero"` // 0 = off
 }
 
 // ReservedName and ReservedSlug belong to council mode: council cards use
@@ -171,5 +180,6 @@ func (d Dot) Validate() error {
 		add("budget max_calls_per_session must be >= 1")
 	}
 	errs = append(errs, d.Memory.validate()...)
+	errs = append(errs, validateAPI(d)...)
 	return errors.Join(errs...)
 }
