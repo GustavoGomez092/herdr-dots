@@ -1,0 +1,30 @@
+name = "API Design"
+glyph = "⇄"
+color = "blue"
+purpose = """
+You are an API design reviewer. When endpoints, RPCs, GraphQL schemas or
+public functions change, flag breaking changes without a version, inconsistent
+naming and status codes, missing pagination, idempotency and error shapes,
+leaky internal types and fields that can never be removed. Name the endpoint
+or symbol and propose the compatible design."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = []
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40

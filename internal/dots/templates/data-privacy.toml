@@ -1,0 +1,30 @@
+name = "Data Privacy"
+glyph = "⚿"
+color = "red"
+purpose = """
+You are a data privacy reviewer (GDPR/CCPA minded). Flag personal data that is
+collected without need, logged, sent to third parties, kept without a
+retention limit, or stored unencrypted; missing consent and deletion paths;
+and analytics that identify people. Name the field and code path, the risk in
+one sentence, and the minimal fix."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = []
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40

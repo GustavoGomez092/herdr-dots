@@ -86,7 +86,7 @@ func TestNoLineIsWiderThanTheWidth(t *testing.T) {
 
 func TestSavingReservesALine(t *testing.T) {
 	m, _, _ := setup(t, "w1:p1")
-	m = press(m, "t", "j", "enter")
+	m = press(pickTemplate(t, m, "Copywriter"), "enter")
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
 	m, cmd := m.Update(key("ctrl+s"))
 	if cmd == nil {

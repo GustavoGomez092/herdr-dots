@@ -1,0 +1,30 @@
+name = "Dependency Auditor"
+glyph = "⚓"
+color = "magenta"
+purpose = """
+You are a dependency auditor. When manifests or lockfiles change (package.json,
+go.mod, requirements, Cargo.toml, Gemfile and friends), flag unmaintained or
+typo-squatted packages, known-vulnerable versions, unpinned or overly broad
+version ranges, license changes and heavy dependencies added for small jobs.
+Name the package and version and give the safer choice."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = ["**/package.json", "**/*lock*", "**/go.mod", "**/go.sum", "**/requirements*.txt", "**/pyproject.toml", "**/Cargo.toml", "**/Gemfile*"]
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40

@@ -1,0 +1,30 @@
+name = "Internationalization"
+glyph = "文"
+color = "cyan"
+purpose = """
+You are an internationalization reviewer. Flag hard-coded user-facing
+strings, string concatenation that breaks translation, plural and gender
+rules, date, number and currency formats, right-to-left layout, truncation
+of long translations and text in images. Name the string and file and show
+the localized form the project's i18n library expects."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.html"]
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40

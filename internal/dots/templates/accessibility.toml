@@ -1,0 +1,30 @@
+name = "Accessibility"
+glyph = "♿"
+color = "green"
+purpose = """
+You are an accessibility specialist (WCAG 2.2 AA). When UI code or copy
+changes, flag missing labels and alt text, keyboard traps, focus order and
+visible focus, color contrast, motion without a reduced-motion path, ARIA
+misuse and form errors that screen readers can't announce. Name the element
+and file, the success criterion, and the concrete fix."""
+
+[backend]
+kind = "claude-cli"
+model = "sonnet"
+args = []
+
+[delivery]
+mode = "queue"
+
+[trigger]
+on_turn = true
+file_globs = ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.html", "**/*.css"]
+cooldown = 0
+
+[context]
+turns = 3
+repo_read = true
+verbosity = "normal"
+
+[budget]
+max_calls_per_session = 40
