@@ -37,9 +37,19 @@ type Inbox struct {
 }
 
 type inboxFile struct {
-	Next  int    `json:"next"`
-	Cards []Card `json:"cards"`
+	Version int    `json:"version"` // missing in files before 1.0: version 1
+	Next    int    `json:"next"`
+	Cards   []Card `json:"cards"`
 }
+
+// inboxVersion is the inbox.json schema version this binary reads and writes.
+const inboxVersion = 1
+
+// ErrInboxVersion: inbox.json was written by a newer herdr-dots, possibly in
+// another session after this process started. Every access refuses it under
+// the lock, so it is never rewritten in this version's shape (which would
+// drop what the newer version added) and its cards stay where they are.
+var ErrInboxVersion = fmt.Errorf("inbox.json: %w", fsutil.ErrNewerVersion)
 
 func OpenInbox(path string) *Inbox { return &Inbox{path: path} }
 
@@ -62,6 +72,8 @@ func (b *Inbox) exists() bool {
 // back (atomically, 0600) when fn reports a change. With recoverCorrupt (Put
 // only) an unreadable file is moved aside as inbox.json.corrupt-<ts> and the
 // call carries on with an empty inbox, so a new paid result is never dropped.
+// A file a newer herdr-dots wrote is refused (ErrInboxVersion), never moved
+// aside or rewritten.
 func (b *Inbox) locked(recoverCorrupt bool, fn func(f *inboxFile) (bool, error)) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -84,6 +96,12 @@ func (b *Inbox) locked(recoverCorrupt bool, fn func(f *inboxFile) (bool, error))
 	case err != nil:
 		return err
 	default:
+		var head struct {
+			Version int `json:"version"`
+		}
+		if json.Unmarshal(data, &head) == nil && head.Version > inboxVersion {
+			return fmt.Errorf("%w (version %d)", ErrInboxVersion, head.Version)
+		}
 		if err := json.Unmarshal(data, &f); err != nil {
 			if !recoverCorrupt {
 				return fmt.Errorf("inbox %s: %w", b.path, err)
@@ -100,6 +118,7 @@ func (b *Inbox) locked(recoverCorrupt bool, fn func(f *inboxFile) (bool, error))
 	if err != nil || !changed {
 		return err
 	}
+	f.Version = inboxVersion
 	data, err = json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err

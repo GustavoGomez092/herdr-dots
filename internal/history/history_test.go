@@ -153,7 +153,9 @@ func TestCorruptLineIsSkippedAndCounted(t *testing.T) {
 	s := hstore(t)
 	mustAppend(t, s, runRec("security", KindReview, state.OutcomeFlagged, "s/1", time.Hour))
 	f, _ := os.OpenFile(filepath.Join(s.Dir, "security.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
-	f.WriteString("{not json\n{\"t\":\"weird\"}\n")
+	// {"t":""} has no type at all; an unknown non-empty type is a newer
+	// record, not an unreadable one (TestUnknownRecordTypeIsSkippedNotCounted).
+	f.WriteString("{not json\n{\"t\":\"\"}\n")
 	f.Close()
 	mustAppend(t, s, runRec("security", KindReview, state.OutcomePass, "", time.Minute))
 	st, err := s.Stats("security", hNow, 24*time.Hour)

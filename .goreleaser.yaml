@@ -1,0 +1,48 @@
+# GoReleaser config for Herdr Dots. The release workflow
+# (.github/workflows/release.yml) runs it; Phase 10 never publishes.
+# Archive names must match scripts/build.sh and build.ps1:
+#   herdr-dots_<VERSION>_<os>_<arch>.tar.gz (.zip on Windows)
+# The inputs come from release/ASSET_ENV, so a rebuild of the same source
+# gives byte-identical archives (the publish job checks that).
+version: 2
+project_name: herdr-dots
+
+builds:
+  - id: herdr-dots
+    main: ./cmd/herdr-dots
+    binary: herdr-dots
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - -s -w -X herdr-dots/internal/version.Source=release -X herdr-dots/internal/version.Commit={{ .Env.ASSET_COMMIT }}
+    mod_timestamp: "{{ .Env.ASSET_TIME }}"
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Env.HERDR_DOTS_VERSION }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - none* # the binary only
+    builds_info:
+      mtime: "{{ .Env.ASSET_TIME }}"
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ .Env.HERDR_DOTS_VERSION }}"
+
+changelog:
+  disable: true
+
+release:
+  disable: true # the workflow drafts the release with gh after signing
