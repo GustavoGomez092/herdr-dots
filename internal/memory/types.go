@@ -102,6 +102,11 @@ type Entry struct {
 	LastUsedAt time.Time `json:"last_used_at,omitzero"`
 	Uses       int       `json:"uses"`
 	Evidence   Evidence  `json:"evidence"`
+
+	// From names the dot pack an imported entry came from (Phase 9,
+	// ImportPack). A Source import entry without it was restored from the
+	// developer's own export (`memory import`).
+	From string `json:"from,omitempty"`
 }
 
 // Ref names one entry. Ids are unique within one scope file only, so a dot

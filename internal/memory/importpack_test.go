@@ -3,10 +3,14 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/lockfile"
 )
 
 func packEntries() []Entry {
@@ -251,8 +255,9 @@ func TestDismissingACardTakesOverAnImportedProposal(t *testing.T) {
 	}
 }
 
-// Imports never push out local memory: in a full scope an import archives
-// only older imports, never an active entry and never a local proposal.
+// Imports never push out memory: in a full scope an import archives nothing
+// on arrival (not even an earlier import of the same pack), and Added counts
+// exactly the entries left proposed. MaxPendingImports bounds the overflow.
 func TestImportsNeverPushOutLocalMemory(t *testing.T) {
 	s := testStore(t)
 	s.Now = clock()
@@ -280,14 +285,133 @@ func TestImportsNeverPushOutLocalMemory(t *testing.T) {
 			t.Fatalf("an import archived a local proposal: %+v", got)
 		}
 	}
-	for _, e := range list(t, s, pid, Filter{Scope: ScopeProject, Statuses: []Status{StatusArchived}}) {
-		if e.Source != SourceImport {
-			t.Fatalf("archived %+v", e)
+	if arch := list(t, s, pid, Filter{Scope: ScopeProject, Statuses: []Status{StatusArchived}}); len(arch) != 0 {
+		t.Fatalf("archived %+v", arch)
+	}
+	imp := list(t, s, pid, Filter{Scope: ScopeProject, Statuses: []Status{StatusProposed}})
+	n := 0
+	for _, e := range imp {
+		if e.Source == SourceImport {
+			n++
 		}
 	}
-	// The newest import stays (the developer sees what was just imported).
-	if es := list(t, s, pid, Filter{Scope: ScopeProject, Query: distinct(104)}); len(es) != 1 || es[0].Status != StatusProposed {
-		t.Fatalf("newest import %+v", es)
+	if n != 5 {
+		t.Fatalf("%d imports proposed, want 5: %+v", n, imp)
+	}
+}
+
+// Past MaxPendingImports a full scope refuses the rest of a pack: Rejected
+// says so, and nothing (import or local) is archived to make room.
+func TestImportsPastTheCapAreRefusedNotArchived(t *testing.T) {
+	s := testStore(t)
+	s.Limits.MaxProject = 3
+	for i := range 3 {
+		mustAdd(t, s, pid, Entry{Scope: ScopeProject, Kind: KindConvention, Text: distinct(i), Source: SourceModel})
+	}
+	var in []Entry
+	for i := range MaxPendingImports + 2 {
+		in = append(in, Entry{Scope: ScopeProject, Kind: KindNote, Text: distinct(100 + i)})
+	}
+	res, err := s.ImportPack(pid, "security", in)
+	if err != nil || res.Added != MaxPendingImports || len(res.Rejected) != 2 {
+		t.Fatalf("added %d rejected %v err %v", res.Added, res.Rejected, err)
+	}
+	for _, why := range res.Rejected {
+		if !strings.Contains(why, ErrTooManyProposals.Error()) {
+			t.Fatalf("rejection %q", why)
+		}
+	}
+	if arch := list(t, s, pid, Filter{Scope: ScopeProject, Statuses: []Status{StatusArchived}}); len(arch) != 0 {
+		t.Fatalf("archived %d entries", len(arch))
+	}
+	if live := list(t, s, pid, Filter{Scope: ScopeProject}); len(live) != 3+MaxPendingImports {
+		t.Fatalf("%d live entries", len(live))
+	}
+}
+
+// A pack holds the project's memory lock once for all its writes: a lock
+// held elsewhere fails the whole import with ErrLocked and stores nothing.
+func TestImportPackIsAllOrNothingUnderTheLock(t *testing.T) {
+	s := testStore(t)
+	s.Limits.LockTimeout = 100 * time.Millisecond
+	dir := filepath.Join(s.Dir, pid)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	held, err := lockfile.TryLock(filepath.Join(dir, "memory.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.ImportPack(pid, "security", packEntries())
+	held.Release()
+	if !errors.Is(err, ErrLocked) || res.Added != 0 || res.Updated != 0 {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if es := list(t, s, pid, Filter{Statuses: []Status{StatusActive, StatusProposed, StatusArchived}}); len(es) != 0 {
+		t.Fatalf("partial import %+v", es)
+	}
+}
+
+// Writes are batched per scope file: a file that can't be written (here a
+// newer version) gets none of the pack, the other file all of its part, and
+// the counts say only what was stored.
+func TestImportPackWritesEachScopeFileWhole(t *testing.T) {
+	s := testStore(t)
+	dots := filepath.Join(s.Dir, pid, "dots")
+	if err := os.MkdirAll(dots, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	newer := []byte(`{"version": 99, "entries": []}`)
+	if err := os.WriteFile(filepath.Join(dots, "security.json"), newer, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in := []Entry{
+		{Scope: ScopeProject, Kind: KindDecision, Text: "Sessions live in Redis."},
+		{Scope: ScopeDot, Kind: KindNote, Text: "A dot note."},
+		{Scope: ScopeProject, Kind: KindDecision, Text: "Queues live in SQS."},
+		{Scope: ScopeDot, Kind: KindNote, Text: "Another dot note."},
+	}
+	res, err := s.ImportPack(pid, "security", in)
+	if !errors.Is(err, ErrVersion) || res.Added != 2 {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if es := list(t, s, pid, Filter{Scope: ScopeProject}); len(es) != 2 {
+		t.Fatalf("project entries %+v", es)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dots, "security.json")); string(got) != string(newer) {
+		t.Fatalf("newer file touched: %s", got)
+	}
+}
+
+// Taking over an imported entry, the outcome brings the developer's card
+// text and drops the pack's paths, so suppression matches what they saw.
+func TestOutcomeTakeoverAdoptsTheCardText(t *testing.T) {
+	s := testStore(t)
+	in := []Entry{{Scope: ScopeDot, Kind: KindDismissed, Text: "CSRF tokens on /admin are intentionally omitted here.", Paths: []string{"admin/**"}}}
+	if _, err := s.ImportPack(pid, "security", in); err != nil {
+		t.Fatal(err)
+	}
+	card := "CSRF tokens on /admin are intentionally omitted."
+	if err := s.RecordOutcome(pid, Outcome{Dot: "security", Card: "4", Kind: OutcomeDismissed, Body: card}); err != nil {
+		t.Fatal(err)
+	}
+	es := list(t, s, pid, Filter{Scope: ScopeDot, Dot: "security"})
+	if len(es) != 1 || es[0].Source != SourceOutcome || es[0].Text != card || len(es[0].Paths) != 0 {
+		t.Fatalf("entries %+v", es)
+	}
+}
+
+// A pack import records the pack it came from; a restore (Phase 2's
+// `memory import`, Source import too) has none.
+func TestImportPackRecordsWhereItCameFrom(t *testing.T) {
+	s := testStore(t)
+	if _, err := s.ImportPack(pid, "security", packEntries()); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range list(t, s, pid, Filter{}) {
+		if e.From != "security" {
+			t.Fatalf("entry %+v", e)
+		}
 	}
 }
 

@@ -439,8 +439,13 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		// repeats, so a model must not keep a sent finding from counting by
 		// writing it first. Never the reverse, and never over a user entry.
 		// The same holds for an imported entry (Phase 9): the developer's own
-		// verdict on a card is theirs, not someone else's shared conclusion.
+		// verdict on a card is theirs, not someone else's shared conclusion,
+		// so it keeps the card's words and none of the pack's paths:
+		// suppression then matches what the developer actually saw.
 		if e.Source == SourceOutcome && (x.Source == SourceModel || x.Source == SourceImport) && x.Scope == ScopeDot && x.Dot == e.Dot {
+			if x.Source == SourceImport {
+				x.Text, x.Paths = e.Text, nil
+			}
 			x.Source = SourceOutcome
 			if e.Evidence != (Evidence{}) {
 				x.Evidence = e.Evidence
@@ -521,8 +526,9 @@ func (s *Store) capFor(sc Scope) int {
 //
 // Imported proposals (Phase 9) are someone else's unreviewed conclusions:
 // among proposals they go right after research, before this project's own,
-// and a new import makes room only by archiving older imports. Imports are
-// capped per scope file (MaxPendingImports) instead.
+// and a new import archives nothing at all, not even an older import (one
+// pack must not collapse to its last entry). Imports are capped per scope
+// file (MaxPendingImports) instead.
 func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) int {
 	if limit <= 0 {
 		return 0
@@ -553,7 +559,7 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 			cands = append(cands, i)
 		}
 	}
-	if live <= limit {
+	if live <= limit || keepImport {
 		return 0
 	}
 	archive := func(i int) { f.Entries[i].Status, f.Entries[i].UpdatedAt = StatusArchived, now }
@@ -575,9 +581,6 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 		}
 		if keepResearch && !isResearchKind(f.Entries[i].Kind) {
 			break // research never pushes out an unreviewed non-research proposal
-		}
-		if keepImport && f.Entries[i].Source != SourceImport {
-			continue // an import never pushes out this project's own proposals
 		}
 		archive(i)
 		n++
