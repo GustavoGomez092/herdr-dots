@@ -122,12 +122,20 @@ func calls(n int) string {
 // base name, so "**/*.tsx" and "*.tsx" both match "/repo/web/app.tsx".
 func globsMatch(globs []string, turns []transcript.Turn) bool {
 	for _, t := range turns {
-		for _, p := range t.TouchedPaths() {
-			for _, g := range globs {
-				for _, cand := range []string{p, strings.TrimPrefix(p, "/"), filepath.Base(p)} {
-					if ok, _ := doublestar.Match(g, cand); ok {
-						return true
-					}
+		if pathsMatchGlobs(globs, t.TouchedPaths()) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathsMatchGlobs is globsMatch for a plain path list (a commit's files).
+func pathsMatchGlobs(globs, paths []string) bool {
+	for _, p := range paths {
+		for _, g := range globs {
+			for _, cand := range []string{p, strings.TrimPrefix(p, "/"), filepath.Base(p)} {
+				if ok, _ := doublestar.Match(g, cand); ok {
+					return true
 				}
 			}
 		}

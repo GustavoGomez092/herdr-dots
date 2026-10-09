@@ -41,11 +41,24 @@ var (
 // Git runs the git binary. Every command gets -c core.hooksPath=<null
 // device> (no hook ever runs), core.fsmonitor=false (no fsmonitor program
 // runs), gc.auto=0 and maintenance.auto=false (no background maintenance),
-// and a cleaned environment.
+// diff.submodule=short (a diff never starts a child `git diff` inside a
+// submodule, which would read that submodule's own diff.external and
+// textconv drivers; ruling P8-R13), protocol.allow=never, and a cleaned
+// environment. The environment drops every GIT_* variable and sets
+// GIT_ALLOW_PROTOCOL=none, which overrides every protocol.*.allow key a
+// repository may set (protocol.allow=never alone is only a default that
+// protocol.<name>.allow=always beats), and GIT_NO_LAZY_FETCH=1: no transport
+// starts, so no upload-pack or ext:: program from the repository's config
+// runs, even from a lazy fetch on a git too old for GIT_NO_LAZY_FETCH.
 type Git struct {
 	Bin     string          // "" = "git"
 	Timeout time.Duration   // per command; 0 = DefaultTimeout
 	Environ func() []string // nil = os.Environ
+
+	// MaxOutput caps the stdout bytes kept from one command; the rest is
+	// read and dropped, so git never blocks and nothing large is buffered.
+	// 0 = no cap.
+	MaxOutput int
 
 	// NoFilters names the filter drivers to switch off on every command
 	// (filter.<n>.clean/smudge/process emptied, required=false). Set it
@@ -150,6 +163,20 @@ func (e *CmdError) Error() string {
 
 func (e *CmdError) Unwrap() error { return e.Err }
 
+// capWriter keeps the first max bytes written to it and drops the rest,
+// always reporting a full write so the command runs to its end.
+type capWriter struct {
+	buf *bytes.Buffer
+	max int
+}
+
+func (w *capWriter) Write(p []byte) (int, error) {
+	if room := w.max - w.buf.Len(); room > 0 {
+		w.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
 // Run runs git in dir and returns its trimmed stdout. env adds variables
 // after the cleaned environment (later values win).
 func (g Git) Run(ctx context.Context, dir string, env []string, args ...string) (string, error) {
@@ -172,6 +199,8 @@ func (g Git) OutputIn(ctx context.Context, dir string, env []string, stdin []byt
 		"-c", "gc.auto=0",
 		"-c", "maintenance.auto=false",
 		"-c", "core.quotePath=false",
+		"-c", "diff.submodule=short",
+		"-c", "protocol.allow=never",
 	}
 	full = append(full, args...)
 	// platform.CommandContext, not exec: on Windows it resolves git.exe on
@@ -191,6 +220,9 @@ func (g Git) OutputIn(ctx context.Context, dir string, env []string, stdin []byt
 	cmd.WaitDelay = 500 * time.Millisecond
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if g.MaxOutput > 0 {
+		cmd.Stdout = &capWriter{buf: &stdout, max: g.MaxOutput}
+	}
 	platform.HideWindow(cmd)
 	err = cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -253,6 +285,12 @@ func gitEnv(env []string) []string {
 		"GIT_OPTIONAL_LOCKS=0",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_NO_LAZY_FETCH=1",
+		// No transport at all: GIT_ALLOW_PROTOCOL overrides every
+		// protocol.*.allow key (a repository's protocol.file.allow=always or
+		// protocol.ext.allow=always included), and the child of a lazy fetch
+		// inherits it. "none" names no protocol; an empty value is unreliable
+		// in Windows environment blocks.
+		"GIT_ALLOW_PROTOCOL=none",
 		"GIT_LFS_SKIP_SMUDGE=1",
 		"GIT_LITERAL_PATHSPECS=1",
 		"LC_ALL=C",
