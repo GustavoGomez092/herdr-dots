@@ -19,6 +19,8 @@ var claudeDenied = [][]string{
 	{"--disallowed-tools", "Read"},
 	{"--settings", `{"disableAllHooks":false}`},
 	{"--mcp-config", "x.json"},
+	{"--append-system-prompt-file", "/etc/passwd"},
+	{"--append-system-prompt-file=/etc/passwd"},
 	{"--add-dir", "/"},
 	{"--bare"},
 }

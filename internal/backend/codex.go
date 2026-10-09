@@ -8,9 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/platform"
 )
 
 // CodexCLI runs `codex exec --json` in a read-only sandbox. Codex has no
@@ -39,7 +39,7 @@ func (c CodexCLI) environ() []string {
 }
 
 func (c CodexCLI) Check(context.Context) error {
-	if _, err := exec.LookPath(c.bin()); err != nil {
+	if _, err := platform.LookPath(c.bin()); err != nil {
 		return fmt.Errorf("codex CLI not found on PATH: install it with `npm i -g @openai/codex`")
 	}
 	return nil
@@ -65,6 +65,9 @@ func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
 		return Result{}, err
 	}
 	out, stderr, err := c.Runner.Run(ctx, c.BuildCmd(r))
+	if Preflight(err) {
+		return Result{}, fmt.Errorf("codex: %w", err)
+	}
 	if ctx.Err() != nil {
 		return Result{}, fmt.Errorf("codex timed out: %w", ctx.Err())
 	}
