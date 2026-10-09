@@ -3,13 +3,14 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
 
 func TestLoadMissingFileGivesDefaults(t *testing.T) {
 	c, err := Load(filepath.Join(t.TempDir(), "nope.toml"))
-	if err != nil || c != Default() {
+	if err != nil || !reflect.DeepEqual(c, Default()) {
 		t.Fatalf("got %+v %v", c, err)
 	}
 }
@@ -42,7 +43,7 @@ func TestLoadBadTOMLReturnsDefaultsWithInjectOffAndError(t *testing.T) {
 	c, err := Load(p)
 	want := Default()
 	want.InjectEnabled, want.MemoryEnabled = false, false
-	if err == nil || c != want {
+	if err == nil || !reflect.DeepEqual(c, want) {
 		t.Fatalf("want defaults with inject and memory off + error, got %+v %v", c, err)
 	}
 }
@@ -79,5 +80,111 @@ func TestCouncilDefaultsAndClamps(t *testing.T) {
 	c, _ = Load(p)
 	if c.Council.MaxMembers != 16 || c.Council.Rounds != 1 {
 		t.Fatalf("clamped %+v", c.Council)
+	}
+}
+
+func TestPhase4SettingsLoad(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	body := `session_budget_usd = 2.5
+tool_deny_globs = ["**/fixtures/private/**", "[bad"]
+[providers.anthropic]
+api_key_env = "WORK_ANTHROPIC"
+[providers.ollama]
+base_url = "http://10.0.0.5:11434"
+[providers.openrouter.extra_headers]
+"X-Title" = "Herdr Dots"
+`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SessionBudgetUSD != 2.5 || c.Provider("anthropic").APIKeyEnv != "WORK_ANTHROPIC" ||
+		c.Provider("ollama").BaseURL != "http://10.0.0.5:11434" || c.Provider("openrouter").ExtraHeaders["X-Title"] != "Herdr Dots" {
+		t.Fatalf("config %+v", c)
+	}
+	if len(c.ToolDenyGlobs) != 1 || c.ToolDenyGlobs[0] != "**/fixtures/private/**" {
+		t.Fatalf("invalid globs are dropped: %v", c.ToolDenyGlobs)
+	}
+	if c.Provider("openai").BaseURL != "" {
+		t.Fatal("absent provider is the zero value")
+	}
+}
+
+func TestNegativeDollarBudgetIsOff(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	_ = os.WriteFile(p, []byte("session_budget_usd = -3\n"), 0o600)
+	if c, _ := Load(p); c.SessionBudgetUSD != 0 {
+		t.Fatalf("got %v", c.SessionBudgetUSD)
+	}
+	if Default().SessionBudgetUSD != 0 {
+		t.Fatal("dollar budgets are off by default")
+	}
+}
+
+func loadBody(t *testing.T, body string) (Config, error) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return Load(p)
+}
+
+func TestAPIKeyEnvMustBeAVariableName(t *testing.T) {
+	c, err := loadBody(t, "[providers.anthropic]\napi_key_env = \"sk-ant-abc123\"\n[providers.openai]\napi_key_env = \"WORK_OPENAI_1\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Provider("anthropic").APIKeyEnv; got != "" {
+		t.Fatalf("literal key not cleared: %q", got)
+	}
+	if got := c.Provider("openai").APIKeyEnv; got != "WORK_OPENAI_1" {
+		t.Fatalf("valid name lost: %q", got)
+	}
+}
+
+func TestProviderBaseURLIsValidated(t *testing.T) {
+	for _, bad := range []string{"ftp://h", "http://user:pw@h", "http://:80", "not a url", "/rel"} {
+		c, err := loadBody(t, "[providers.ollama]\nbase_url = \""+bad+"\"\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.Provider("ollama").BaseURL; got != "" {
+			t.Errorf("%q kept as %q", bad, got)
+		}
+	}
+	c, _ := loadBody(t, "[providers.ollama]\nbase_url = \"https://example.com:8443\"\n")
+	if c.Provider("ollama").BaseURL != "https://example.com:8443" {
+		t.Fatalf("valid url dropped: %q", c.Provider("ollama").BaseURL)
+	}
+}
+
+func TestSecretHeadersAreDropped(t *testing.T) {
+	c, err := loadBody(t, "[providers.openrouter.extra_headers]\n\"Authorization\" = \"Bearer x\"\n\"X-API-Key\" = \"k\"\n\"api-key\" = \"k\"\n\"Proxy-Authorization\" = \"p\"\n\"X-Title\" = \"Herdr Dots\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := c.Provider("openrouter").ExtraHeaders
+	if len(h) != 1 || h["X-Title"] != "Herdr Dots" {
+		t.Fatalf("headers %v", h)
+	}
+}
+
+func TestNonFiniteBudgetIsOff(t *testing.T) {
+	for _, v := range []string{"nan", "inf", "-inf"} {
+		c, _ := loadBody(t, "session_budget_usd = "+v+"\n")
+		if c.SessionBudgetUSD != 0 {
+			t.Errorf("%s -> %v", v, c.SessionBudgetUSD)
+		}
+	}
+}
+
+func TestMalformedConfigLeavesPhase4Defaults(t *testing.T) {
+	c, err := loadBody(t, "session_budget_usd = 5\n[providers.x\n")
+	if err == nil || c.SessionBudgetUSD != 0 || c.Providers != nil || c.ToolDenyGlobs != nil {
+		t.Fatalf("got %+v %v", c, err)
 	}
 }
