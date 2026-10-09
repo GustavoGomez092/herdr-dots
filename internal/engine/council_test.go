@@ -14,6 +14,7 @@ import (
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/council"
+	"herdr-dots/internal/delivery"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/herdr/herdrtest"
@@ -556,6 +557,40 @@ func TestCouncilDeliveryIsSkippedByEveryDot(t *testing.T) {
 				t.Fatalf("no dot may review the turn a council started: %d new calls", cb.total()-before)
 			}
 		})
+	}
+}
+
+// Final review item 8: "a" (send all) can deliver a dot card and a council
+// card in one prompt. That turn carries both prefixes and must count as from
+// every dot, plain or in Claude Code's <pasted_content> wrapper.
+func TestMixedDotAndCouncilDeliveryIsFromEveryDot(t *testing.T) {
+	text := delivery.Format([]queue.Card{
+		{Dot: "security", DotName: "Security", Glyph: "◆", Body: "JWT in localStorage."},
+		{Kind: queue.KindCouncil, Dot: "council", DotName: transcript.CouncilName, Glyph: transcript.CouncilGlyph, Body: goodDigest},
+	})
+	if !strings.HasPrefix(text, "[◆ Security dot] ") || !strings.Contains(text, "\n\n[⊕ Council dot] ## Must fix") {
+		t.Fatalf("delivered text %q", text)
+	}
+	for _, wrapped := range []bool{false, true} {
+		seen := text
+		if wrapped {
+			seen = claudeWrap(text)
+		}
+		tr := transcript.Turn{Index: 3, User: seen, FromDots: transcript.FromDots(seen)}
+		if len(tr.FromDots) != 2 {
+			t.Fatalf("wrapped=%v: FromDots = %v, want Security and Council", wrapped, tr.FromDots)
+		}
+		for _, name := range []string{"Security", "Frontend", "Copy"} {
+			d := dot(name, dots.ModeQueue)
+			if dec := Decide(FilterInput{Dot: d, NewTurns: []transcript.Turn{tr}, PaneBudget: 100}); dec.Run || dec.Reason != ReasonFromDot {
+				t.Errorf("wrapped=%v: %s must skip the turn, got %+v", wrapped, name, dec)
+			}
+			obs := dot(name, dots.ModeObserve)
+			obs.Memory.EveryTurns = 1
+			if DecideMemory(MemoryInput{Dot: obs, NewTurns: []transcript.Turn{tr}, MemoryEnabled: true, PaneBudget: 100}) {
+				t.Errorf("wrapped=%v: %s must not start a memory pass on it", wrapped, name)
+			}
+		}
 	}
 }
 
