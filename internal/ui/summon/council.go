@@ -247,12 +247,12 @@ func questionWidth(termWidth int) int {
 // visible in avail lines, leaving room for the "more" markers. height 0 (size
 // unknown) shows everything.
 func rowWindow(n, cursor, avail, height int) (from, to int) {
-	if height <= 0 || n <= avail {
+	if n <= 0 || height <= 0 || n <= avail {
 		return 0, n
 	}
 	size := max(1, avail-2) // two lines reserved for the markers
 	from = max(0, min(cursor-size/2, n-size))
-	return from, from + size
+	return from, min(n, from+size)
 }
 
 func moreMarker(arrow string, n int) string {

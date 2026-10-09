@@ -346,3 +346,20 @@ func TestCouncilPopupDropsAStalePreflightButKeepsTicks(t *testing.T) {
 		t.Fatalf("ticks are kept:\n%s", m.View())
 	}
 }
+
+func TestNoDotsInATinyWindowDoesNotPanic(t *testing.T) {
+	empty := SnapshotMsg(view.Snapshot{Panes: []view.Pane{{PaneID: "w1:p1"}}})
+	for h := 1; h <= 9; h++ {
+		for name, start := range map[string]tea.Model{
+			"council": NewCouncil("w1:p1", &fakeCaller{}),
+			"list":    New("w1:p1", &fakeCaller{}),
+		} {
+			m, _ := start.Update(tea.WindowSizeMsg{Width: 60, Height: h})
+			m, _ = m.Update(empty)
+			v := m.View()
+			if !strings.Contains(v, "COUNCIL") && !strings.Contains(v, "SUMMON A DOT") {
+				t.Errorf("%s at height %d lost its title:\n%s", name, h, v)
+			}
+		}
+	}
+}
