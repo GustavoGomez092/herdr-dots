@@ -703,7 +703,10 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 	// The agent gave up or the engine stopped (or, for a council member, its
 	// council was abandoned): learn and log nothing. A council member that
 	// merely hit the council's deadline still reports its answer.
-	if (o.ask && base.Err() != nil) || (!o.ask && o.sink != nil && !o.memoryPass && errors.Is(base.Err(), context.Canceled)) {
+	gaveUp := func() bool {
+		return (o.ask && base.Err() != nil) || (!o.ask && o.sink != nil && !o.memoryPass && errors.Is(base.Err(), context.Canceled))
+	}
+	if gaveUp() {
 		e.restoreStatus(k, prev)
 		return
 	}
@@ -730,6 +733,13 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		if e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, true) == 0 {
 			e.feed(paneID, d.Slug, turn, state.OutcomePass, "memory pass: nothing new")
 		}
+		return
+	}
+	// Checked again right before the memory ops: touching memory and the
+	// attachment take time, and a cancel that lands meanwhile must still
+	// keep the reply out of memory.
+	if gaveUp() {
+		e.restoreStatus(k, prev)
 		return
 	}
 	e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, false)
