@@ -21,6 +21,17 @@ func hasParts(c queue.Card) bool { return c.Kind == queue.KindCouncil || c.Kind 
 
 // dotStatus is the roster status column: a background run in flight wins,
 // then a memory pass, then the dot's status; a proactive hint follows.
+// oneLine sanitizes single-line model text: controls and bidi removed,
+// newlines and tabs become spaces.
+func oneLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r == '\r' {
+			return ' '
+		}
+		return r
+	}, textutil.SanitizeModelText(s))
+}
+
 func dotStatus(d view.DotState) string {
 	status := d.Status
 	switch {
@@ -34,7 +45,7 @@ func dotStatus(d view.DotState) string {
 		status = style.Sym("◌") + " learning" + style.Sym("…")
 	}
 	if d.Next != "" {
-		status += " · " + textutil.SanitizeModelText(d.Next)
+		status += " · " + oneLine(d.Next)
 	}
 	return status
 }
@@ -43,7 +54,7 @@ func dotStatus(d view.DotState) string {
 // ("commit a1b2c3d", "scheduled Mon 09:00", "2 dots · 42 min").
 func cardWhere(c queue.Card) string {
 	if c.Origin != "" && c.Label != "" {
-		return textutil.SanitizeModelText(c.Label)
+		return oneLine(c.Label)
 	}
 	return fmt.Sprintf("turn %d", c.Turn)
 }
@@ -52,6 +63,9 @@ func cardWhere(c queue.Card) string {
 func todayPart(s view.Snapshot) string {
 	if s.TodayRuns == 0 {
 		return ""
+	}
+	if s.DailyBudgetUSD <= 0 {
+		return fmt.Sprintf("  today $%.2f", s.TodayUSD)
 	}
 	return fmt.Sprintf("  today $%.2f/%.2f", s.TodayUSD, s.DailyBudgetUSD)
 }
@@ -81,12 +95,9 @@ func proactiveOutcome(outcome string) bool {
 
 // proactiveFeed shows a background run's detail ("research: nothing new").
 func proactiveFeed(e state.FeedEntry) (string, bool) {
-	switch e.Outcome {
-	case state.OutcomeResearch, state.OutcomeScheduled, state.OutcomeCommit:
-		if e.Detail != "" {
-			d, _, _ := strings.Cut(e.Detail, " · cost=") // the pane keeps lines short
-			return textutil.SanitizeModelText(d), true
-		}
+	if !proactiveOutcome(e.Outcome) || e.Detail == "" {
+		return "", false
 	}
-	return "", false
+	d, _, _ := strings.Cut(e.Detail, " · cost=") // the pane keeps lines short
+	return oneLine(d), true
 }

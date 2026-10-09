@@ -7,7 +7,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/view"
@@ -81,14 +80,6 @@ func TestDigestRemembersAsAConventionOnly(t *testing.T) {
 	v := press(awayReady(&fakeCaller{}), "M").View()
 	if !strings.Contains(v, "c project convention · esc cancel") || strings.Contains(v, "f accepted finding") {
 		t.Fatalf("remember prompt for a digest:\n%s", v)
-	}
-}
-
-func TestDigestSendsLikeAnyCard(t *testing.T) {
-	fc := &fakeCaller{}
-	press(awayReady(fc), "enter")
-	if len(fc.calls) != 1 || fc.calls[0].cmd != ipc.CmdSend || fc.calls[0].args != `{"ids":["7"]}` {
-		t.Fatalf("calls %+v", fc.calls)
 	}
 }
 

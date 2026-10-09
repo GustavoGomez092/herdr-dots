@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"herdr-dots/internal/queue"
+	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -51,11 +52,20 @@ func (m Model) councilKeys(k tea.KeyMsg) (Model, tea.Cmd, bool) {
 		if m.expandID == c.ID {
 			m.expandID = ""
 		} else {
-			m.expandID = c.ID
+			m.expand(c.ID)
 		}
 		return m, nil, true
 	}
 	return m, nil, false
+}
+
+// expand shows a card's parts and remembers that it was seen.
+func (m *Model) expand(id string) {
+	if m.opened == nil {
+		m.opened = map[string]bool{}
+	}
+	m.opened[id] = true
+	m.expandID = id
 }
 
 // councilProgress is the roster line while a council runs.
@@ -94,28 +104,28 @@ func councilDetail(c queue.Card, expanded bool, body lipgloss.Style) string {
 	}
 	var b strings.Builder
 	if c.Note != "" {
-		b.WriteString(body.Render(style.Dim.Render("  "+c.Note)) + "\n")
+		b.WriteString(body.Render(style.Dim.Render("  "+oneLine(c.Note))) + "\n")
 	}
 	if !expanded {
 		return b.String()
 	}
 	if c.Question != "" {
-		b.WriteString(body.Render(style.Dim.Render("  asked: "+c.Question)) + "\n")
+		b.WriteString(body.Render(style.Dim.Render("  asked: "+oneLine(c.Question))) + "\n")
 	}
 	for _, p := range c.Parts {
 		label := "nothing to add"
 		switch {
 		case p.Failed:
-			label = style.Err.Render("✗ " + p.Body)
+			label = style.Err.Render("✗ " + oneLine(p.Body))
 		case p.Severity != "":
 			label = style.Severity(p.Severity).Render(strings.ToUpper(p.Severity))
 		}
 		if p.Stance != "" {
-			label += " · " + p.Stance
+			label += " · " + oneLine(p.Stance)
 		}
-		b.WriteString(body.Render(fmt.Sprintf("  %s %s  %s", p.Glyph, p.DotName, label)) + "\n")
+		b.WriteString(body.Render(fmt.Sprintf("  %s %s  %s", oneLine(p.Glyph), oneLine(p.DotName), label)) + "\n")
 		if !p.Failed && p.Body != "" {
-			b.WriteString(body.Render("    "+p.Body) + "\n")
+			b.WriteString(body.Render("    "+textutil.SanitizeModelText(p.Body)) + "\n")
 		}
 	}
 	return b.String()

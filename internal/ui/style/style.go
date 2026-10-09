@@ -41,7 +41,7 @@ func ASCII() bool { return ascii }
 // asciiSyms are the stand-ins for the symbols the Dots UIs and the dot
 // templates use.
 var asciiSyms = map[string]string{
-	"◆": "*", "▲": "^", "✎": "~", "⊕": "+", "◌": "o", "★": "*", "▼": "v", "✓": "+", "…": "...",
+	"◆": "*", "▲": "^", "✎": "~", "⊕": "+", "◌": "o", "★": "*", "▼": "v", "✓": "+", "…": "...", "☾": "(",
 }
 
 // Sym returns s unchanged, or with ASCII() on its ASCII stand-in: a known
