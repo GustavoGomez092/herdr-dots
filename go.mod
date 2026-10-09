@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/anthropics/anthropic-sdk-go v1.79.1
 	github.com/bmatcuk/doublestar/v4 v4.10.2
 	github.com/charmbracelet/bubbles v1.0.0
@@ -12,6 +13,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/openai/openai-go/v3 v3.74.0
+	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.37.0
 	golang.org/x/text v0.41.0
 )
@@ -52,6 +54,5 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 )
