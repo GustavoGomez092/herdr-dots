@@ -212,7 +212,22 @@ func (t *tools) fail(tool string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%s: no answer in time; continue without it", tool)
 	}
+	if paneClosed(err) {
+		return errors.New(paneClosedText)
+	}
 	return errors.New(msg)
+}
+
+const paneClosedText = "the pane was closed; the dot can no longer be asked"
+
+// paneClosed reports the engine's ErrPaneClosed, as the sentinel or as the
+// text that crossed the socket: the whole error or its last ": " part.
+func paneClosed(err error) bool {
+	if errors.Is(err, ipc.ErrPaneClosed) {
+		return true
+	}
+	s, want := err.Error(), ipc.ErrPaneClosed.Error()
+	return s == want || strings.HasSuffix(s, ": "+want)
 }
 
 func (t *tools) listDots(ctx context.Context, _ *mcp.CallToolRequest, _ ListDotsIn) (*mcp.CallToolResult, ListDotsOut, error) {

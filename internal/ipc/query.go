@@ -32,6 +32,11 @@ type Querier interface {
 // ErrQueryUnsupported is the error text a handler without Query returns.
 var ErrQueryUnsupported = errors.New("query not supported")
 
+// ErrPaneClosed is the engine's error for an ask whose pane closed. Over the
+// socket only its text arrives: the MCP server matches "pane closed" as the
+// whole error or its last ": "-separated part.
+var ErrPaneClosed = errors.New("pane closed")
+
 // Bounds on what a query reply may cost the engine: a result larger than
 // maxQueryResponse becomes an error, and a client that does not read its
 // answer within queryWriteTimeout is dropped. Variables so tests can shrink them.

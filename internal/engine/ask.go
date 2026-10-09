@@ -29,7 +29,7 @@ var (
 	ErrNotAttached = errors.New("no attached dot")
 	ErrPaused      = errors.New("paused")
 	ErrBudget      = errors.New("budget reached")
-	ErrPaneClosed  = errors.New("pane closed")
+	ErrPaneClosed  = ipc.ErrPaneClosed
 )
 
 const (
