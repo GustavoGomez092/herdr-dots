@@ -507,3 +507,21 @@ func TestErrorsNameNoAbsolutePaths(t *testing.T) {
 		t.Fatalf("trust error %v", err)
 	}
 }
+
+// A trusted item says where its trust was given (display only), so the UI
+// can tell a clone's trust from trust given in this checkout.
+func TestTrustedItemCarriesWhereItWasTrusted(t *testing.T) {
+	root := pdRepo(t, map[string]string{"helper.toml": helperTOML})
+	ts := pdTrust(t)
+	it := ScanProject(root, pdProject, ts).Items[0]
+	if it.TrustedPath != "" {
+		t.Fatalf("untrusted item has a trusted path %q", it.TrustedPath)
+	}
+	other := filepath.Join(t.TempDir(), "clone", ".herdr-dots", "dots", "helper.toml")
+	if err := ts.Trust(pdProject, it.Rel, other, it.Sum, nil); err != nil {
+		t.Fatal(err)
+	}
+	if it := ScanProject(root, pdProject, ts).Items[0]; !it.Trusted || it.TrustedPath != other {
+		t.Fatalf("trusted item %+v", it)
+	}
+}

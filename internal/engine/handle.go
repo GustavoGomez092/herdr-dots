@@ -26,7 +26,28 @@ func (e *Engine) Handle(ctx context.Context, cmd string, raw json.RawMessage) er
 	case ipc.CmdReloadDots:
 		e.ReloadDots()
 		e.ReloadConfig()
+		var a ipc.ReloadArgs
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return err
+			}
+		}
+		if a.PaneID != "" {
+			return e.ScanPane(ctx, a.PaneID)
+		}
 		return nil
+	case ipc.CmdTrust:
+		var a ipc.TrustArgs
+		if err := decode(raw, &a); err != nil {
+			return err
+		}
+		return e.Trust(ctx, a.PaneID, a.Slug, a.SHA256, a.Capabilities)
+	case ipc.CmdUntrust:
+		var a ipc.DotArgs
+		if err := decode(raw, &a); err != nil {
+			return err
+		}
+		return e.Untrust(ctx, a.PaneID, a.Slug)
 	case ipc.CmdPauseAll:
 		e.TogglePauseAll()
 		return nil

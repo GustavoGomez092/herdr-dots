@@ -44,6 +44,9 @@ func (e *Engine) SetMode(slug string, mode dots.Mode) error {
 	if !ok {
 		return fmt.Errorf("unknown dot %q", slug)
 	}
+	if d.Origin == dots.OriginProject {
+		return fmt.Errorf("%w: edit %s in its repository", ErrProjectDot, dots.DisplaySlug(slug))
+	}
 	d.Delivery.Mode = mode
 	if err := e.d.SaveDot(d); err != nil {
 		return err

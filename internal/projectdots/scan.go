@@ -27,6 +27,8 @@ type Item struct {
 	Granted   []string     // capabilities the trust entry grants (subset of Requested)
 	Requested []string     // keepable capabilities the file asks for
 	Clamps    []dots.Clamp // what Effective has clamped
+
+	TrustedPath string // where the trust entry was given (display only; "" when untrusted)
 }
 
 // Runnable returns the dot to run, a copy of the clamped Effective, and only
@@ -93,9 +95,9 @@ func ScanProject(root, projectID string, ts *TrustStore) Scan {
 		}
 		it := Item{Dot: d, Rel: f.Rel, Sum: Sum(f.Data), Requested: dots.Requested(d)}
 		if ts != nil && storeErr == nil {
-			if ok, caps := doc.find(projectID, f.Rel, it.Sum); ok {
-				it.Trusted = true
-				for _, c := range caps {
+			if e, ok := doc.entry(projectID, f.Rel, it.Sum); ok {
+				it.Trusted, it.TrustedPath = true, e.Path
+				for _, c := range e.Capabilities {
 					if slices.Contains(it.Requested, c) {
 						it.Granted = append(it.Granted, c)
 					}

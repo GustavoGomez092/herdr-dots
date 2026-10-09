@@ -121,7 +121,16 @@ type LibraryDot struct {
 	Write               bool `json:"write,omitempty"`                 // [capabilities] write (Phase 7)
 	WriteTimeoutSeconds int  `json:"write_timeout_seconds,omitempty"` // shown in the draft confirm
 
-	Origin string `json:"origin,omitempty"` // Phase 9: user, template, import or project
+	Origin      string   `json:"origin,omitempty"`       // Phase 9: user, template, import or project
+	Trusted     bool     `json:"trusted,omitempty"`      // project dots: this exact file is trusted
+	Clamped     []string `json:"clamped,omitempty"`      // project dots: capabilities turned off now
+	Requested   []string `json:"requested,omitempty"`    // project dots: capabilities the file asks for
+	ProjectID   string   `json:"project_id,omitempty"`   // project dots: the repository's project id
+	ProjectName string   `json:"project_name,omitempty"` // project dots: the repository's name
+	Path        string   `json:"path,omitempty"`         // project dots: the file (absolute; for reading, not for display)
+	SHA256      string   `json:"sha256,omitempty"`       // project dots: hex hash of the file as scanned
+	Rel         string   `json:"rel,omitempty"`          // project dots: the file from the repository root (for display)
+	TrustedAt   string   `json:"trusted_at,omitempty"`   // project dots: where trust was given when it was another checkout ("~"-abbreviated); "" = here
 }
 
 type Invalid struct {
@@ -143,6 +152,8 @@ type Snapshot struct {
 	TodayUSD       float64 `json:"today_usd"`
 	TodayRuns      int     `json:"today_runs"`
 	DailyBudgetUSD float64 `json:"daily_budget_usd"`
+
+	PaneProjects map[string]string `json:"pane_projects,omitempty"` // Phase 9: pane id → project id of its scanned repository
 }
 
 func (s Snapshot) Pane(id string) (Pane, bool) {

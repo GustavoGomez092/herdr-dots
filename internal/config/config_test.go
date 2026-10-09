@@ -44,6 +44,7 @@ func TestLoadBadTOMLReturnsDefaultsWithInjectOffAndError(t *testing.T) {
 	want := Default()
 	want.InjectEnabled, want.MemoryEnabled = false, false
 	want.ProactiveEnabled = false
+	want.ProjectDotsEnabled = false
 	if err == nil || !reflect.DeepEqual(c, want) {
 		t.Fatalf("want defaults with inject and memory off + error, got %+v %v", c, err)
 	}

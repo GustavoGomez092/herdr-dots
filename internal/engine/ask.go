@@ -231,9 +231,16 @@ func (e *Engine) askable(paneID, slug string) (dots.Dot, error) {
 	if known {
 		err = e.askBlockedLocked(paneID, d, da.Paused)
 	}
+	untrusted := !known && e.untrustedLocked(slug)
 	e.mu.Unlock()
+	if untrusted {
+		return dots.Dot{}, fmt.Errorf("%w '%s': %w: the developer reviews and trusts it in the library first", ErrNotAttached, dots.DisplaySlug(slug), ErrUntrusted)
+	}
 	if !known {
 		return dots.Dot{}, fmt.Errorf("%w '%s': its dot file is missing or invalid", ErrNotAttached, slug)
+	}
+	if !d.Capabilities.MCP {
+		return d, fmt.Errorf("%w '%s': it is not available to the MCP server (capabilities.mcp = false; imported and project dots start that way)", ErrNotAttached, slug)
 	}
 	return d, err
 }

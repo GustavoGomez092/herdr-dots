@@ -116,13 +116,21 @@ func (t *TrustStore) snapshot() (trustDoc, string, error) {
 // find reports whether this exact content of project/rel is trusted, and
 // the capabilities granted with it.
 func (d trustDoc) find(project, rel string, sum [32]byte) (bool, []string) {
+	e, ok := d.entry(project, rel, sum)
+	return ok, e.Capabilities
+}
+
+// entry is the trust entry for this exact content of project/rel, with its
+// capabilities copied.
+func (d trustDoc) entry(project, rel string, sum [32]byte) (TrustEntry, bool) {
 	h := Hex(sum)
 	for _, e := range d.Entries {
 		if e.Project == project && e.Rel == rel && e.SHA256 == h {
-			return true, slices.Clone(e.Capabilities)
+			e.Capabilities = slices.Clone(e.Capabilities)
+			return e, true
 		}
 	}
-	return false, nil
+	return TrustEntry{}, false
 }
 
 // List returns every trust entry, newest first.

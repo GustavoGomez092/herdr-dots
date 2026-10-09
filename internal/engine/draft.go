@@ -353,6 +353,10 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		return
 	}
 	e.setDraftPhase(id, view.DraftRunning)
+	if e.projectDotGone(d) { // Phase 9: fresh trust, right before write tools start
+		fail(errors.New("its project file changed or lost its trust: review it in the library"))
+		return
+	}
 	be, err := e.d.Backend(d.Backend.Kind)
 	if err != nil {
 		fail(err)

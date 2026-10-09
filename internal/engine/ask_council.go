@@ -16,8 +16,9 @@ import (
 // ask_council and returns the merged digest instead of adding a council
 // card. It counts as one ask against the [mcp] limits; members that answer
 // are marked consulted. If ctx ends first, the council is abandoned. It
-// always passes nil slugs (every eligible dot) and never relies on telling an
-// empty list from an absent one.
+// passes nil slugs (every eligible dot) unless an attached dot lacks
+// capabilities.mcp (Phase 9), and then the non-empty list of the others; it
+// never relies on telling an empty list from an absent one.
 func (e *Engine) AskCouncil(ctx context.Context, paneID, question string) (ipc.CouncilResult, error) {
 	q := strings.TrimSpace(textutil.SanitizeModelText(question))
 	if q == "" {
@@ -33,7 +34,14 @@ func (e *Engine) AskCouncil(ctx context.Context, paneID, question string) (ipc.C
 		body, note string
 	}
 	got := make(chan outcome, 1)
-	run, err := e.startCouncil(ctx, paneID, q, nil, func(parts []council.Part, body, note string) {
+	var slugs []string // nil: every eligible attached dot
+	if allowed, blocked := e.mcpMembers(paneID); blocked {
+		if len(allowed) == 0 {
+			return ipc.CouncilResult{}, errors.New("no attached dot is available to the MCP server (capabilities.mcp = false; imported and project dots start that way)")
+		}
+		slugs = allowed // startCouncil still applies its eligibility rules
+	}
+	run, err := e.startCouncil(ctx, paneID, q, slugs, func(parts []council.Part, body, note string) {
 		got <- outcome{parts, body, note}
 	}, func() error { return lim.take(paneID, mcp) }) // the slot is used only once the council starts
 	if err != nil {

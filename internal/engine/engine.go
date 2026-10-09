@@ -18,6 +18,7 @@ import (
 	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/patchstore"
+	"herdr-dots/internal/projectdots"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/textutil"
@@ -48,6 +49,9 @@ type Deps struct {
 
 	History    *history.Store // Phase 9: per-dot run and card history; nil = none
 	SessionKey string         // Phase 9: this Herdr session's key; card ids are unique only within it
+
+	Trust       *projectdots.TrustStore                  // Phase 9: project dot trust; nil = project dots off
+	ResolveRoot func(cwd string) (memory.Project, error) // Phase 9: a pane's git repository; nil = memory.ResolveProject with git
 
 	// Proactive dots (Phase 8). A nil Daily turns research, schedules and
 	// commit triggers off; a nil Inbox drops results for unattached projects.
@@ -134,6 +138,13 @@ type Engine struct {
 	origBody map[string]string       // card id → body before its first edit
 	memToast bool                    // "memory write failed" already shown
 
+	// Project dots (Phase 9), guarded by mu. Their I/O never happens under mu.
+	userDots  map[string]dots.Dot      // CONFIG_DIR/dots
+	userBad   []dots.LoadError         // invalid user dot files
+	projects  map[string]*projectState // by repository root
+	paneRoots map[string]string        // pane id → repository root
+	projOn    bool                     // project dots were on at the last rebuild
+
 	// Drafts (draft.go), guarded by mu. Git and patch I/O never happen under mu.
 	drafts    map[string]*draftRun // running drafts by id
 	applying  map[string]bool      // patch cards being applied or discarded, by card id
@@ -212,33 +223,40 @@ func New(d Deps) *Engine {
 			return memory.ResolveProject(context.Background(), cwd, memory.ExecGit)
 		}
 	}
+	if d.Trust != nil && d.ResolveRoot == nil {
+		d.ResolveRoot = func(cwd string) (memory.Project, error) {
+			return memory.ResolveProject(context.Background(), cwd, memory.ExecGit)
+		}
+	}
 	e := &Engine{
-		d:        d,
-		ctx:      context.Background(),
-		dots:     map[string]dots.Dot{},
-		readers:  map[string]transcript.Reader{},
-		subs:     map[string]context.CancelFunc{},
-		running:  map[key]bool{},
-		paid:     map[key]bool{},
-		rerun:    map[key]bool{},
-		status:   map[key]string{},
-		warned:   map[key]bool{},
-		watchers: map[int]chan view.Snapshot{},
-		paneMu:   map[string]*sync.Mutex{},
-		sem:      make(chan struct{}, max(1, d.Config.MaxParallelRuns)),
-		learning: map[key]bool{},
-		memStats: map[string]memory.Stats{},
-		origBody: map[string]string{},
-		bgBusy:   map[key]string{},
-		bgQueued: map[key]int{},
-		bgSem:    make(chan struct{}, 1),
-		toasted:  map[string]string{},
-		idle:     map[string]*idleState{},
-		plan:     map[string]time.Time{},
-		heads:    map[key]headSeen{},
-		drafts:   map[string]*draftRun{},
-		applying: map[string]bool{},
-		gens:     map[string]uint64{},
+		d:         d,
+		ctx:       context.Background(),
+		dots:      map[string]dots.Dot{},
+		readers:   map[string]transcript.Reader{},
+		subs:      map[string]context.CancelFunc{},
+		running:   map[key]bool{},
+		paid:      map[key]bool{},
+		rerun:     map[key]bool{},
+		status:    map[key]string{},
+		warned:    map[key]bool{},
+		watchers:  map[int]chan view.Snapshot{},
+		paneMu:    map[string]*sync.Mutex{},
+		sem:       make(chan struct{}, max(1, d.Config.MaxParallelRuns)),
+		learning:  map[key]bool{},
+		memStats:  map[string]memory.Stats{},
+		origBody:  map[string]string{},
+		bgBusy:    map[key]string{},
+		bgQueued:  map[key]int{},
+		bgSem:     make(chan struct{}, 1),
+		toasted:   map[string]string{},
+		idle:      map[string]*idleState{},
+		plan:      map[string]time.Time{},
+		heads:     map[key]headSeen{},
+		drafts:    map[string]*draftRun{},
+		applying:  map[string]bool{},
+		gens:      map[string]uint64{},
+		projects:  map[string]*projectState{},
+		paneRoots: map[string]string{},
 	}
 	if e.d.ConfigCheck <= 0 {
 		e.d.ConfigCheck = 3 * time.Second
@@ -274,9 +292,11 @@ func (e *Engine) ReloadDots() {
 		m[d.Slug] = d
 	}
 	e.mu.Lock()
-	e.dots, e.invalid = m, invalid
+	e.userDots, e.userBad = m, invalid
+	e.rebuildLocked()
 	e.plan = map[string]time.Time{} // re-plan every schedule from the reloaded dots
 	e.mu.Unlock()
+	e.rescanProjects(true) // project dot files and trust are read outside the lock
 	e.broadcast()
 }
 
@@ -306,6 +326,16 @@ func (e *Engine) Start(ctx context.Context) {
 	if e.d.Patches != nil {
 		e.spawn(e.draftLoop)
 	}
+	if e.projectDotsOn() {
+		// Restored attachments' repositories (git runs here, off every lock).
+		atts := e.d.Attachments.List()
+		e.spawn(func() {
+			for _, a := range atts {
+				e.knowPane(a.PaneID, a.Cwd)
+			}
+			e.broadcast()
+		})
+	}
 }
 
 func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) error {
@@ -321,6 +351,12 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	var pr memory.Project
 	if prev, ok := e.d.Attachments.Get(paneID); e.memEnabled() && (!ok || prev.ProjectID == "") {
 		pr = e.resolve(p.WorkDir())
+	}
+	// Project dots: the pane's repository decides which ones it may attach
+	// (git and file reads, before the pane lock).
+	var repo memory.Project
+	if e.projectDotsOn() {
+		repo = e.knowPane(paneID, p.WorkDir())
 	}
 	pl := e.paneLock(paneID)
 	pl.Lock()
@@ -347,8 +383,18 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	for _, slug := range slugs {
 		d, ok := e.dots[slug]
 		if !ok {
+			err := fmt.Errorf("unknown dot %q", slug)
+			if e.untrustedLocked(slug) {
+				err = fmt.Errorf("%w: %s (review it in the library with T, or run herdr-dots dots trust)", ErrUntrusted, dots.DisplaySlug(slug))
+			}
 			e.mu.Unlock()
-			return fmt.Errorf("unknown dot %q", slug)
+			return err
+		}
+		if d.Origin == dots.OriginProject {
+			if _, tag, _ := dots.SplitProjectSlug(slug); tag != dots.ProjectTag(repo.ID) {
+				e.mu.Unlock()
+				return fmt.Errorf("%s belongs to another repository", dots.DisplaySlug(slug))
+			}
 		}
 		// Catch-up: the newest Context.Turns turns count as "new" for this dot
 		// (memory passes start counting from the same place).
@@ -775,6 +821,12 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		return
 	}
 	defer func() { <-e.sem }()
+	// Fresh trust (re-read off every lock): a project dot whose file changed
+	// or lost its trust since this run was queued never reaches the backend.
+	if e.projectDotGone(d) {
+		e.d.Logf("dot %s on %s: its project file changed or lost its trust; run skipped", d.Slug, paneID)
+		return
+	}
 
 	var prev string // the status before this run's "thinking", restored when an ask is cancelled
 	if o.memoryPass {
@@ -1089,10 +1141,16 @@ func (e *Engine) Snapshot() view.Snapshot {
 	})
 	for _, slug := range slugs {
 		d := e.dots[slug]
+		if d.Origin == dots.OriginProject {
+			continue // listed below with their trust state
+		}
 		s.Library = append(s.Library, view.LibraryDot{Slug: slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
 			Backend: d.Backend.Kind, Model: d.Backend.Model, Mode: string(d.Delivery.Mode),
-			Write: d.Capabilities.Write && dots.CanWrite(d.Backend.Kind), WriteTimeoutSeconds: d.Capabilities.WriteTimeoutSeconds})
+			Write: d.Capabilities.Write && dots.CanWrite(d.Backend.Kind), WriteTimeoutSeconds: d.Capabilities.WriteTimeoutSeconds,
+			Origin: d.Origin})
 	}
+	s.Library = append(s.Library, e.projectLibraryLocked()...)
+	s.PaneProjects = e.paneProjectsLocked()
 	for _, le := range e.invalid {
 		s.Invalid = append(s.Invalid, view.Invalid{File: le.File, Line: le.Line, Error: le.Err.Error()})
 	}

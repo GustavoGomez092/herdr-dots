@@ -177,6 +177,9 @@ func (e *Engine) pollLoop() {
 // event in its subscription stream) and flushes auto cards whose guard opened.
 func (e *Engine) poll() {
 	e.maybeReloadConfig()
+	if e.rescanProjects(false) {
+		e.broadcast()
+	}
 	for _, a := range e.d.Attachments.List() {
 		p, err := e.d.Herdr.PaneGet(e.ctx, a.PaneID)
 		if herdr.IsNotFound(err) {
@@ -216,6 +219,7 @@ func (e *Engine) dropPane(paneID string) {
 	e.gens[paneID]++
 	delete(e.idle, paneID)               // collected research for a closed pane is dropped (idle.go)
 	waiting := e.d.Queue.Pending(paneID) // Phase 9: OrphanPane orphans exactly these
+	delete(e.paneRoots, paneID)          // a reused pane id is scanned again
 	orphaned, oerr := e.d.Queue.OrphanPane(paneID)
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)
