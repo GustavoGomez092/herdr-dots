@@ -42,17 +42,30 @@ func findExecutable(name string, dirs []string, ext string, isFile func(string) 
 // and then hands to a program using the usual Windows argv rules. Inside
 // double quotes cmd.exe treats & | < > ^ ( ) literally; " % ! and line
 // breaks can't be made safe, so they are refused. Backslashes before the
-// closing quote are doubled so they stay literal.
-func quoteBatchArg(a string) (string, error) {
-	if strings.ContainsAny(a, "\"%!\r\n\x00") {
-		shown := a
-		if r := []rune(shown); len(r) > 60 {
-			shown = string(r[:60]) + "…"
-		}
-		return "", fmt.Errorf("%w: %q holds \", %%, ! or a line break", ErrUnsafeBatchArg, shown)
+// closing quote are doubled so they stay literal. what names the argument in
+// the error ("argument 3"); the error never holds the argument's text, which
+// may be a prompt or a key.
+func quoteBatchArg(what, a string) (string, error) {
+	if i := strings.IndexAny(a, "\"%!\r\n\x00"); i >= 0 {
+		return "", fmt.Errorf("%w: %s contains %s", ErrUnsafeBatchArg, what, batchCharClass(a[i]))
 	}
 	trail := len(a) - len(strings.TrimRight(a, `\`))
 	return `"` + a + strings.Repeat(`\`, trail) + `"`, nil
+}
+
+// batchCharClass names a character quoteBatchArg refuses.
+func batchCharClass(c byte) string {
+	switch c {
+	case '"':
+		return "a double quote"
+	case '%':
+		return "a percent sign"
+	case '!':
+		return "an exclamation mark"
+	case 0:
+		return "a NUL character"
+	}
+	return "a line break"
 }
 
 // BatchCmdLine builds the command line that runs a .cmd/.bat script through
@@ -71,13 +84,13 @@ func BatchCmdLine(comspec, script string, args []string) (string, error) {
 		b.WriteString(comspec)
 	}
 	b.WriteString(` /d /s /c "`)
-	q, err := quoteBatchArg(script)
+	q, err := quoteBatchArg("the program path", script)
 	if err != nil {
 		return "", err
 	}
 	b.WriteString(q)
-	for _, a := range args {
-		q, err := quoteBatchArg(a)
+	for i, a := range args {
+		q, err := quoteBatchArg(fmt.Sprintf("argument %d", i+1), a)
 		if err != nil {
 			return "", err
 		}

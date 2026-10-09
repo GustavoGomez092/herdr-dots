@@ -110,6 +110,33 @@ func TestBatchCmdLineRefusesCharactersCmdCantCarry(t *testing.T) {
 	}
 }
 
+// The refusal names the argument's position and the character class, never
+// the argument itself: it may be a prompt or hold a key.
+func TestBatchCmdLineRefusalNeverEchoesTheArgument(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-p", "x", `sk-SECRET"quoted`}, "argument 3 contains a double quote"},
+		{[]string{"sk-SECRET%PATH%"}, "argument 1 contains a percent sign"},
+		{[]string{"-p", "sk-SECRET!"}, "argument 2 contains an exclamation mark"},
+		{[]string{"sk-SECRET\nline"}, "argument 1 contains a line break"},
+		{[]string{"sk-SECRET\x00"}, "argument 1 contains a NUL character"},
+	} {
+		_, err := BatchCmdLine("cmd.exe", `C:\npm\claude.cmd`, c.args)
+		if !errors.Is(err, ErrUnsafeBatchArg) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q: err = %v, want %q", c.args, err, c.want)
+		}
+		if err != nil && strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("%q: the error echoes the argument: %v", c.args, err)
+		}
+	}
+	_, err := BatchCmdLine("cmd.exe", `C:\100% SECRET\claude.cmd`, nil)
+	if !errors.Is(err, ErrUnsafeBatchArg) || !strings.Contains(err.Error(), "the program path contains a percent sign") || strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("script path: %v", err)
+	}
+}
+
 func TestBatchCmdLineRefusesOverLongLinesWithAHint(t *testing.T) {
 	_, err := BatchCmdLine("cmd.exe", `C:\npm\claude.cmd`, []string{strings.Repeat("x", 8200)})
 	if !errors.Is(err, ErrCmdTooLong) || !strings.Contains(err.Error(), "claude.cmd") || !strings.Contains(err.Error(), "claude.exe") || !strings.Contains(err.Error(), "> 8191") {
