@@ -103,9 +103,21 @@ func setupMCP(args []string, s setupIO) error {
 			fmt.Fprintf(s.out, "Backs up %s first.\n", b)
 		}
 	}
+	// recordFailed names a failed record save as only that: the client's
+	// config is already as the preview showed.
+	recordFailed := func(who string, applied bool, err error) error {
+		if err == nil {
+			return nil
+		}
+		what := "nothing needed changing"
+		if applied {
+			what = "the change was applied"
+		}
+		return fmt.Errorf("%s%s; only the install record could not be saved (%s): %w", who, what, mcpinstall.RecordPath(p.ConfigDir), err)
+	}
 	if todo == 0 {
 		fmt.Fprintln(s.out, "\nNothing changed.")
-		return s.saveRecords(p, plans, nil, *remove)
+		return recordFailed("", false, s.saveRecords(p, plans, nil, *remove))
 	}
 	if !*yes {
 		fmt.Fprint(s.out, "\nApply these changes? [y/N] ")
@@ -120,7 +132,7 @@ func setupMCP(args []string, s setupIO) error {
 	var errs []error
 	for _, pl := range plans {
 		if pl.Nothing {
-			errs = append(errs, s.saveRecords(p, []mcpinstall.Plan{pl}, nil, *remove))
+			errs = append(errs, recordFailed(pl.Client.Title()+": ", false, s.saveRecords(p, []mcpinstall.Plan{pl}, nil, *remove)))
 			continue
 		}
 		bs, err := mcpinstall.Apply(pl, func(c mcpinstall.Command) error {
@@ -138,7 +150,8 @@ func setupMCP(args []string, s setupIO) error {
 			continue
 		}
 		s.verify(pl)
-		errs = append(errs, s.saveRecords(p, []mcpinstall.Plan{pl}, map[mcpinstall.Client][]string{pl.Client: bs}, *remove))
+		errs = append(errs, recordFailed(pl.Client.Title()+": ", true,
+			s.saveRecords(p, []mcpinstall.Plan{pl}, map[mcpinstall.Client][]string{pl.Client: bs}, *remove)))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return err
