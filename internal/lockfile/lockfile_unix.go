@@ -9,7 +9,8 @@ import (
 )
 
 func openLockFile(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	// O_NOFOLLOW: a symlinked lock file is refused, never written through.
+	return os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 }
 
 func lockFile(f *os.File) error {
