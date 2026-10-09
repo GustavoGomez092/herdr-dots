@@ -1,8 +1,10 @@
 # Herdr Dots
 
-> **Status: scaffold (v0.5.0).** Phases 1 (core loop), 2 (dot memory, VITAL), 3 (council), 4 (API and
-> Ollama backends, cost) and 5 (Dots MCP server) are in. The project is not done and not ready for
-> general use; see the [Roadmap](#roadmap) for what's missing.
+> **Status: scaffold (v0.6.0).** Phases 1 (core loop), 2 (dot memory, VITAL), 3 (council), 4 (API and
+> Ollama backends, cost), 5 (Dots MCP server) and 6 (Windows support) are in. Windows support is
+> cross-compiled and unit-tested, but it has **not been run on Windows** by the developer yet (see
+> [Windows (beta)](#windows-beta)). The project is not done and not ready for general use; see the
+> [Roadmap](#roadmap) for what's missing.
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**: specialist agents (security,
 frontend, backend, copywriter, ...) that join a Claude Code or Codex session running in a Herdr
@@ -11,7 +13,8 @@ speaks up only when it has something worth saying.
 
 ## Requirements
 
-- Herdr ≥ 0.8.0 on macOS or Linux
+- Herdr ≥ 0.8.0 on macOS or Linux, or Herdr ≥ 0.9.1 (the Windows beta, preview channel) on
+  Windows 10 1809+ or Windows 11
 - Go ≥ 1.25 (to build)
 - `claude` (Claude Code) logged in, for `claude-cli` dots; `codex` logged in, for `codex-cli` dots
 
@@ -22,6 +25,15 @@ git clone <this repo> && cd herdr-dots
 make build
 herdr plugin link .        # development install
 ```
+
+On Windows (PowerShell, from a clone of this repo):
+
+```powershell
+herdr plugin link .        # runs scripts\build.ps1, which builds bin\herdr-dots.exe
+```
+
+If your machine's policy blocks PowerShell scripts, build by hand with
+`go build -o bin\herdr-dots.exe .\cmd\herdr-dots` and link again.
 
 The engine starts automatically with Herdr (startup hook), or the first time you use a Dots action.
 
@@ -304,6 +316,37 @@ anything but protocol messages.
 - Runtime state and `engine.log`: the plugin state dir, under a per-session folder
 - Memory: the plugin state dir, under `memory/<project-id>/` (shared by every Herdr session; `0600` files)
 
+## Windows (beta)
+
+Herdr Dots runs on the Herdr Windows beta with the same features as on macOS and Linux.
+
+- **Not run-verified yet.** Every Windows code path is compiled and unit-tested on macOS, and
+  `.github/workflows/ci.yml` runs the full test suite on `windows-latest`, but the developer has
+  not run Herdr Dots on a Windows machine, and the CI workflow has not been pushed yet. The
+  checklist in `docs/superpowers/notes/2026-10-08-phase-6-verification.md` ("User gates") lists
+  what to try first: whether Herdr resolves `./bin/herdr-dots` to the `.exe`, the first
+  `build.ps1` run, named-pipe owner checks (including an elevated/UAC prompt), process-tree kills,
+  file locking, owner-only ACLs, the repo-tool jail on NTFS, and `.cmd` shims.
+- **Engine IPC** is a named pipe, `\\.\pipe\herdr-dots-<session key>`, that only your Windows user
+  can open. The engine checks that the pipe really belongs to you before trusting it.
+- **Privacy:** `credentials.toml`, memory, settings and session state get an owner-only ACL (you,
+  SYSTEM and Administrators). A credentials file that other users can read is refused with an
+  `icacls` command that fixes it.
+- **Dot processes** run in a Job Object, so a timeout or an engine crash ends the CLI and
+  everything it started (node, git).
+- **`claude.cmd` / `codex.cmd`** (npm installs) work: their command lines are quoted for cmd.exe
+  and the system prompt goes through a private temp file. A native `claude.exe` is preferred when
+  both are on `PATH`. A path containing `%`, `"` or `!` can't be passed to a `.cmd` program; such a
+  run fails with a message saying so.
+- **Long system prompts** go through a private temp file (`--append-system-prompt-file`) on every
+  OS, not argv. This was verified live with Claude Code on macOS only.
+- **Repo tools for API dots** are confined to the project folder, including NTFS tricks (8.3 short
+  names, alternate data streams, junctions). Cloud placeholder files (for example OneDrive
+  files that are not downloaded) may be refused as irregular files.
+- **Keybindings:** `setup-keys` edits `%APPDATA%\herdr\config.toml` (or `HERDR_CONFIG_PATH`).
+- **Glyphs:** if the dot symbols show as boxes, set `HERDR_DOTS_ASCII=1` for ASCII stand-ins.
+- Herdr's own Windows limits apply (no direct terminal attach, no live server handoff).
+
 ## Privacy and safety
 
 - Dots send recent conversation turns, their memory block and (with repo access) the files they read to
@@ -348,12 +391,12 @@ anything but protocol messages.
 - The Codex backend's `remember` support follows Codex's documented output format and has not been
   verified live.
 - Draft specs for later phases live in `docs/superpowers/specs/` (roadmap: `2026-10-08-herdr-dots-roadmap.md`), all pending review.
-- No Windows support.
+- Windows support (0.6.0) has not been run on Windows by the developer; it is cross-compiled and
+  unit-tested only. The three-OS CI workflow is written but not yet pushed anywhere.
 - The MCP server is verified live with Claude Code; Codex support follows Codex's documented config
   format and has **not been verified live** (see `docs/superpowers/notes/2026-10-08-phase-5-verification.md`).
   That includes the `-c mcp_servers.herdr-dots.enabled=false` override codex dot runs get.
-- No MCP resources or prompts, no HTTP transport, no access for agents outside Herdr; MCP on Windows
-  comes with Phase 6.
+- No MCP resources or prompts, no HTTP transport, no access for agents outside Herdr.
 - API backends are tested against recorded-style fakes; live runs need your keys (see
   `docs/superpowers/notes/2026-10-08-phase-4-verification.md`). Only Ollama has been run live; the
   Anthropic, OpenAI and OpenRouter paths are not live-verified. OpenAI model ids and prices change
@@ -372,6 +415,7 @@ anything but protocol messages.
 | 3 | Council mode: ask all dots at once, get one merged digest, with optional dot-to-dot cross-review (in this scaffold since 0.3.0) |
 | 4 | API and Ollama backends (Anthropic, OpenAI, OpenRouter, Ollama), key storage, USD cost and dollar budgets (in this scaffold since 0.4.0) |
 | 5 | Dots MCP server so the main agent can consult dots itself: ask a dot, convene a council, read the queue and memory, propose memory (in this scaffold since 0.5.0) |
-| 6–10 | Windows, write-capable dots, proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
+| 6 | Windows support: named pipes, Job Objects, ACL privacy, `.cmd` shims (in this scaffold since 0.6.0; built and unit-tested, **not run on Windows yet**) |
+| 7–10 | Write-capable dots, proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
 
 See the draft roadmap for Phases 2–10.

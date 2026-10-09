@@ -115,3 +115,9 @@ Run on Windows 10 1809+ or Windows 11 with the Herdr Windows beta (preview chann
 - Ported without a guard finding: `setup-mcp` children through `platform.Command` / `platform.LookPath`; `mcp.go` and its test on `EngineEndpoint` (Task 6); Phase 5's IPC, MCP and engine tests on `ipc.Listen` endpoints.
 - Carry-in: `internal/backend/toolloop/tools.go` `gitFiles` runs through `platform.CommandContext` (a dedicated guard test, `TestToolloopListingChildGoesThroughPlatform`, forbids `exec.Command*` there). `internal/memory/project.go` still calls `exec.CommandContext(ctx, "git", ...)` directly (not a guard finding; not in this task).
 - Not run on Windows: `claude mcp add` through npm's `claude.cmd`, `codex mcp list` through `codex.cmd`, the detached engine started by the MCP server, and `memory edit` through cmd.exe are user gates.
+
+## Phase 6 result
+
+- Version 0.6.0. `make cross` and `go test -race ./...` (darwin) pass; `GOOS=windows go vet ./...` and `go build ./...` are clean.
+- Not run on Windows. Open user gates: every box in "User gates" above.
+- The portability guard (`internal/platform/portability_test.go`) keeps Phases 7-9 from adding Unix-only code.
