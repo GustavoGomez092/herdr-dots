@@ -275,7 +275,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		}
 		reply := toolloop.Reply{
 			Text:  resp.Message.Content,
-			Usage: pricing.Usage{In: resp.PromptEvalCount, Out: resp.EvalCount}, CostKnown: false, Model: r.Model,
+			Usage: pricing.Usage{In: resp.PromptEvalCount, Out: resp.EvalCount}, CostKnown: true, Model: r.Model,
 		}
 		for i, tc := range resp.Message.ToolCalls {
 			reply.Calls = append(reply.Calls, toolloop.Call{ID: fmt.Sprintf("call_%d_%d", len(cr.Messages), i), Name: tc.Function.Name, Args: tc.Function.Arguments})
@@ -303,7 +303,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		extra, err = call(ctx, false)
 		out.Text, out.Usage, out.Turns = extra.Text, out.Usage.Add(extra.Usage), out.Turns+1
 	}
-	run := backend.APIRun{Text: out.Text, Usage: out.Usage, CostUSD: 0, CostKnown: false, // no price: unknown, never $0 known
+	run := backend.APIRun{Text: out.Text, Usage: out.Usage, CostUSD: 0, CostKnown: true, // a local run costs a known $0
 
 		Model: r.Model, ToolCalls: out.Calls, Capped: out.Capped, Started: started}
 	if err != nil {

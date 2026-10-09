@@ -93,8 +93,8 @@ func TestRequestShapeNoCost(t *testing.T) {
 	if _, has := body["tools"]; has {
 		t.Fatal("no tools without repo_read")
 	}
-	if res.CostUSD != 0 || res.CostKnown || res.InputTokens != 321 || res.OutputTokens != 45 {
-		t.Fatalf("ollama has no price: cost must be unknown, never $0 known: %+v", res)
+	if res.CostUSD != 0 || !res.CostKnown || res.InputTokens != 321 || res.OutputTokens != 45 {
+		t.Fatalf("a local run costs a known $0: %+v", res)
 	}
 }
 
