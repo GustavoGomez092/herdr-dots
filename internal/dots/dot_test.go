@@ -57,3 +57,24 @@ func TestModeNextCycles(t *testing.T) {
 		t.Fatal("mode cycle")
 	}
 }
+
+func TestCouncilNameIsReserved(t *testing.T) {
+	for _, name := range []string{"Council", " council ", "COUNCIL!"} {
+		d := New(name)
+		d.Purpose = "x"
+		if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Errorf("%q: want a reserved-name error, got %v", name, err)
+		}
+	}
+	d := New("Security")
+	d.Purpose = "x"
+	d.Slug = "council" // a hand-made council.toml
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("the council slug is reserved too: %v", err)
+	}
+	ok := New("Council of Elders")
+	ok.Purpose = "x"
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("only the exact slug is reserved: %v", err)
+	}
+}

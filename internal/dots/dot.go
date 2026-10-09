@@ -81,6 +81,14 @@ type BudgetSpec struct {
 	MaxCallsPerSession int `toml:"max_calls_per_session"`
 }
 
+// ReservedName and ReservedSlug belong to council mode: council cards use
+// them, so no dot may be called "Council" (in any spelling that slugifies to
+// "council").
+const (
+	ReservedName = "Council"
+	ReservedSlug = "council"
+)
+
 // New returns a dot with every default from the spec filled in.
 func New(name string) Dot {
 	return Dot{
@@ -126,6 +134,9 @@ func (d Dot) Validate() error {
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
 	if strings.TrimSpace(d.Name) == "" {
 		add("name is required")
+	}
+	if Slugify(d.Name) == ReservedSlug || d.Slug == ReservedSlug {
+		add("name %q is reserved for council mode; pick another name", ReservedName)
 	}
 	if strings.TrimSpace(d.Purpose) == "" {
 		add("purpose is required")

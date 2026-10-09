@@ -50,8 +50,20 @@ func (t Turn) TouchedPaths() []string {
 	return out
 }
 
-func (t Turn) IsFromDot(name string) bool { return slices.Contains(t.FromDots, name) }
-func (t Turn) FromAnyDot() bool           { return len(t.FromDots) > 0 }
+// CouncilName and CouncilGlyph identify a council delivery: "[⊕ Council dot] …".
+const (
+	CouncilName  = "Council"
+	CouncilGlyph = "⊕"
+)
+
+// IsFromDot reports whether the named dot started this turn. A council
+// delivery speaks for every dot, so a turn it started counts as started by
+// all of them (the loop guard then skips it for every dot).
+func (t Turn) IsFromDot(name string) bool {
+	return slices.Contains(t.FromDots, name) || slices.Contains(t.FromDots, CouncilName)
+}
+
+func (t Turn) FromAnyDot() bool { return len(t.FromDots) > 0 }
 
 // DotPrefix is the header delivery puts in front of a dot's message.
 func DotPrefix(glyph, name string) string { return fmt.Sprintf("[%s %s dot]", glyph, name) }

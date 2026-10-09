@@ -113,3 +113,38 @@ func TestOrphanPane(t *testing.T) {
 		t.Fatal("orphaned cards can be dismissed")
 	}
 }
+
+func TestCouncilCardRoundTripsAndOldFilesLoad(t *testing.T) {
+	s, p := open(t)
+	c, err := s.Add(Card{Kind: KindCouncil, Dot: "council", DotName: "Council", Glyph: "⊕", PaneID: "w1:p1", Turn: 22,
+		Severity: "critical", Body: "## Must fix\n- JWT in localStorage (Security)", Mode: "queue",
+		Question: "Ready to merge?", Note: "merged without chair (chair error: timeout)",
+		Parts: []CardPart{
+			{Dot: "security", DotName: "Security", Glyph: "◆", Severity: "critical", Body: "JWT in localStorage", Stance: "object"},
+			{Dot: "copy", DotName: "Copy", Glyph: "✎", Body: "timed out", Failed: true},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s2.Get(c.ID)
+	if !ok || got.Kind != KindCouncil || got.Question != "Ready to merge?" || got.Note == "" || len(got.Parts) != 2 {
+		t.Fatalf("council card after reopen: %+v", got)
+	}
+	if got.Parts[0].Stance != "object" || got.Parts[0].Severity != "critical" || !got.Parts[1].Failed || got.Parts[1].Body != "timed out" {
+		t.Fatalf("parts %+v", got.Parts)
+	}
+
+	old := filepath.Join(t.TempDir(), "old.json")
+	os.WriteFile(old, []byte(`{"next":1,"cards":[{"id":"1","dot":"security","dot_name":"Security","glyph":"◆","pane_id":"p","turn":3,"severity":"warn","body":"x","mode":"queue","approved":false,"status":"pending"}]}`), 0o600)
+	s3, err := Open(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c3, ok := s3.Get("1"); !ok || c3.Kind != "" || c3.Parts != nil || c3.Body != "x" {
+		t.Fatalf("a v1 queue.json must load unchanged: %+v", c3)
+	}
+}

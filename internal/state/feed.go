@@ -20,6 +20,9 @@ const (
 	OutcomeSuppressed = "suppressed" // verdict too similar to remembered advice (detail "similar to d:m17")
 )
 
+// OutcomeCouncil: a council card was created (the entry's Dot is "council").
+const OutcomeCouncil = "council"
+
 // feedKeep is how many recent entries per pane stay in memory.
 const feedKeep = 50
 
