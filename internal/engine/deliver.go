@@ -159,6 +159,7 @@ func (e *Engine) poll() {
 }
 
 func (e *Engine) dropPane(paneID string) {
+	e.forgetAsks(paneID)
 	e.abandonCouncil(paneID) // a closed pane gets no council card
 	e.unwatch(paneID)
 	// Orphan cards first: the attachment disappearing is the visible signal that

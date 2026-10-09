@@ -47,6 +47,8 @@ type Deps struct {
 type key struct{ pane, slug string }
 
 type runOpts struct {
+	ask bool // MCP ask_dot (ask.go): feed "asked", status consulted, no card, no cooldown
+
 	// Council members (council.go) only.
 	noForce bool                        // summon semantics, but the member may pass ("nothing from my side")
 	ctx     context.Context             // cancels the run with its council; nil = the engine's context
@@ -90,6 +92,10 @@ type Engine struct {
 	chairWarned bool // the "chair needs a model" line was logged for the current settings
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
+
+	// MCP state (ask.go), guarded by mu; created lazily.
+	consulted map[key]bool // asked since the pane's last processed turn
+	asks      *askLimiter  // per-pane ask limits; its own leaf lock
 
 	// Council state (council.go), guarded by mu; maps are created lazily.
 	councils     map[string]*councilRun       // by pane: the council in progress
@@ -475,6 +481,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 
 	var jobs []job
 	var budgetHit []budgetNote
+	turnEnded := false
 	e.mu.Lock()
 	paneCalls := e.d.Usage.PaneCalls(paneID)
 	paneCost := e.d.Usage.PaneCost(paneID)
@@ -497,13 +504,16 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 				da.LastSeenTurn = len(turns)
 				continue
 			}
+			turnEnded = true
 			k := key{paneID, da.Slug}
 			if e.running[k] {
 				e.rerun[k] = true // pick these turns up when the current run ends
 				continue
 			}
+			consulted := e.consulted[k]
+			delete(e.consulted, k) // a consultation covers the turn it happened in, once
 			in := FilterInput{
-				Dot: d, Att: *da, NewTurns: newTurns, PausedAll: e.pausedAll,
+				Dot: d, Att: *da, NewTurns: newTurns, PausedAll: e.pausedAll, Consulted: consulted,
 				DotCalls: e.d.Usage.Calls(paneID, da.Slug), PaneCalls: paneCalls,
 				PaneBudget: e.config().SessionBudgetCalls,
 				DotCostUSD: e.d.Usage.Cost(paneID, da.Slug), PaneCostUSD: paneCost,
@@ -511,9 +521,14 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 			}
 			dec := Decide(in)
 			da.LastSeenTurn = len(turns)
+			if e.status[k] == view.StatusConsulted && dec.Reason != ReasonConsulted {
+				e.status[k] = view.StatusIdle // the pane's next turn ends the consultation
+			}
 			switch dec.Reason {
 			case ReasonCooldown:
 				da.CooldownLeft--
+			case ReasonConsulted:
+				e.status[k] = view.StatusConsulted
 			case ReasonBudget, ReasonSessionBudget:
 				e.status[k] = view.StatusBudget
 				if !e.warned[k] {
@@ -544,7 +559,9 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 		}
 	})
 	e.mu.Unlock()
-
+	if turnEnded {
+		e.limiter().endTurn(paneID) // the per-turn ask limit starts over
+	}
 	return jobs, budgetHit
 }
 
@@ -686,7 +703,7 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 						da.MemorySeenTurn = o.seenTo
 					}
 				}
-			case res.Verdict.Relevant:
+			case res.Verdict.Relevant && !o.ask:
 				da.CooldownLeft = d.Trigger.Cooldown
 			}
 		}
@@ -699,6 +716,14 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		return
 	}
 	e.applyMemoryOps(paneID, d, turn, mem, res.Remember, att, false)
+	if o.ask {
+		if base.Err() != nil {
+			return // the agent gave up or the engine stopped: write nothing more
+		}
+		e.feed(paneID, d.Slug, turn, state.OutcomeAsked, askDetail(d, res))
+		e.setStatus(k, view.StatusConsulted)
+		return // MCP ask: the answer goes back to the agent, never into the queue
+	}
 	if res.Verdict.Relevant && !o.summon {
 		// Anti-repeat uses the candidates loaded before the run, so the ops
 		// just applied never suppress their own verdict.
