@@ -1,0 +1,2 @@
+go test fuzz v1
+string("# >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)00")

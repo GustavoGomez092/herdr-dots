@@ -46,7 +46,11 @@ func ExportTOML(entries []Entry) ([]byte, error) {
 		if paths == nil {
 			paths = []string{}
 		}
-		doc.Entry = append(doc.Entry, tomlEntry{Ref: e.Ref().String(), Scope: string(e.Scope), Dot: e.Dot,
+		ref := ""
+		if e.ID != "" { // an entry not stored yet has no ref (a "d:" ref would not import)
+			ref = e.Ref().String()
+		}
+		doc.Entry = append(doc.Entry, tomlEntry{Ref: ref, Scope: string(e.Scope), Dot: e.Dot,
 			Kind: string(e.Kind), Status: string(e.Status), Source: string(e.Source), Pinned: e.Pinned, Paths: paths, Text: e.Text, From: e.From})
 	}
 	var buf bytes.Buffer

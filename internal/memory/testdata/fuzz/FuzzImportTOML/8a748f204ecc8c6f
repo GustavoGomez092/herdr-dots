@@ -1,0 +1,2 @@
+go test fuzz v1
+string("[[entrY]]\nsCope=\"dot\"\ndot=\"0\"\nkind=\"dismissed\"")
