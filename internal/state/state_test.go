@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -89,5 +90,109 @@ func TestFeedAppendRecentAndReload(t *testing.T) {
 	}
 	if r := f2.Recent("p2", 10); len(r) != 1 || r[0].Detail != "boom" {
 		t.Fatal(fmt.Sprint("p2 ", r))
+	}
+}
+
+func TestFeedRotatesLargeFileAtOpen(t *testing.T) {
+	dir := t.TempDir()
+	feedPath := filepath.Join(dir, "feed.jsonl")
+
+	// Create a feed.jsonl file larger than feedRotateBytes (5 MiB)
+	// Write valid JSONL entries until file exceeds 5 MiB
+	file, err := os.Create(feedPath)
+	if err != nil {
+		t.Fatalf("create feed.jsonl: %v", err)
+	}
+	defer file.Close()
+
+	targetSize := feedRotateBytes + 1000 // Slightly over 5 MiB
+	entry := FeedEntry{
+		Time:    time.Now(),
+		PaneID:  "p1",
+		Dot:     "test",
+		Turn:    1,
+		Outcome: OutcomePass,
+		Detail:  string(make([]byte, 100)), // Padding to make lines larger
+	}
+
+	for {
+		data, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatalf("marshal entry: %v", err)
+		}
+		line := append(data, '\n')
+		n, err := file.Write(line)
+		if err != nil {
+			t.Fatalf("write to feed.jsonl: %v", err)
+		}
+		if n != len(line) {
+			t.Fatalf("short write to feed.jsonl: wrote %d, expected %d", n, len(line))
+		}
+
+		stat, err := file.Stat()
+		if err != nil {
+			t.Fatalf("stat feed.jsonl: %v", err)
+		}
+		if stat.Size() > int64(targetSize) {
+			break
+		}
+	}
+
+	originalSize, err := file.Stat()
+	if err != nil {
+		t.Fatalf("final stat feed.jsonl: %v", err)
+	}
+	sizeBefore := originalSize.Size()
+	file.Close()
+
+	// Verify file exists and is large before rotation
+	if sizeBefore <= int64(feedRotateBytes) {
+		t.Fatalf("feed.jsonl too small before rotation: %d bytes, need > %d", sizeBefore, feedRotateBytes)
+	}
+
+	// Call OpenFeed - should trigger rotation
+	f, err := OpenFeed(feedPath)
+	if err != nil {
+		t.Fatalf("OpenFeed: %v", err)
+	}
+
+	// Assert feed.jsonl.1 exists with original size
+	rotatedPath := feedPath + ".1"
+	rotatedStat, err := os.Stat(rotatedPath)
+	if err != nil {
+		t.Fatalf("stat feed.jsonl.1: %v", err)
+	}
+	if rotatedStat.Size() != sizeBefore {
+		t.Fatalf("feed.jsonl.1 size mismatch: got %d, want %d", rotatedStat.Size(), sizeBefore)
+	}
+
+	// Assert feed.jsonl is new and empty (or very small after one operation)
+	newFileStat, err := os.Stat(feedPath)
+	if err != nil {
+		// File may not exist if never written to after rotation - that's OK
+		if !os.IsNotExist(err) {
+			t.Fatalf("stat new feed.jsonl: %v", err)
+		}
+	} else if newFileStat.Size() != 0 {
+		t.Fatalf("new feed.jsonl should be empty or not exist, got %d bytes", newFileStat.Size())
+	}
+
+	// Append a new entry to the rotated feed and verify Recent returns nothing
+	// from the rotated file (only from new entries)
+	err = f.Append(FeedEntry{Time: time.Now(), PaneID: "p2", Dot: "newdot", Turn: 1, Outcome: OutcomePass})
+	if err != nil {
+		t.Fatalf("Append after rotation: %v", err)
+	}
+
+	// Recent for p1 should return nothing (original entries were in rotated file)
+	r := f.Recent("p1", 100)
+	if len(r) != 0 {
+		t.Fatalf("Recent for p1 should return empty after rotation, got %d entries", len(r))
+	}
+
+	// Recent for p2 should return the new entry
+	r2 := f.Recent("p2", 100)
+	if len(r2) != 1 || r2[0].Dot != "newdot" {
+		t.Fatalf("Recent for p2 should return new entry, got %+v", r2)
 	}
 }
