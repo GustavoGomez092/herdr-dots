@@ -387,6 +387,7 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 		return nil, nil
 	}
 	session := att.SessionValue
+	att = e.upgradeFromScrollback(att)
 	turns, err := e.reader(att).Turns(e.ctx)
 	if err != nil && !att.ForceScrollback {
 		e.d.Logf("pane %s: transcript read failed (%v); falling back to scrollback", paneID, err)
@@ -454,6 +455,53 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []dots.Dot) {
 	e.mu.Unlock()
 
 	return jobs, budgetHit
+}
+
+// upgradeFromScrollback retries reader selection while the pane's cached reader
+// is a scrollback *fallback* (the session is known and scrollback wasn't
+// forced): Claude writes <session>.jsonl only on the first prompt, so Select
+// falls back to scrollback right after attach or /clear. Runs with the pane
+// lock held.
+//
+// Rule on upgrade: the transcript's existing turns count as already seen,
+// except the last one, which this (idle-only) pass reviews. Turns before it
+// were covered, lossily, by scrollback; the last one is the turn that just
+// finished. At worst that one turn is reviewed twice (once per reader).
+func (e *Engine) upgradeFromScrollback(att state.Attachment) state.Attachment {
+	if att.ForceScrollback || att.SessionValue == "" || e.reader(att).Source() != transcript.SourceScrollback {
+		return att
+	}
+	nr := e.d.Reader(att)
+	if nr.Source() == transcript.SourceScrollback {
+		return att
+	}
+	turns, err := nr.Turns(e.ctx)
+	if err != nil {
+		return att // not readable yet; try again on the next pass
+	}
+	seen := max(0, len(turns)-1)
+	applied := false
+	err = e.d.Attachments.Update(att.PaneID, func(a *state.Attachment) {
+		if a.SessionValue != att.SessionValue {
+			return
+		}
+		applied = true
+		a.Source = nr.Source()
+		for i := range a.Dots {
+			a.Dots[i].LastSeenTurn = seen
+		}
+	})
+	if err != nil || !applied {
+		return att
+	}
+	e.mu.Lock()
+	e.readers[att.PaneID] = nr
+	e.mu.Unlock()
+	e.d.Logf("pane %s: transcript available; switched from scrollback to %s", att.PaneID, nr.Source())
+	if a, ok := e.d.Attachments.Get(att.PaneID); ok {
+		return a
+	}
+	return att
 }
 
 func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o runOpts) {

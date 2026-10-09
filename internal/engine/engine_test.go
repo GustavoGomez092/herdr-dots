@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,8 +65,9 @@ func (f *fakeBackend) Run(_ context.Context, r backend.Request) (backend.Result,
 }
 
 type fakeReader struct {
-	mu    sync.Mutex
-	turns []transcript.Turn
+	mu     sync.Mutex
+	turns  []transcript.Turn
+	source string // "" → claude
 
 	// Optional gate: after arm(), the next Turns call takes its snapshot, signals
 	// entered and blocks until release is closed (a stale in-flight read).
@@ -80,7 +82,12 @@ func (r *fakeReader) arm() {
 	r.mu.Unlock()
 }
 
-func (r *fakeReader) Source() string { return transcript.SourceClaude }
+func (r *fakeReader) Source() string {
+	if r.source != "" {
+		return r.source
+	}
+	return transcript.SourceClaude
+}
 func (r *fakeReader) Turns(context.Context) ([]transcript.Turn, error) {
 	r.mu.Lock()
 	ts := append([]transcript.Turn(nil), r.turns...)
@@ -661,6 +668,54 @@ func TestRerunWaitsForIdleInsteadOfReadingAHalfFinishedTurn(t *testing.T) {
 	r.srv.Push(pane, herdr.StatusDone)
 	eventually(t, "review after the turn finished", func() bool {
 		return r.be.n() == 2 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "three"
+	})
+}
+
+// Claude writes <session>.jsonl lazily, so the first Select falls back to
+// scrollback. The engine must upgrade to the transcript once it exists, and
+// the loop guard must work on the upgraded reader.
+func TestScrollbackFallbackUpgradesToTranscript(t *testing.T) {
+	var ready atomic.Bool
+	scroll := &fakeReader{source: transcript.SourceScrollback}
+	scroll.add(transcript.Turn{Assistant: "screen text"})
+	claude := &fakeReader{}
+	claude.add(transcript.Turn{User: "one"})
+	claude.add(transcript.Turn{User: "two"})
+	r := newRigWith(t, func(d *Deps) {
+		d.Reader = func(state.Attachment) transcript.Reader {
+			if ready.Load() {
+				return claude
+			}
+			return &fakeReader{source: transcript.SourceScrollback, turns: scroll.turns}
+		}
+	}, dot("Security", dots.ModeQueue))
+	r.readers["s1"] = claude // turnEnds appends here
+	r.attach(t, "security")
+	eventually(t, "scrollback catch-up", func() bool { return r.be.n() == 1 })
+	if a, _ := r.atts.Get(pane); a.Source != transcript.SourceScrollback {
+		t.Fatalf("source %q, want scrollback before the transcript exists", a.Source)
+	}
+
+	ready.Store(true) // the user's first prompt made Claude write the transcript
+	r.srv.Push(pane, herdr.StatusWorking)
+	r.srv.Push(pane, herdr.StatusIdle)
+	eventually(t, "upgraded and reviewed the last turn", func() bool {
+		a, _ := r.atts.Get(pane)
+		return a.Source == transcript.SourceClaude && r.be.n() == 2 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "two"
+	})
+	if ls := lastSeen(r, "security"); ls != 2 {
+		t.Fatalf("LastSeenTurn %d, want 2", ls)
+	}
+
+	r.turnEnds(t, transcript.Turn{User: "[● Security dot] use cookies", FromDots: []string{"Security"}})
+	eventually(t, "dot-started turn consumed", func() bool { return lastSeen(r, "security") == 3 })
+	time.Sleep(50 * time.Millisecond)
+	if r.be.n() != 2 {
+		t.Fatalf("the dot reviewed a turn it started (%d calls)", r.be.n())
+	}
+	r.turnEnds(t, transcript.Turn{User: "four"})
+	eventually(t, "next turn reviewed", func() bool {
+		return r.be.n() == 3 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "four"
 	})
 }
 
