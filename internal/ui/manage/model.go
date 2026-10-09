@@ -25,6 +25,8 @@ type Caller interface {
 }
 
 type Deps struct {
+	MCPStatus func() string // footer line about the MCP server install (Phase 5); nil = none
+
 	Caller  Caller
 	DotsDir string
 	Check   func(ctx context.Context, kind string) error // backend CLI present?
@@ -83,6 +85,8 @@ const (
 )
 
 type Model struct {
+	mcpStatus string // Deps.MCPStatus, read once when the popup opens
+
 	d         Deps
 	target    string
 	snap      view.Snapshot
@@ -106,7 +110,11 @@ type Model struct {
 }
 
 func New(target string, d Deps) Model {
-	return Model{d: d, target: target, selected: map[string]bool{}, attached: map[string]bool{}, templates: dots.Templates(), prov: newProviders()}
+	m := Model{d: d, target: target, selected: map[string]bool{}, attached: map[string]bool{}, templates: dots.Templates(), prov: newProviders()}
+	if d.MCPStatus != nil {
+		m.mcpStatus = d.MCPStatus()
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -563,6 +571,9 @@ func (m Model) View() string {
 	}
 	if m.status != "" {
 		b.WriteString("\n" + m.status + "\n")
+	}
+	if m.mcpStatus != "" {
+		b.WriteString("\n" + style.Dim.Render(m.mcpStatus) + "\n")
 	}
 	help := "space toggle · enter apply · n new · t template · e edit · D delete · K providers · esc close"
 	if m.d.Memory != nil {

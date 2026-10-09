@@ -25,6 +25,7 @@ var commands = map[string]handler{
 	"summon-ui":  runSummonUI,
 	"action":     runAction,
 	"setup-keys": runSetupKeys,
+	"setup-mcp":  runSetupMCP,
 	"memory":     runMemory,
 	"keys":       runKeys,
 }
