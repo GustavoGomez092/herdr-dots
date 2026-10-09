@@ -223,11 +223,14 @@ func RoundTwoQuestion(question string, parts []Part, self string) string {
 // without a known prefix has stance "".
 func ParseStance(message string) (stance, rest string) {
 	m := strings.TrimSpace(message)
+	const emphasis = "*_` \t"
+	r := []rune(strings.TrimLeft(m, emphasis))
 	for _, s := range []struct{ prefix, stance string }{
 		{"AGREE:", StanceAgree}, {"OBJECT:", StanceObject}, {"ADD:", StanceAdd},
 	} {
-		if len(m) >= len(s.prefix) && strings.EqualFold(m[:len(s.prefix)], s.prefix) {
-			return s.stance, strings.TrimSpace(m[len(s.prefix):])
+		n := len([]rune(s.prefix))
+		if len(r) >= n && strings.EqualFold(string(r[:n]), s.prefix) {
+			return s.stance, strings.TrimSpace(strings.TrimLeft(string(r[n:]), emphasis))
 		}
 	}
 	return "", m
@@ -369,8 +372,41 @@ func WithNotHeard(body string, parts []Part) string {
 			lines = append(lines, fmt.Sprintf("- %s (%s)", oneLine(p.Name), oneLine(p.Err)))
 		}
 	}
-	if len(lines) == 0 || strings.Contains(strings.ToLower(body), "## not heard from") {
+	if len(lines) == 0 {
 		return body
+	}
+	// Keep the chair's own section only if it names every failed member.
+	var kept []string
+	start, end := -1, -1
+	all := strings.Split(body, "\n")
+	for i, l := range all {
+		t := strings.TrimSpace(l)
+		if !strings.HasPrefix(t, "## ") {
+			continue
+		}
+		if start >= 0 && end < 0 {
+			end = i
+		}
+		if start < 0 && strings.EqualFold(strings.TrimSpace(t[3:]), "not heard from") {
+			start = i
+		}
+	}
+	if start >= 0 {
+		if end < 0 {
+			end = len(all)
+		}
+		section := strings.ToLower(strings.Join(all[start:end], "\n"))
+		complete := true
+		for _, p := range parts {
+			if p.Failed() && !strings.Contains(section, strings.ToLower(oneLine(p.Name))) {
+				complete = false
+			}
+		}
+		if complete {
+			return body
+		}
+		kept = append(append(kept, all[:start]...), all[end:]...)
+		body = strings.Join(kept, "\n")
 	}
 	return strings.TrimSpace(body) + "\n\n## Not heard from\n" + strings.Join(lines, "\n")
 }
@@ -416,6 +452,9 @@ func sevKey(s string) string {
 }
 
 func clean(s string) string {
+	// U+2028/U+2029 are line breaks to some renderers: make them real ones so
+	// indentBy indents what follows them.
+	s = strings.NewReplacer(" ", "\n", " ", "\n").Replace(s)
 	r := []rune(strings.TrimSpace(textutil.SanitizeModelText(s)))
 	if len(r) > MaxPartChars {
 		return string(r[:MaxPartChars]) + "…"
