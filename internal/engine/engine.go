@@ -178,6 +178,8 @@ type Engine struct {
 	commitAgain bool             // a HEAD check skipped a dot whose review was queued: check again when it ends
 	commitErrs  map[string]bool  // repo dir + git error already logged this session (commits.go); created lazily
 
+	bc throttle // spaces snapshot broadcasts (broadcast.go)
+
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
 	wg     sync.WaitGroup
@@ -1134,7 +1136,8 @@ func (e *Engine) feed(paneID, slug string, turn int, outcome, detail string) {
 	}
 }
 
-func (e *Engine) Snapshot() view.Snapshot {
+// buildSnapshot is the full, untrimmed engine state (Snapshot trims it).
+func (e *Engine) buildSnapshot() view.Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll, WriteEnabled: e.config().WriteEnabled}
@@ -1227,22 +1230,6 @@ func (e *Engine) Watch() (<-chan view.Snapshot, func()) {
 		e.mu.Lock()
 		delete(e.watchers, id)
 		e.mu.Unlock()
-	}
-}
-
-func (e *Engine) broadcast() {
-	s := e.Snapshot()
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for _, ch := range e.watchers {
-		select {
-		case <-ch: // drop the stale snapshot
-		default:
-		}
-		select {
-		case ch <- s:
-		default:
-		}
 	}
 }
 

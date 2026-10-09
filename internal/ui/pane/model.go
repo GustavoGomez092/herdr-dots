@@ -605,6 +605,9 @@ func (m Model) View() string {
 			selEnd = lineCount(b.String()) - 1
 		}
 	}
+	if p.HiddenCards > 0 { // trimmed from the snapshot (view.Trim): counted, never silently missing
+		b.WriteString(style.Dim.Render(fmt.Sprintf("  +%d not shown", p.HiddenCards)) + "\n")
+	}
 	if m.showFeed {
 		b.WriteString(rule("FEED", w))
 		for _, e := range p.Feed {

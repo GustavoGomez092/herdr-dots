@@ -31,6 +31,9 @@ type Deps struct {
 	Memory  *memory.Store // nil: memory off
 	Dot     view.LibraryDot
 	Purpose string
+	// PurposeCut: Purpose is the snapshot's cut copy, not the whole purpose
+	// (view.LibraryDot.PurposeCut); the profile says so (ruling P10-R3).
+	PurposeCut bool
 	// Changed: a project dot whose file changed since it was trusted. Purpose
 	// is then the trusted copy (what runs); the profile says so and T asks
 	// the parent for the trust preview of the file (TrustMsg).
@@ -554,6 +557,9 @@ func (m Model) parts(compact bool) (head, tail []string) {
 	}
 	if p := style.Wrap(m.d.Purpose, w-10); strings.TrimSpace(m.d.Purpose) != "" && !compact {
 		line := "Purpose: " + p[0]
+		if m.d.PurposeCut {
+			line = "Purpose (cut): " + p[0]
+		}
 		if len(p) > 1 {
 			line += style.Sym("…")
 		}

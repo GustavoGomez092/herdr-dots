@@ -55,7 +55,7 @@ func (m Model) openProfile(d view.LibraryDot) tea.Cmd {
 			// is shown as such, with the trust preview one key away.
 			data, rerr := readBounded(d.Path, dots.MaxProjectFileBytes)
 			changed := rerr != nil || projectdots.Hex(projectdots.Sum(data)) != d.SHA256
-			return profileOpenMsg{deps: profile.Deps{History: hs, Memory: st, Dot: d, Purpose: d.Purpose, Changed: changed, CardBody: body}}
+			return profileOpenMsg{deps: profile.Deps{History: hs, Memory: st, Dot: d, Purpose: d.Purpose, PurposeCut: d.PurposeCut, Changed: changed, CardBody: body}}
 		}
 		if d.Origin == dots.OriginProject {
 			var data []byte

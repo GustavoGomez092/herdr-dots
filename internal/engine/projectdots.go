@@ -571,6 +571,11 @@ func (e *Engine) untrustAt(ctx context.Context, paneID, root, slug string) error
 		return fmt.Errorf("%s was not trusted", dots.DisplaySlug(slug))
 	}
 	e.rescanProject(pr)
+	// A poll's rescan may have seen the revoke first: it then owns the
+	// revoked list and may still be on its way to requeueAuto. Requeue here
+	// too (idempotent), so the dot's waiting inject cards are back in the
+	// queue when Untrust returns.
+	e.requeueAuto(e.panesIn(pr.Root), slug)
 	return nil
 }
 
