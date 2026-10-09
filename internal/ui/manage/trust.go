@@ -190,7 +190,7 @@ func (m Model) trustLines() []string {
 		}
 	}
 	if t.lib.SHA256 != "" && t.lib.SHA256 != t.sum {
-		status += "; " + style.Sym("⚠") + " the file changed while you were reviewing it: esc, then T to read it again"
+		status += "; " + style.Sym("⚠") + " this file differs from what the engine last read: esc, then T to read it again"
 	}
 	eff, _ := dots.ClampDot(d, kept(t.keep))
 	_, clamps := dots.ClampDot(d, nil)
@@ -220,7 +220,7 @@ func (m Model) trustLines() []string {
 func (m Model) keysTrust(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	t := m.trust
 	lines := m.trustLines()
-	if t.pg.key(k.String(), len(lines), m.bodyHeight()) {
+	if t.pg.key(k.String(), len(lines), m.bodyHeight(), m.measured()) {
 		return m, nil
 	}
 	requested := dots.Requested(t.dot)
@@ -232,6 +232,10 @@ func (m Model) keysTrust(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			t.keep[requested[i-1]] = !t.keep[requested[i-1]]
 		}
 	case "y":
+		if !m.measured() {
+			m.status = waitingForSize
+			return m, nil
+		}
 		if !t.pg.seenEnd {
 			m.status = "scroll to the end of the file first (j or space)"
 			return m, nil

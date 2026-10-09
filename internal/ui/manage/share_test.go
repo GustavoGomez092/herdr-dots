@@ -2,13 +2,16 @@ package manage
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"herdr-dots/internal/dotpack"
 	"herdr-dots/internal/dots"
@@ -175,6 +178,7 @@ func TestTrustPreviewShowsHiddenCharactersAndHashesTheBytesRead(t *testing.T) {
 	m, fc, _ := setup(t, "w1:p1")
 	s, _, repo := shareLibWith(t, body)
 	m, _ = m.Update(SnapshotMsg(s))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 60})
 	m = press(m, "j", "j", "T")
 	v := m.View()
 	if !strings.Contains(v, "# reviewed <U+202E>evil<U+202C> ok<U+200B>") {
@@ -198,13 +202,13 @@ func TestTrustPreviewWarnsWhenTheFileChangesDuringReview(t *testing.T) {
 	s, _, _ := shareLib(t)
 	m, _ = m.Update(SnapshotMsg(s))
 	m = press(m, "j", "j", "T")
-	if strings.Contains(m.View(), "changed while you were reviewing") {
+	if strings.Contains(m.View(), "differs from what the engine last read") {
 		t.Fatalf("warned before any change:\n%s", m.View())
 	}
 	s2, _, _ := shareLib(t)
 	s2.Library[2].SHA256, s2.Library[2].Root, s2.PaneRoots = strings.Repeat("0", 64), s.Library[2].Root, s.PaneRoots
 	m, _ = m.Update(SnapshotMsg(s2))
-	if !strings.Contains(m.View(), "changed while you were reviewing") {
+	if !strings.Contains(m.View(), "differs from what the engine last read") {
 		t.Fatalf("no warning after the file changed:\n%s", m.View())
 	}
 }
@@ -379,13 +383,14 @@ func TestImportPreviewCollisionRenameAndClamps(t *testing.T) {
 
 	var m tea.Model = New("w1:p1", d)
 	m, _ = m.Update(SnapshotMsg(view.Snapshot{}))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 400, Height: 60}) // wide: the temp pack path stays on one line
 	m = press(m, "I")
 	for _, r := range pack {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	m = press(m, "enter")
 	v := m.View()
-	for _, want := range []string{"IMPORT Security from " + pack, "note:     team pack", "by herdr-dots 0.9.0", "a dot named \"Security\" exists",
+	for _, want := range []string{"IMPORT Security from " + shortHome(pack), "note:     team pack", "by herdr-dots 0.9.0", "a dot named \"Security\" exists",
 		"Theirs: review security.", "[ ] 1 inject: delivery.mode inject → queue", "Sessions live in Redis.", "arrive as proposals"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("preview missing %q:\n%s", want, v)
@@ -413,6 +418,135 @@ func TestImportPreviewCollisionRenameAndClamps(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "imported Team Security as team-security") || !strings.HasPrefix(fc.calls[len(fc.calls)-1], ipc.CmdReloadDots) {
 		t.Fatalf("status %q calls %v", m.View(), fc.calls)
+	}
+	if !m.(Model).selected["team-security"] {
+		t.Fatal("a dot imported with a target pane is pre-checked, like a new dot")
+	}
+}
+
+// Fix round 1: before the first WindowSizeMsg the popup does not know how
+// much of a preview is on screen, so nothing counts as seen.
+func TestTrustAndImportWaitForTheWindowSize(t *testing.T) {
+	m, fc, _ := setup(t, "w1:p1")
+	s, _, _ := shareLib(t)
+	m, _ = m.Update(SnapshotMsg(s))
+	m = press(m, "j", "j", "T")
+	fc.calls = nil
+	m = press(m, "y")
+	if len(fc.calls) != 0 || !strings.Contains(m.View(), "waiting for the window size") {
+		t.Fatalf("y with no window size: %v\n%s", fc.calls, m.View())
+	}
+
+	d, _, _ := shareDeps(t, &fakeCaller{})
+	small := dots.New("Small")
+	small.Purpose = "Short."
+	data, err := dotpack.Export(small, nil, dotpack.ExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack := filepath.Join(t.TempDir(), "s"+dotpack.Ext)
+	os.WriteFile(pack, data, 0o600)
+	var im tea.Model = New("w1:p1", d)
+	im, _ = im.Update(SnapshotMsg(view.Snapshot{}))
+	im = press(im, "I")
+	for _, r := range pack {
+		im, _ = im.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	im = press(im, "enter", "y")
+	if _, err := dots.Load(d.DotsDir, "small"); err == nil || !strings.Contains(im.View(), "waiting for the window size") {
+		t.Fatalf("imported with no window size (%v):\n%s", err, im.View())
+	}
+}
+
+// Fix round 1: jumping to the end skips the middle, so it never counts as
+// having read the file.
+func TestJumpingToTheEndIsNotReading(t *testing.T) {
+	m, fc, _ := setup(t, "w1:p1")
+	s, _, _ := shareLib(t)
+	m, _ = m.Update(SnapshotMsg(s))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	m = press(m, "j", "j", "T")
+	fc.calls = nil
+	m = press(m, "G", "end", "y")
+	if len(fc.calls) != 0 || !strings.Contains(m.View(), "scroll to the end") {
+		t.Fatalf("G then y: %v\n%s", fc.calls, m.View())
+	}
+}
+
+// Fix round 1: the profile stays sized while export covers it, and errors
+// reach the status line while it is open.
+func TestProfileKeepsItsSizeAndShowsErrors(t *testing.T) {
+	fc := &fakeCaller{}
+	d, hs, _ := shareDeps(t, fc)
+	sec := dots.New("Security")
+	sec.Purpose = "Review security."
+	if err := dots.Save(d.DotsDir, sec, true); err != nil {
+		t.Fatal(err)
+	}
+	hs.Append(history.Record{T: history.TypeRun, At: time.Now().Add(-time.Hour), Dot: "security", Kind: history.KindReview, Outcome: state.OutcomeFlagged, Card: "sess/1",
+		Excerpt: "A long finding about cross-site request forgery on the admin endpoints that wraps."})
+	snap := view.Snapshot{Library: []view.LibraryDot{{Slug: "security", Name: "Security", Glyph: "◆", Backend: "claude-cli", Model: "sonnet", Mode: "queue"}}}
+	var m tea.Model = New("w1:p1", d)
+	m, _ = m.Update(SnapshotMsg(snap))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = sharePress(m, "i")
+	if !strings.Contains(m.View(), "LAST 30 DAYS") {
+		t.Fatalf("profile:\n%s", m.View())
+	}
+	m = press(m, "x")
+	if !strings.Contains(m.View(), "EXPORT Security") {
+		t.Fatalf("export:\n%s", m.View())
+	}
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 40})
+	m = press(m, "esc")
+	for _, l := range strings.Split(m.View(), "\n") {
+		if w := ansi.StringWidth(l); w > 30 {
+			t.Fatalf("profile not resized while export was open (%d cells): %q", w, l)
+		}
+	}
+	m, _ = m.Update(errMsg{errors.New("engine unreachable")})
+	if !strings.Contains(m.View(), "engine unreachable") {
+		t.Fatalf("error swallowed by the profile:\n%s", m.View())
+	}
+}
+
+// Fix round 1: at a narrow width the untrusted badge stays; the name and
+// model column is cut first.
+func TestNarrowLibraryKeepsTheUntrustedBadge(t *testing.T) {
+	m, _, _ := setup(t, "w1:p1")
+	s, _, _ := shareLib(t)
+	m, _ = m.Update(SnapshotMsg(s))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 30})
+	v := m.View()
+	if !strings.Contains(v, "⚠ project · untrusted") {
+		t.Fatalf("badge cut at width 40:\n%s", v)
+	}
+	for _, l := range strings.Split(v, "\n") {
+		if strings.Contains(l, "untrusted") && ansi.StringWidth(l) > 40 {
+			t.Fatalf("row wider than 40: %q", l)
+		}
+	}
+}
+
+// Fix round 1: an export is written whole or not at all, never over an
+// existing file, and leaves no temporary file behind.
+func TestWriteNewIsAtomicAndNeverReplaces(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a"+dotpack.Ext)
+	if err := writeNew(path, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNew(path, []byte("two")); err == nil || !strings.Contains(err.Error(), "exists") {
+		t.Fatalf("second write: %v", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "one" {
+		t.Fatalf("replaced: %q", b)
+	}
+	if fi, _ := os.Stat(path); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode().Perm())
+	}
+	if es, _ := os.ReadDir(dir); len(es) != 1 {
+		t.Fatalf("leftover files: %v", es)
 	}
 }
 

@@ -20,18 +20,21 @@ type pager struct {
 }
 
 // fit clamps the offset for total lines in a height-line window and notes
-// whether the end is visible.
-func (p *pager) fit(total, height int) {
+// whether the end is visible. measured is false until the popup knows its
+// real size: the window is a guess then, so nothing counts as seen.
+func (p *pager) fit(total, height int, measured bool) {
 	height = max(1, height)
 	p.offset = max(0, min(p.offset, total-height))
-	if p.offset+height >= total {
+	if measured && p.offset+height >= total {
 		p.seenEnd = true
 	}
 }
 
-// key scrolls for j/k/down/up/space/pgdown/pgup/b and reports whether it
-// handled the key.
-func (p *pager) key(k string, total, height int) bool {
+// key scrolls for j/k/down/up/space/pgdown/pgup/b/g/home and reports whether
+// it handled the key. Every forward step overlaps the last window, so the
+// end is reached only by putting every line on screen; there is no jump to
+// the end on purpose (it would skip the middle).
+func (p *pager) key(k string, total, height int, measured bool) bool {
 	switch k {
 	case "j", "down":
 		p.offset++
@@ -43,14 +46,18 @@ func (p *pager) key(k string, total, height int) bool {
 		p.offset -= max(1, height-1)
 	case "g", "home":
 		p.offset = 0
-	case "G", "end":
-		p.offset = total
 	default:
 		return false
 	}
-	p.fit(total, height)
+	p.fit(total, height, measured)
 	return true
 }
+
+// measured reports whether a WindowSizeMsg has told the popup its size.
+func (m Model) measured() bool { return m.width > 0 && m.height > 0 }
+
+// waitingForSize is the status when y comes before the first size message.
+const waitingForSize = "waiting for the window size before anything counts as read"
 
 func (p pager) window(lines []string, height int) []string {
 	height = max(1, height)
@@ -102,6 +109,22 @@ func (m Model) cutLine(s string) string {
 		return s
 	}
 	return style.Cut(s, max(10, m.width))
+}
+
+// libraryRow joins a library row's columns and its origin badge, cutting the
+// columns first so the badge (an untrusted warning) stays on screen.
+func (m Model) libraryRow(cols, badge string) string {
+	if m.width <= 0 {
+		return cols + badge
+	}
+	room := m.width - ansi.StringWidth(badge)
+	if room < 10 {
+		return style.Cut(cols+badge, max(10, m.width))
+	}
+	if ansi.StringWidth(cols) > room {
+		cols = style.Cut(cols, room)
+	}
+	return cols + badge
 }
 
 // visibleText renders bytes from a file for review: every character a

@@ -103,9 +103,11 @@ func newPrompt(placeholder, value string) textinput.Model {
 }
 
 func expandHome(p string) string {
-	if rest, ok := strings.CutPrefix(p, "~/"); ok {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, rest)
+	for _, prefix := range []string{"~/", "~" + string(filepath.Separator)} {
+		if rest, ok := strings.CutPrefix(p, prefix); ok {
+			if home, err := os.UserHomeDir(); err == nil {
+				return filepath.Join(home, rest)
+			}
 		}
 	}
 	return p
@@ -193,7 +195,7 @@ func (m Model) importLines() []string {
 	written := p.Dot
 	eff, _, perr := is.prepared()
 	_, clamps := dots.ClampDot(written, nil)
-	lines := []string{style.Title.Render("IMPORT " + style.Clean(is.name) + " from " + style.Clean(is.from))}
+	lines := []string{style.Title.Render("IMPORT " + style.Clean(is.name) + " from " + style.Clean(shortHome(is.from)))}
 	if p.Meta.Note != "" {
 		lines = append(lines, "note:     "+style.Clean(p.Meta.Note))
 	}
@@ -285,7 +287,7 @@ func (m Model) keysImportSource(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) keysImportPreview(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	is := m.imp
 	lines := m.importLines()
-	if is.pg.key(k.String(), len(lines), m.bodyHeight()) {
+	if is.pg.key(k.String(), len(lines), m.bodyHeight(), m.measured()) {
 		return m, nil
 	}
 	requested := dots.Requested(is.pack.Dot)
@@ -305,6 +307,9 @@ func (m Model) keysImportPreview(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	case "y":
 		switch {
+		case !m.measured():
+			m.status = waitingForSize
+			return m, nil
 		case !is.pg.seenEnd:
 			m.status = "scroll to the end of the preview first (j or space)"
 			return m, nil
@@ -334,7 +339,7 @@ func (m Model) keysImportRename(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.imp.name = name
 		m.imp.taken = dotTaken(m.d.DotsDir, name)
 		m.imp.pg = pager{} // a new name: read the preview again
-		m.imp.pg.fit(len(m.importLines()), m.bodyHeight())
+		m.imp.pg.fit(len(m.importLines()), m.bodyHeight(), m.measured())
 		m.scr, m.status = scrImportPreview, ""
 		return m, nil
 	}
@@ -426,7 +431,7 @@ func (m Model) startExport(slug string) (Model, tea.Cmd) {
 		dir, _ = os.UserHomeDir()
 	}
 	m.exp = &exportState{slug: slug, name: name}
-	m.input = newPrompt("file", filepath.Join(dir, slug+dotpack.Ext))
+	m.input = newPrompt("file", shortHome(filepath.Join(dir, slug+dotpack.Ext))) // expandHome undoes it on enter
 	m.scr, m.status = scrExport, ""
 	return m, textinput.Blink
 }
@@ -444,27 +449,39 @@ func onlyMemory(where []string) (bool, int) {
 	return true, n
 }
 
-// writeNew writes data to a file that must not exist yet: it never replaces
-// one, even one created after the user pressed enter.
+// writeNew writes data (0600) to a file that must not exist yet. It is
+// crash-atomic and never replaces a file, even one created after the user
+// pressed enter: the data goes to a temporary file in the same directory,
+// which is then hard-linked to path (a link fails if path exists) and
+// removed. The target appears whole or not at all.
 func writeNew(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("%s exists: choose another file name", shortHome(path))
+	exists := func() error { return fmt.Errorf("%s exists: choose another file name", shortHome(path)) }
+	if _, err := os.Lstat(path); err == nil {
+		return exists()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*") // 0600
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
 	}
 	if err != nil {
 		return err
 	}
-	_, werr := f.Write(data)
-	if werr == nil {
-		werr = f.Sync()
+	if err := os.Link(tmpName, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return exists()
+		}
+		return err
 	}
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		os.Remove(path)
-	}
-	return werr
+	return nil
 }
 
 func (m Model) doExport() tea.Cmd {

@@ -183,9 +183,15 @@ func (m Model) reload() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if ws, ok := msg.(tea.WindowSizeMsg); ok && m.prof != nil && m.scr != scrProfile {
+		// A profile kept under its export or memory browser stays sized.
+		pm, _ := m.prof.Update(ws)
+		m.prof = &pm
+	}
 	if m.scr == scrProfile && m.prof != nil {
 		switch msg := msg.(type) {
 		case SnapshotMsg: // the library keeps tracking snapshots below
+		case errMsg: // handled below: the status line shows it under the profile
 		case profile.BackMsg:
 			m.scr, m.prof, m.status = scrLibrary, nil, ""
 			return m, nil
@@ -260,7 +266,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.trust, m.scr, m.status = msg.st, scrTrust, ""
-		m.trust.pg.fit(len(m.trustLines()), m.bodyHeight())
+		m.trust.pg.fit(len(m.trustLines()), m.bodyHeight(), m.measured())
 		return m, nil
 	case trustDoneMsg:
 		m.scr, m.trust = scrLibrary, nil
@@ -276,7 +282,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.imp, m.scr, m.status = msg.st, scrImportPreview, ""
-		m.imp.pg.fit(len(m.importLines()), m.bodyHeight())
+		m.imp.pg.fit(len(m.importLines()), m.bodyHeight(), m.measured())
 		return m, nil
 	case importedMsg:
 		m.scr, m.imp = scrLibrary, nil
@@ -286,6 +292,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.memErr != nil {
 			m.status += " " + style.Sym("·") + " memory import failed: " + style.Clean(msg.memErr.Error())
+		}
+		if m.target != "" {
+			// Like a new dot: pre-checked, so enter attaches it (clamped,
+			// as the preview showed).
+			m.selected[msg.slug] = true
 		}
 		return m, m.reload()
 	case exportedMsg:
@@ -306,10 +317,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		if m.trust != nil {
-			m.trust.pg.fit(len(m.trustLines()), m.bodyHeight())
+			m.trust.pg.fit(len(m.trustLines()), m.bodyHeight(), m.measured())
 		}
 		if m.imp != nil {
-			m.imp.pg.fit(len(m.importLines()), m.bodyHeight())
+			m.imp.pg.fit(len(m.importLines()), m.bodyHeight(), m.measured())
 		}
 	case SnapshotMsg:
 		m.snap = view.Snapshot(msg)
@@ -807,8 +818,8 @@ func (m Model) View() string {
 		if m.selected[d.Slug] {
 			check = "[x]"
 		}
-		line := m.cutLine(fmt.Sprintf("%s %s %-14s %-22s %s%s", check, style.Glyph(style.Clean(d.Glyph), style.Clean(d.Color)), style.Clean(d.Name),
-			style.Clean(d.Backend+"/"+d.Model), style.Clean(d.Mode), badge(d)))
+		line := m.libraryRow(fmt.Sprintf("%s %s %-14s %-22s %s", check, style.Glyph(style.Clean(d.Glyph), style.Clean(d.Color)), style.Clean(d.Name),
+			style.Clean(d.Backend+"/"+d.Model), style.Clean(d.Mode)), badge(d))
 		if i == m.cursor {
 			line = style.Selected.Render(line)
 		}
@@ -829,6 +840,7 @@ func (m Model) View() string {
 	if m.d.Memory != nil {
 		help += " · M memory · P project memory"
 	}
-	b.WriteString("\n" + style.Dim.Render(strings.ReplaceAll(help, " · ", " "+style.Sym("·")+" ")))
+	help = strings.ReplaceAll(help, " · ", " "+style.Sym("·")+" ")
+	b.WriteString("\n" + style.Dim.Render(strings.Join(m.fitLines([]string{help}), "\n")))
 	return b.String()
 }
