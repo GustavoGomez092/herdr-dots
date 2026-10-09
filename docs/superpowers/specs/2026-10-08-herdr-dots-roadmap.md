@@ -18,7 +18,7 @@
 | **2** | 0.2.0 | **Dot memory: VITAL** | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-2-dot-memory-design.md) | [plan](../plans/2026-10-08-herdr-dots-phase-2-dot-memory.md) |
 | 3 | 0.3.0 | Council mode (with dot-to-dot cross-review) | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-3-council-mode-design.md) | [plan](../plans/2026-10-08-herdr-dots-phase-3-council-mode.md) |
 | 4 | 0.4.0 | API and Ollama backends, keys, cost | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-4-api-backends-design.md) | [plan](../plans/2026-10-08-herdr-dots-phase-4-api-backends.md) |
-| 5 | 0.5.0 | Dots MCP server | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-5-mcp-server-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-5-mcp-server-outline.md) |
+| 5 | 0.5.0 | Dots MCP server | v1 roadmap | [spec](2026-10-08-herdr-dots-phase-5-mcp-server-design.md) | [plan](../plans/2026-10-08-herdr-dots-phase-5-mcp-server.md) |
 | 6 | 0.6.0 | Windows support | v1 "Later" | [spec](2026-10-08-herdr-dots-phase-6-windows-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-6-windows-outline.md) |
 | 7 | 0.7.0 | Write-capable dots in sandboxed worktrees | v1 "Later" | [spec](2026-10-08-herdr-dots-phase-7-write-capable-dots-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-7-write-capable-dots-outline.md) |
 | 8 | 0.8.0 | Proactive dots: background research, schedules, commit triggers | **Proposed by drafter** | [spec](2026-10-08-herdr-dots-phase-8-proactive-dots-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-8-proactive-dots-outline.md) |
@@ -40,6 +40,8 @@ Ask every attached dot the same question at once and get one merged digest card:
 Four new backends behind v1's `backend.Backend`: Anthropic Messages API (official Go SDK, default model `claude-opus-5-5`, structured outputs, refusal handling, server-side fallbacks), OpenAI Responses API (official Go SDK v3), OpenRouter (Chat Completions with authoritative `usage.cost`) and Ollama (local, `num_ctx` handled). A shared read-only tool loop (`read_file`, `grep`, `list_files`, jailed and deny-listed) gives API dots the same repo access CLI dots have. Keys live in a `0600` `credentials.toml` in the plugin config dir, or come from environment variables, and never reach logs or snapshots. Cost is reported in dollars per run, dot and session (provider-reported or from an embedded, dated price table), with dollar budgets next to call budgets. No streaming (verdicts are short).
 
 ### Phase 5: Dots MCP server
+
+Implementation plan: `docs/superpowers/plans/2026-10-08-herdr-dots-phase-5-mcp-server.md` (built in 0.5.0; the product is not done until Phase 10).
 
 A stdio MCP server (`herdr-dots mcp`, official Go SDK v1.7+, MCP 2026-07-28 with backward compatibility) installed into Claude Code and Codex by `herdr-dots setup-mcp`. The main agent can `list_dots`, `ask_dot`, `ask_council`, `list_queue`, `read_memory` and `propose_memory`. The server reaches the pane's engine over v1's local IPC (`dots.sock`, found from `HERDR_SOCKET_PATH` plus install-time state dir) through a new data-returning `ipc.Client.Query`. Answers are synchronous, budgeted and rate-limited per turn. A consulted dot skips reviewing that turn. Outside a Herdr pane, or inside a dot's own CLI run, every tool refuses, so dots can't recurse.
 
