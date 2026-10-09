@@ -67,9 +67,15 @@ Assumption holds: yes, design unaffected (the evidence supports never combining 
 
 ## V6 — password input in a Herdr popup
 
-Not run. `herdr-dots keys set` does not exist yet (Task 17 builds it; there is no `keys` subcommand or `bin/` in this tree at base 6570d77), and `plugin link` is off limits, so there is nothing to run in a `herdr --session dots-test` pane. The Providers screen uses a masked Bubble Tea input and does not depend on V6.
+Partly run after Task 17 (binary built from this tree, temp `HERDR_PLUGIN_CONFIG_DIR` and `HERDR_PLUGIN_STATE_DIR`, a dummy key, no plugin link, no Herdr session):
 
-Assumption holds: not live-verified, design unaffected. Re-run after Task 17 merges.
+- `echo <dummy> | herdr-dots keys set anthropic` stored the key and printed `stored · not verified: anthropic-api timed out: context deadline exceeded` (the dummy key never reached a working provider; the message carries no key text).
+- `herdr-dots keys list` showed `anthropic  file  …ZZZZ` (last four only); `credentials.toml` is mode `-rw-------`.
+- `herdr-dots keys` with no arguments prints the usage line before touching any plugin state.
+
+Not run: the no-echo read inside a Herdr popup pane. That needs an interactive terminal in a `herdr --session dots-test` popup, which a non-interactive run cannot provide. User gate: in a test session popup, run `herdr-dots keys set openai` and confirm typed characters are not echoed. The Providers screen uses a masked Bubble Tea input and does not depend on this.
+
+Assumption holds: piped path verified; popup no-echo not live-verified (user gate), design unaffected.
 
 ## Summary
 
@@ -80,6 +86,6 @@ Assumption holds: not live-verified, design unaffected. Re-run after Task 17 mer
 | V3 | not live-verified (no key); docs agree; the fallback covers it |
 | V4 | verified live: `format` + `tools` together suppresses tool calls; the design never combines them |
 | V5 | not live-verified (no key) |
-| V6 | not run (needs the Task 17 binary) |
+| V6 | piped `keys set`/`list` verified with a dummy key in a temp dir; popup no-echo is a user gate |
 
 No assumption was contradicted, so there are no GATE lines.
