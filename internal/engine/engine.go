@@ -403,16 +403,33 @@ func (e *Engine) Detach(paneID, slug string) error {
 		cur, ok := e.d.Attachments.Get(paneID)
 		empty = ok && len(cur.Dots) == 0
 	}
+	orphaned := 0
+	var oerr error
 	if empty {
-		// In the same e.mu section as the delete: a draft registering after it
-		// sees the attachment gone, one before it is abandoned here.
+		// The attachment ends as in dropPane, in the same e.mu section as the
+		// delete: a draft registering after it sees the attachment gone, one
+		// before it is abandoned here; the pane's pending cards are orphaned
+		// and its usage reset, so the same pane id attached again inherits no
+		// card (a digest included), spend or status.
 		e.abandonDraftsLocked(paneID, "")
 		e.gens[paneID]++
 		delete(e.idle, paneID) // a later attach starts a fresh idle period (idle.go)
+		orphaned, oerr = e.d.Queue.OrphanPane(paneID)
+		_ = e.d.Usage.ResetPane(paneID)
 		_ = e.d.Attachments.Delete(paneID)
+		for k := range e.status {
+			if k.pane == paneID {
+				delete(e.status, k)
+			}
+		}
 	}
 	e.mu.Unlock()
 	if empty {
+		if oerr != nil {
+			e.d.Logf("orphan cards for %s: %v", paneID, oerr)
+		} else if orphaned > 0 {
+			e.d.Logf("pane %s: last dot detached: %d card(s) orphaned", paneID, orphaned)
+		}
 		e.unwatch(paneID)
 	}
 	e.broadcast()

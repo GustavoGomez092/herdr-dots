@@ -10,6 +10,7 @@ import (
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
 	"herdr-dots/internal/view"
@@ -189,6 +190,32 @@ func TestDetachedDotMidRunDeliversNothing(t *testing.T) {
 				t.Errorf("inbox %+v, want %d card(s)", inbox, want)
 			}
 		})
+	}
+}
+
+// Detaching a pane's last dot ends the attachment like a closed pane: its
+// pending cards are orphaned and its session usage reset, so the same pane
+// id attached again starts clean.
+func TestDetachingTheLastDotEndsThePane(t *testing.T) {
+	r := newProRig(t, proOpts{}, dot("Security", dots.ModeQueue))
+	r.attach(t, "security")
+	c, err := r.q.Add(queue.Card{Dot: "away", DotName: "Away", PaneID: pane, Kind: queue.KindDigest, Severity: "warn",
+		Body: "1 dot · 12 min", Mode: "queue", Parts: []queue.CardPart{{Dot: "security", DotName: "Security", Severity: "warn", Body: "old finding"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.usage.Add(pane, "security", state.Delta{Calls: 3, CostUSD: 0.2, CostKnown: true})
+	if err := r.e.Detach(pane, "security"); err != nil {
+		t.Fatal(err)
+	}
+	r.attach(t, "security")
+	for _, p := range r.q.Pending(pane) {
+		if p.ID == c.ID {
+			t.Fatalf("the old digest is still pending on the new attachment: %+v", p)
+		}
+	}
+	if n := r.usage.PaneCalls(pane); n != 0 {
+		t.Fatalf("the new attachment inherited %d calls", n)
 	}
 }
 
