@@ -1,10 +1,11 @@
-// Package backend runs a dot against a model. v1 ships CLI backends (claude,
-// codex) that reuse the user's existing logins; API and Ollama backends plug in
-// behind the same interface in a later increment.
+// Package backend runs a dot against a model: CLI backends (claude, codex)
+// that reuse the user's logins, and API backends (Anthropic, OpenAI,
+// OpenRouter, Ollama) that live in sub-packages and register themselves.
 package backend
 
 import (
 	"context"
+	"time"
 
 	"herdr-dots/internal/transcript"
 )
@@ -29,6 +30,13 @@ type Request struct {
 	Memory    string // pre-rendered memory block (memory.Render); "" = none
 	Learn     bool   // the dot may return memory ops in its reply
 	Pass      string // PassReview or PassMemory
+
+	// Phase 4: API backends. Zero values mean provider defaults.
+	Effort        string // "" | low | medium | high | xhigh | max (anthropic-api, openai-api)
+	MaxTokens     int    // 0 = DefaultMaxTokens
+	BaseURL       string // ollama, openrouter: per-dot endpoint override
+	ContextWindow int    // ollama num_ctx; 0 = DefaultContextWindow
+	Fallbacks     string // anthropic-api: "" or "default" = on, "off"
 }
 
 // Pass values: a normal review, or an observe dot's memory-only pass.
@@ -61,6 +69,15 @@ type Result struct {
 	CostUSD      float64
 	Raw          string
 	Remember     []MemoryOp // memory ops from the reply; Verdict stays comparable
+
+	// Phase 4: usage detail and cost provenance.
+	CacheReadTokens  int
+	CacheWriteTokens int
+	CostKnown        bool          // CostUSD came from the provider or the price table
+	Model            string        // the model that answered (differs from Request.Model after a fallback)
+	ToolCalls        int           // repo tool calls made by an API dot
+	ToolsCapped      bool          // the tool-call cap was reached
+	Duration         time.Duration // wall time of the run
 }
 
 type Backend interface {
