@@ -15,6 +15,9 @@ const (
 	StatusError    = "error"
 	StatusBudget   = "budget"
 	StatusPaused   = "paused"
+	// StatusConsulted: the main agent asked this dot through the MCP server;
+	// it skips the turn it was asked in (Phase 5).
+	StatusConsulted = "consulted"
 )
 
 type DotState struct {

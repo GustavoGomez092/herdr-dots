@@ -17,6 +17,8 @@ import (
 )
 
 type Config struct {
+	MCP MCPConfig `toml:"mcp"` // [mcp]: the Dots MCP server (Phase 5, mcp.go)
+
 	DefaultBackend     string `toml:"default_backend"`
 	DefaultModel       string `toml:"default_model"`
 	SessionBudgetCalls int    `toml:"session_budget_calls"`
@@ -92,6 +94,7 @@ func (c CouncilConfig) Normalized() CouncilConfig {
 
 func Default() Config {
 	return Config{
+		MCP:                DefaultMCP(),
 		Council:            DefaultCouncil(),
 		DefaultBackend:     "claude-cli",
 		DefaultModel:       "sonnet",
@@ -142,6 +145,7 @@ func Load(path string) (Config, error) {
 		c.MemoryRetentionDays = 1
 	}
 	c.MemoryMaxEntries = min(max(c.MemoryMaxEntries, 10), 10000)
+	c.MCP = c.MCP.Normalized()
 	c.Council = c.Council.Normalized()
 	if math.IsNaN(c.SessionBudgetUSD) || math.IsInf(c.SessionBudgetUSD, 0) || c.SessionBudgetUSD < 0 {
 		c.SessionBudgetUSD = 0
