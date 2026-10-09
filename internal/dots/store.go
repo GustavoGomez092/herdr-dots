@@ -121,9 +121,17 @@ func Save(dir string, d Dot, create bool) error {
 // names the field, never the value.
 func Encode(d Dot) ([]byte, error) {
 	if field := secretField(d); field != "" {
-		return nil, fmt.Errorf("%s looks like it holds a secret (a key, token or password); remove it before sharing this dot", field)
+		return nil, &SecretError{Field: field}
 	}
 	return encode(d)
+}
+
+// SecretError is Encode's refusal: Field is the TOML key of the string that
+// looks like a credential. It never carries the value.
+type SecretError struct{ Field string }
+
+func (e *SecretError) Error() string {
+	return e.Field + " looks like it holds a secret (a key, token or password); remove it before sharing this dot"
 }
 
 // encode is Encode without the secret check: Save writes the developer's own

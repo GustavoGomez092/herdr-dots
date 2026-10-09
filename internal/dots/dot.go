@@ -271,6 +271,20 @@ func hiddenText(s string, glyph bool) bool {
 	})
 }
 
+// ErrUnsafeText is UnsafeText's error.
+var ErrUnsafeText = errors.New("must not contain control, bidi or invisible characters")
+
+// UnsafeText refuses text Validate refuses in a dot's display strings, for
+// text that travels beside a dot (dot pack notes and memory): control
+// characters (newline and tab allowed when multiline), bidi controls and
+// every hidden format character (hiddenText, no glyph exception).
+func UnsafeText(s string, multiline bool) error {
+	if unsafeText(s, multiline) || hiddenText(s, false) {
+		return ErrUnsafeText
+	}
+	return nil
+}
+
 // glyphWidth counts a glyph's visible characters: runes other than a ZWJ
 // or an emoji variation selector.
 func glyphWidth(g string) int {

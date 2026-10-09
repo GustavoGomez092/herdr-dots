@@ -12,13 +12,16 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 
+	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/secrets"
+	"herdr-dots/internal/textutil"
 )
 
 // Format is the pack format this version writes and reads.
@@ -30,8 +33,12 @@ const MaxBytes = 256 << 10
 // Ext is the conventional file extension.
 const Ext = ".dotpack.toml"
 
-// maxMemoryRunes caps one memory entry's text in a pack.
-const maxMemoryRunes = 500
+// Limits on one memory entry in a pack.
+const (
+	maxMemoryRunes     = 500
+	maxMemoryPaths     = 10
+	maxMemoryPathRunes = 256
+)
 
 var (
 	ErrFormat         = errors.New("not a dot pack this herdr-dots can read")
@@ -102,18 +109,40 @@ func looksSecret(text string) bool {
 	return found
 }
 
+// looksSecretText is looksSecret for free text that travels beside the dot
+// (note, version, memory), with the checks dots.Encode and ImportPack apply:
+// the text as written and sanitized (a control byte must not split a key
+// from the scanner and then vanish), and the shapes credentials.Redact
+// scrubs.
+func looksSecretText(text string) bool {
+	clean := textutil.SanitizeModelText(text)
+	return looksSecret(text) || looksSecret(clean) || credentials.Redact(text) != text || credentials.Redact(clean) != clean
+}
+
 // Export renders d and mem as a pack. mem should already be the entries the
 // developer chose (SelectMemory): active, dot or project scope, an ImportKind,
-// and dot scope only for d itself; anything else is refused. It refuses with
-// a *SecretError when the dot, the note or any entry looks like it holds a
-// secret (with Force, flagged entries are left out instead), and scans the
-// whole rendered pack once more before returning it.
+// dot scope only for d itself, at most memory.MaxPendingImports per scope;
+// anything else is refused. Memory text is sanitized
+// (textutil.SanitizeModelText), and absolute memory paths and schedule
+// projects (places on the author's machine) are left out. It refuses with a
+// *SecretError when the dot, the note, the version or any entry looks like
+// it holds a secret (with Force, flagged entries are left out instead), and
+// scans the whole rendered pack once more before returning it.
 func Export(d dots.Dot, mem []memory.Entry, o ExportOptions) ([]byte, error) {
 	slug := d.Slug
 	if slug == "" {
 		slug = dots.Slugify(d.Name)
 	}
-	if err := checkTravels(slug, mem); err != nil {
+	// Mirror ClampDot: only "attached" travels.
+	d.Schedule.Projects = slices.DeleteFunc(slices.Clone(d.Schedule.Projects), func(p string) bool { return p != dots.ScheduleAttached })
+	meta := []struct{ name, text string }{{"note", o.Note}, {"version", o.Version}}
+	for _, f := range meta {
+		if err := dots.UnsafeText(f.text, false); err != nil {
+			return nil, fmt.Errorf("%s %w", f.name, err)
+		}
+	}
+	items, err := travelling(slug, mem)
+	if err != nil {
 		return nil, err
 	}
 	var where []string // always refused
@@ -131,32 +160,33 @@ func Export(d dots.Dot, mem []memory.Entry, o ExportOptions) ([]byte, error) {
 		// Every other string of the dot, as dots.Encode checks it (by
 		// reflection, so a field added later is covered).
 		if _, err := dots.Encode(d); err != nil {
-			field, _, ok := strings.Cut(err.Error(), " looks like it holds a secret")
-			if !ok {
+			var de *dots.SecretError
+			if !errors.As(err, &de) {
 				return nil, err
 			}
-			where = append(where, field)
+			where = append(where, de.Field)
 		}
 	}
-	scan("note", o.Note)
-	scan("version", o.Version)
+	for _, f := range meta {
+		if looksSecretText(f.text) {
+			where = append(where, f.name)
+		}
+	}
 	var memWhere []string // refused unless Force, which leaves them out
-	items := make([]MemoryItem, 0, len(mem))
+	kept := make([]MemoryItem, 0, len(items))
 	for i, e := range mem {
-		if found, _ := memory.ScanSecrets(e.Text + " " + strings.Join(e.Paths, " ")); found {
+		// The entry as given, absolute paths included: a secret in what is
+		// left out still means the developer should look.
+		if looksSecretText(e.Text + " " + strings.Join(e.Paths, " ")) {
 			memWhere = append(memWhere, fmt.Sprintf("memory %d", i+1))
 			continue
 		}
-		paths := e.Paths
-		if paths == nil {
-			paths = []string{}
-		}
-		items = append(items, MemoryItem{Scope: string(e.Scope), Kind: string(e.Kind), Text: e.Text, Paths: paths})
+		kept = append(kept, items[i])
 	}
 	if len(where) > 0 || (len(memWhere) > 0 && !o.Force) {
 		return nil, &SecretError{Where: append(where, memWhere...)}
 	}
-	out, err := render(d, items, o)
+	out, err := render(d, kept, o)
 	if err != nil {
 		return nil, err
 	}
@@ -168,11 +198,23 @@ func Export(d dots.Dot, mem []memory.Entry, o ExportOptions) ([]byte, error) {
 	return out, nil
 }
 
-// checkTravels refuses memory a pack must never carry: proposals and archived
-// entries, global scope, personal kinds (preferences), another dot's entries,
-// and text Parse would refuse.
-func checkTravels(slug string, mem []memory.Entry) error {
+// travelling returns mem as pack items: text sanitized, absolute paths left
+// out. It refuses memory a pack must never carry (proposals and archived
+// entries, global scope, personal kinds such as preferences, another dot's
+// entries, more than memory.MaxPendingImports per scope) and anything Parse
+// would refuse.
+func travelling(slug string, mem []memory.Entry) ([]MemoryItem, error) {
+	items := make([]MemoryItem, 0, len(mem))
+	perScope := map[memory.Scope]int{}
 	for i, e := range mem {
+		text := strings.TrimSpace(textutil.SanitizeModelText(e.Text))
+		paths := []string{}
+		for _, p := range e.Paths {
+			if p = strings.TrimSpace(textutil.SanitizeModelText(p)); p != "" && !absPath(p) {
+				paths = append(paths, p)
+			}
+		}
+		perScope[e.Scope]++
 		why := ""
 		switch {
 		case e.Status != "" && e.Status != memory.StatusActive:
@@ -183,16 +225,66 @@ func checkTravels(slug string, mem []memory.Entry) error {
 			why = fmt.Sprintf("kind must be one of %v", memory.ImportKinds)
 		case e.Scope == memory.ScopeDot && e.Dot != "" && e.Dot != slug:
 			why = "it belongs to another dot"
-		case strings.TrimSpace(e.Text) == "":
-			why = "text is empty"
-		case utf8.RuneCountInString(strings.TrimSpace(e.Text)) > maxMemoryRunes:
-			why = fmt.Sprintf("text is over %d characters", maxMemoryRunes)
+		default:
+			why = memoryProblem(text, paths)
 		}
 		if why != "" {
-			return fmt.Errorf("memory %d can't be exported: %s", i+1, why)
+			return nil, fmt.Errorf("memory %d can't be exported: %s", i+1, why)
+		}
+		items = append(items, MemoryItem{Scope: string(e.Scope), Kind: string(e.Kind), Text: text, Paths: paths})
+	}
+	if err := scopeCounts(perScope); err != nil {
+		return nil, fmt.Errorf("memory can't be exported: %w", err)
+	}
+	return items, nil
+}
+
+// memoryProblem is why a pack can't carry an entry's text and paths, or ""
+// when it can. It never quotes them.
+func memoryProblem(text string, paths []string) string {
+	switch {
+	case text == "":
+		return "text is empty"
+	case utf8.RuneCountInString(text) > maxMemoryRunes:
+		return fmt.Sprintf("text is over %d characters", maxMemoryRunes)
+	case dots.UnsafeText(text, true) != nil:
+		return "text " + dots.ErrUnsafeText.Error()
+	case len(paths) > maxMemoryPaths:
+		return fmt.Sprintf("more than %d paths", maxMemoryPaths)
+	}
+	for j, p := range paths {
+		switch {
+		case utf8.RuneCountInString(p) > maxMemoryPathRunes:
+			return fmt.Sprintf("path %d is over %d characters", j+1, maxMemoryPathRunes)
+		case dots.UnsafeText(p, false) != nil:
+			return fmt.Sprintf("path %d %s", j+1, dots.ErrUnsafeText)
+		case absPath(p):
+			return fmt.Sprintf("path %d is absolute (packs carry repository-relative paths only)", j+1)
+		}
+	}
+	return ""
+}
+
+// scopeCounts refuses more than memory.MaxPendingImports entries in a scope:
+// ImportPack would refuse the rest anyway.
+func scopeCounts(n map[memory.Scope]int) error {
+	for _, sc := range []memory.Scope{memory.ScopeDot, memory.ScopeProject} {
+		if n[sc] > memory.MaxPendingImports {
+			return fmt.Errorf("%d %s-scope entries (at most %d per scope)", n[sc], sc, memory.MaxPendingImports)
 		}
 	}
 	return nil
+}
+
+// absPath reports a path that names a place on someone's machine rather than
+// in the repository: /x (and //server), ~x, \x and \\server, or a drive
+// letter (C:).
+func absPath(p string) bool {
+	p = strings.TrimSpace(p)
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || strings.HasPrefix(p, `\`) {
+		return true
+	}
+	return len(p) >= 2 && p[1] == ':' && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z'))
 }
 
 func render(d dots.Dot, items []MemoryItem, o ExportOptions) ([]byte, error) {
@@ -254,47 +346,216 @@ func insertBeforeSubtable(doc, block string) string {
 	return strings.TrimRight(doc, "\n") + "\n" + block + "\n"
 }
 
-// Parse reads a pack. It refuses oversized files, other formats, keys this
-// version doesn't know (a capability it doesn't know can't be clamped) and
-// memory it wouldn't import. The dot is returned as written, except that its
-// origin is import whatever the file says (P9-R7).
+// Pre-scan limits: no pack needs deeper nesting or longer key paths, and the
+// TOML decoder takes seconds and hundreds of MB on files that go far past
+// them (nested inline tables, a 32k-segment dotted key).
+const (
+	maxNesting     = 8
+	maxKeySegments = 8
+)
+
+// preScan refuses bracket/brace nesting deeper than maxNesting and dotted
+// key paths longer than maxKeySegments, in one pass that skips comments and
+// all four kinds of TOML string. It leaves every other syntax question to
+// the decoder.
+func preScan(s string) error {
+	depth, segs := 0, 0
+	inKey, afterDot := false, false // a run of key segments; the last token was "."
+	segment := func() error {
+		if inKey && afterDot {
+			segs++
+		} else {
+			segs = 1
+		}
+		inKey, afterDot = true, false
+		if segs > maxKeySegments {
+			return fmt.Errorf("a key path has more than %d parts", maxKeySegments)
+		}
+		return nil
+	}
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == '#':
+			j := strings.IndexByte(s[i:], '\n')
+			if j < 0 {
+				return nil
+			}
+			i += j
+			continue
+		case c == '"' || c == '\'':
+			end := stringEnd(s, i)
+			if end < 0 {
+				return nil // unterminated: the decoder reports it
+			}
+			i = end
+			if err := segment(); err != nil {
+				return err
+			}
+			continue
+		case c == '[' || c == '{':
+			depth++
+			if depth > maxNesting {
+				return fmt.Errorf("brackets or braces nest more than %d deep", maxNesting)
+			}
+			inKey, afterDot = false, false
+		case c == ']' || c == '}':
+			if depth > 0 {
+				depth--
+			}
+			inKey, afterDot = false, false
+		case c == '.':
+			afterDot = true
+		case c == ' ' || c == '\t':
+			// whitespace may surround the dots of a key
+		case bareKeyByte(c):
+			j := i
+			for j < len(s) && bareKeyByte(s[j]) {
+				j++
+			}
+			i = j
+			if err := segment(); err != nil {
+				return err
+			}
+			continue
+		default:
+			inKey, afterDot = false, false
+		}
+		i++
+	}
+	return nil
+}
+
+func bareKeyByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+}
+
+// stringEnd returns the index just past the TOML string starting at s[i]
+// (basic, literal, or either multi-line form), or -1 when it doesn't end.
+// Single-line strings end at a newline at the latest.
+func stringEnd(s string, i int) int {
+	q := s[i]
+	escapes := q == '"'
+	if strings.HasPrefix(s[i:], strings.Repeat(string(q), 3)) {
+		for j := i + 3; j < len(s); j++ {
+			switch {
+			case escapes && s[j] == '\\':
+				j++
+			case s[j] == q && strings.HasPrefix(s[j:], strings.Repeat(string(q), 3)):
+				end := j + 3
+				for k := 0; k < 2 && end < len(s) && s[end] == q; k++ {
+					end++ // up to two quotes may end the content
+				}
+				return end
+			}
+		}
+		return -1
+	}
+	for j := i + 1; j < len(s); j++ {
+		switch {
+		case s[j] == '\n':
+			return -1
+		case escapes && s[j] == '\\':
+			j++
+		case s[j] == q:
+			return j + 1
+		}
+	}
+	return -1
+}
+
+// cleanKey shows a key from an untrusted file in an error: every rune that
+// doesn't print as itself (controls, bidi and other format characters) as
+// \u escapes, clipped to 80 runes.
+func cleanKey(k string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range k {
+		if n == 80 {
+			b.WriteString("…")
+			break
+		}
+		n++
+		if unicode.IsPrint(r) {
+			b.WriteRune(r)
+		} else {
+			fmt.Fprintf(&b, "\\u%04x", r)
+		}
+	}
+	return b.String()
+}
+
+// Parse reads a pack. It refuses oversized files, nesting and key paths no
+// pack needs (preScan), other formats (checked first, so a newer pack says
+// so), keys this version doesn't know (a capability it doesn't know can't be
+// clamped), unsafe text in the note, version and memory, and memory it
+// wouldn't import. The dot is returned as written, except that its origin is
+// import whatever the file says (P9-R7).
 func Parse(data []byte) (Pack, error) {
 	if len(data) > MaxBytes {
 		return Pack{}, ErrTooLarge
 	}
+	text := string(data)
+	if err := preScan(text); err != nil {
+		return Pack{}, fmt.Errorf("%w: %v", ErrFormat, err)
+	}
+	var probe struct {
+		Pack struct {
+			Format int `toml:"format"`
+		} `toml:"pack"`
+	}
+	if _, err := toml.Decode(text, &probe); err != nil {
+		return Pack{}, fmt.Errorf("%w: %v", ErrFormat, err)
+	}
+	if probe.Pack.Format != Format {
+		return Pack{}, fmt.Errorf("%w: format %d (this version reads format %d)", ErrFormat, probe.Pack.Format, Format)
+	}
 	doc := fileDoc{Dot: dots.New("")}
-	md, err := toml.Decode(string(data), &doc)
+	md, err := toml.Decode(text, &doc)
 	if err != nil {
 		return Pack{}, fmt.Errorf("%w: %v", ErrFormat, err)
 	}
 	if un := md.Undecoded(); len(un) > 0 {
-		keys := make([]string, len(un))
-		for i, k := range un {
-			keys[i] = k.String()
+		var keys []string
+		for _, k := range un[:min(len(un), 5)] {
+			keys = append(keys, cleanKey(k.String()))
 		}
-		return Pack{}, fmt.Errorf("%w: unknown keys %s (exported by a newer herdr-dots?)", ErrFormat, strings.Join(keys, ", "))
-	}
-	if doc.Pack.Format != Format {
-		return Pack{}, fmt.Errorf("%w: format %d (this version reads format %d)", ErrFormat, doc.Pack.Format, Format)
+		more := ""
+		if len(un) > 5 {
+			more = fmt.Sprintf(" and %d more", len(un)-5)
+		}
+		return Pack{}, fmt.Errorf("%w: unknown keys %s%s (exported by a newer herdr-dots?)", ErrFormat, strings.Join(keys, ", "), more)
 	}
 	var errs []error
+	for _, f := range []struct{ name, text string }{{"note", doc.Pack.Note}, {"herdr_dots_version", doc.Pack.Version}} {
+		if err := dots.UnsafeText(f.text, false); err != nil {
+			errs = append(errs, fmt.Errorf("pack %s %w", f.name, err))
+		}
+	}
 	p := Pack{Meta: doc.Pack, Dot: doc.Dot}
 	p.Dot.Slug, p.Dot.Origin, p.Dot.SourcePath = dots.Slugify(p.Dot.Name), dots.OriginImport, ""
+	perScope := map[memory.Scope]int{}
 	for i, it := range doc.Memory {
 		e := memory.Entry{Scope: memory.Scope(strings.TrimSpace(it.Scope)), Kind: memory.Kind(strings.TrimSpace(it.Kind)),
 			Text: strings.TrimSpace(it.Text), Paths: it.Paths}
+		perScope[e.Scope]++
+		why := ""
 		switch {
 		case e.Scope != memory.ScopeDot && e.Scope != memory.ScopeProject:
-			errs = append(errs, fmt.Errorf("memory %d: scope must be dot or project", i+1))
+			why = "scope must be dot or project"
 		case !slices.Contains(memory.ImportKinds, e.Kind):
-			errs = append(errs, fmt.Errorf("memory %d: kind must be one of %v", i+1, memory.ImportKinds))
-		case e.Text == "":
-			errs = append(errs, fmt.Errorf("memory %d: text is empty", i+1))
-		case utf8.RuneCountInString(e.Text) > maxMemoryRunes:
-			errs = append(errs, fmt.Errorf("memory %d: text is over %d characters", i+1, maxMemoryRunes))
+			why = fmt.Sprintf("kind must be one of %v", memory.ImportKinds)
 		default:
-			p.Memory = append(p.Memory, e)
+			why = memoryProblem(e.Text, e.Paths)
 		}
+		if why != "" {
+			errs = append(errs, fmt.Errorf("memory %d: %s", i+1, why))
+			continue
+		}
+		p.Memory = append(p.Memory, e)
+	}
+	if err := scopeCounts(perScope); err != nil {
+		errs = append(errs, fmt.Errorf("memory: %w", err))
 	}
 	if len(errs) > 0 {
 		return Pack{}, fmt.Errorf("%w: %w", ErrFormat, errors.Join(errs...))

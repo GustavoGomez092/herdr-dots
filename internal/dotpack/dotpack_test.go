@@ -394,3 +394,232 @@ func TestSelectMemoryFollowsS9(t *testing.T) {
 		t.Fatal("bad choice")
 	}
 }
+
+// ---- fix round 1
+
+func TestParseRefusesTOMLBombsFast(t *testing.T) {
+	bombs := map[string]string{
+		"64 KB nested inline tables":  "x = " + strings.Repeat("{a=", 64<<10/4) + "1" + strings.Repeat("}", 64<<10/4),
+		"128 KB nested inline tables": "x = " + strings.Repeat("{a=", 128<<10/4) + "1" + strings.Repeat("}", 128<<10/4),
+		"64 KB dotted key":            strings.Repeat("a.", 32<<10) + "a = 1",
+		"nested arrays":               "x = " + strings.Repeat("[", 60<<10) + strings.Repeat("]", 60<<10),
+		"nine levels":                 "x = [[[[{a=[[[[1]]]]}]]]]",
+		"nine-segment key":            "a.b.c.d.e.f.g.h.i = 1",
+		"nine-segment header":         "[a.b.c.d.e.f.g.h.i]\n",
+		"quoted segments":             strings.Repeat("\"a\" . ", 9) + "'b' = 1",
+	}
+	for name, bomb := range bombs {
+		data := "[pack]\nformat = 1\n" + bomb + "\n"
+		start := time.Now()
+		_, err := Parse([]byte(data))
+		if took := time.Since(start); took > 100*time.Millisecond {
+			t.Errorf("%s: took %v", name, took)
+		}
+		if !errors.Is(err, ErrFormat) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestPreScanLimits(t *testing.T) {
+	for _, s := range []string{
+		"x = [[[[{a=[[[1]]]}]]]]",
+		"a.b.c.d.e.f.g.h = 1",
+		"[a.b.c.d.e.f.g.h]",
+		"\"a\" . 'b' . c.d.e.f.g.h = 1",
+		"x = 1.5\ny = 2026-10-21T10:00:00Z",
+	} {
+		if err := preScan(s); err != nil {
+			t.Errorf("%q: %v", s, err)
+		}
+	}
+	for _, s := range []string{
+		"x = [[[[{a=[[[[1]]]]}]]]]",
+		"a.b.c.d.e.f.g.h.i = 1",
+		"[a.b.c.d.e.f.g.h.i]",
+		"\"a\" . 'b' . c.d.e.f.g.h.\"\"\"i\"\"\" = 1",
+		"x = {a={b={c={d={e={f={g={h={i=1}}}}}}}}}",
+	} {
+		if err := preScan(s); err == nil {
+			t.Errorf("%q accepted", s)
+		}
+	}
+}
+
+func TestEveryTemplateRoundTrips(t *testing.T) {
+	for _, tpl := range dots.Templates() {
+		data, err := Export(tpl, dpMem(), ExportOptions{Now: dpNow, Version: "0.9.0"})
+		if err != nil {
+			t.Fatalf("%s: %v", tpl.Slug, err)
+		}
+		p, err := Parse(data)
+		if err != nil {
+			t.Fatalf("%s: %v", tpl.Slug, err)
+		}
+		if _, _, err := Prepare(p, nil); err != nil {
+			t.Fatalf("%s: %v", tpl.Slug, err)
+		}
+	}
+}
+
+func TestPreScanSkipsStringsAndComments(t *testing.T) {
+	d := dpDot()
+	d.Purpose = "Nested {{{{{{{{{{ [[[[[[[[[[ a.b.c.d.e.f.g.h.i.j \"quoted\" ''' \\ \"\"\" #not a comment"
+	mem := []memory.Entry{{Scope: memory.ScopeDot, Kind: memory.KindNote, Text: "Use a.b.c.d.e.f.g.h.i.j and {{{{{{{{{{ with \"quotes\" and \\ backslashes # too"}}
+	data, err := Export(d, mem, ExportOptions{Now: dpNow, Note: "[[[[[[[[[[ {{{{{{{{{{"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := "# {{{{{{{{{{ [[[[[[[[[[ a.b.c.d.e.f.g.h.i.j\n" + string(data) + "\n# trailing ]]]]]]]]]] }}}}}}}}}}\n"
+	p, err := Parse([]byte(extra))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Dot.Purpose != d.Purpose || p.Memory[0].Text != mem[0].Text {
+		t.Fatalf("strings changed:\n%q\n%q", p.Dot.Purpose, p.Memory[0].Text)
+	}
+	lit := "[pack]\nformat = 1\nnote = 'C:\\{{{{{{{{{{'\n[dot]\nname = '''multi {{{{{{{{{\n[[[[[[[[[ line'''\n"
+	if err := preScan(lit); err != nil {
+		t.Fatalf("literal strings counted: %v", err)
+	}
+}
+
+func TestParseListsAFewSanitizedUnknownKeys(t *testing.T) {
+	good, _ := Export(dpDot(), nil, ExportOptions{Now: dpNow})
+	data := string(good) + "\n[dot.zz]\n\"\\u202eevil\\u001b\" = 1\nk2 = 2\nk3 = 3\nk4 = 4\nk5 = 5\nk6 = 6\nk7 = 7\n"
+	_, err := Parse([]byte(data))
+	if !errors.Is(err, ErrFormat) {
+		t.Fatalf("err %v", err)
+	}
+	msg := err.Error()
+	if strings.ContainsAny(msg, "\u202e\x1b") {
+		t.Fatalf("unsanitized key in %q", msg)
+	}
+	if strings.Contains(msg, "k6") || strings.Contains(msg, "k7") || !strings.Contains(msg, "more") {
+		t.Fatalf("lists too many keys: %q", msg)
+	}
+}
+
+func TestExportLeavesOutAbsolutePaths(t *testing.T) {
+	d := dpDot()
+	d.Schedule.Projects = []string{dots.ScheduleAttached, "/Users/me/secret-client", `C:\work\client`}
+	mem := []memory.Entry{{Scope: memory.ScopeDot, Kind: memory.KindNote, Text: "Paths.",
+		Paths: []string{"/etc/hosts", "~/notes/x.md", `C:\Users\me\x`, "c:/Users/me/y", `\\server\share\z`, "//server/share", "src/**", "docs/a.md"}}}
+	data, err := Export(d, mem, ExportOptions{Now: dpNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"/Users/me", "client", "/etc/hosts", "~/notes", "server", "Users"} {
+		if strings.Contains(string(data), leak) {
+			t.Fatalf("%q leaked:\n%s", leak, data)
+		}
+	}
+	p, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(p.Memory[0].Paths, ","); got != "src/**,docs/a.md" {
+		t.Fatalf("paths %s", got)
+	}
+	got, cs, err := Prepare(p, nil)
+	if err != nil || strings.Join(got.Schedule.Projects, ",") != dots.ScheduleAttached || strings.Contains(clampNames(cs), dots.CapProjects) {
+		t.Fatalf("projects %v %v %v", got.Schedule.Projects, cs, err)
+	}
+}
+
+func dpPackWith(t *testing.T, tail string) string {
+	t.Helper()
+	good, err := Export(dpDot(), nil, ExportOptions{Now: dpNow, Note: "n", Version: "0.9.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(good) + tail
+}
+
+func memBlock(scope, text, paths string) string {
+	return "\n[[memory]]\nscope = \"" + scope + "\"\nkind = \"note\"\ntext = \"" + text + "\"\npaths = [" + paths + "]\n"
+}
+
+func TestParseRefusesUnsafeTextInMetaAndMemory(t *testing.T) {
+	base := dpPackWith(t, "")
+	cases := map[string]string{
+		"OSC 52 note":        strings.Replace(base, `note = "n"`, `note = "\u001b]52;c;ZXZpbA==\u0007"`, 1),
+		"CSI version":        strings.Replace(base, `herdr_dots_version = "0.9.0"`, `herdr_dots_version = "\u001b[2J"`, 1),
+		"newline version":    strings.Replace(base, `herdr_dots_version = "0.9.0"`, `herdr_dots_version = "0.9\n0"`, 1),
+		"RLO memory text":    base + memBlock("dot", `a \u202e b`, ""),
+		"tag memory text":    base + memBlock("dot", `a \U000E0041 b`, ""),
+		"ESC in memory text": base + memBlock("dot", `a \u001b b`, ""),
+		"OSC path":           base + memBlock("dot", "ok", `"src/\u001b]8;;http://x\u0007a"`),
+		"absolute path":      base + memBlock("dot", "ok", `"/etc/passwd"`),
+		"drive path":         base + memBlock("dot", "ok", `"D:/x"`),
+		"eleven paths":       base + memBlock("dot", "ok", strings.Repeat(`"a",`, 11)),
+		"long path":          base + memBlock("dot", "ok", `"`+strings.Repeat("a", 257)+`"`),
+	}
+	for name, data := range cases {
+		if _, err := Parse([]byte(data)); !errors.Is(err, ErrFormat) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	ok := base + memBlock("dot", `line one\nline two\twith a tab`, `"`+strings.Repeat("a", 256)+`"`+strings.Repeat(`,"b"`, 9))
+	if p, err := Parse([]byte(ok)); err != nil || p.Memory[0].Text != "line one\nline two\twith a tab" {
+		t.Fatalf("multiline memory text: %v", err)
+	}
+}
+
+func TestParseCapsMemoryPerScope(t *testing.T) {
+	var tail strings.Builder
+	for i := 0; i < memory.MaxPendingImports; i++ {
+		tail.WriteString(memBlock("dot", "d", ""))
+		tail.WriteString(memBlock("project", "p", ""))
+	}
+	if p, err := Parse([]byte(dpPackWith(t, tail.String()))); err != nil || len(p.Memory) != 2*memory.MaxPendingImports {
+		t.Fatalf("at the cap: %v", err)
+	}
+	tail.WriteString(memBlock("dot", "one too many", ""))
+	_, err := Parse([]byte(dpPackWith(t, tail.String())))
+	if !errors.Is(err, ErrFormat) || !strings.Contains(err.Error(), "51") {
+		t.Fatalf("over the cap: %v", err)
+	}
+	var mem []memory.Entry
+	for i := 0; i <= memory.MaxPendingImports; i++ {
+		mem = append(mem, memory.Entry{Scope: memory.ScopeDot, Kind: memory.KindNote, Text: "x"})
+	}
+	if _, err := Export(dpDot(), mem, ExportOptions{}); err == nil || !strings.Contains(err.Error(), "51") {
+		t.Fatalf("export over the cap: %v", err)
+	}
+}
+
+func TestParseReportsANewerFormatFirst(t *testing.T) {
+	data := strings.Replace(dpPackWith(t, "\n[dot.sandbox]\nshell = true\n"), "format = 1", "format = 2", 1)
+	_, err := Parse([]byte(data))
+	if !errors.Is(err, ErrFormat) || !strings.Contains(err.Error(), "format 2 (this version reads format 1)") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestExportScansSanitizedAndRedactShapes(t *testing.T) {
+	var se *SecretError
+	split := []memory.Entry{{Scope: memory.ScopeDot, Kind: memory.KindNote, Text: "token ghp_aBcDeFgHiJk\x1bLmNoPqRsTuVwXyZ0123456789"}}
+	if _, err := Export(dpDot(), split, ExportOptions{}); !errors.As(err, &se) || strings.Join(se.Where, ",") != "memory 1" {
+		t.Fatalf("control-split key: %v", err)
+	}
+	redactOnly := "send x-api-key: abc123z"
+	if _, err := Export(dpDot(), nil, ExportOptions{Note: redactOnly}); !errors.As(err, &se) || strings.Join(se.Where, ",") != "note" {
+		t.Fatalf("note: %v", err)
+	}
+	if _, err := Export(dpDot(), nil, ExportOptions{Version: redactOnly}); !errors.As(err, &se) || strings.Join(se.Where, ",") != "version" {
+		t.Fatalf("version: %v", err)
+	}
+	mem := []memory.Entry{{Scope: memory.ScopeDot, Kind: memory.KindNote, Text: redactOnly}}
+	if _, err := Export(dpDot(), mem, ExportOptions{}); !errors.As(err, &se) || strings.Join(se.Where, ",") != "memory 1" {
+		t.Fatalf("memory: %v", err)
+	}
+}
+
+func TestExportRefusesUnsafeNoteAndVersion(t *testing.T) {
+	for _, o := range []ExportOptions{{Note: "\x1b]52;c;ZXZpbA==\x07"}, {Version: "\x1b[2J"}, {Note: "a\u202eb"}} {
+		if _, err := Export(dpDot(), nil, o); err == nil {
+			t.Errorf("%+v exported", o)
+		}
+	}
+}
