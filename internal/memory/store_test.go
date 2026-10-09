@@ -457,3 +457,111 @@ func TestConcurrentStoresLoseNoUpdates(t *testing.T) {
 		seen[e.ID] = true
 	}
 }
+
+// Fix round 1: another dot's unapproved proposal must not rewrite an approved
+// convention (plan decision 15, spec 8.2); it may only bump uses.
+func TestProposalNeverRewritesApprovedConvention(t *testing.T) {
+	s := testStore(t)
+	approved := "Services reach the database layer only through repository classes in src/data, never directly from handlers."
+	e := mustAdd(t, s, pid, Entry{Scope: ScopeProject, Dot: "security", Kind: KindConvention, Text: approved, Source: SourceModel, Status: StatusProposed})
+	if _, err := s.Update(pid, e.Ref(), func(x *Entry) error { x.Status = StatusActive; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	mustAdd(t, s, pid, Entry{Scope: ScopeProject, Dot: "frontend", Kind: KindConvention, Source: SourceModel, Status: StatusProposed, Paths: []string{"web/**"},
+		Text: "Services reach the storage layer only through repository classes in src/data, never directly from handlers."})
+	got, err := s.Get(pid, e.Ref())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != approved || got.Status != StatusActive || got.Dot != "security" || got.Uses != 1 || len(got.Paths) != 0 {
+		t.Fatalf("approved entry changed: %+v", got)
+	}
+	if n := len(list(t, s, pid, Filter{Scope: ScopeProject, Statuses: []Status{StatusActive, StatusProposed}})); n != 1 {
+		t.Fatalf("%d project entries", n)
+	}
+}
+
+func TestForgetScrubFailureKeepsEntryAndRetrySucceeds(t *testing.T) {
+	s := testStore(t)
+	e := mustAdd(t, s, pid, Entry{Scope: ScopeDot, Dot: "security", Kind: KindDismissed, Text: "CSRF tokens on /admin are intentionally omitted.", Source: SourceOutcome, Evidence: Evidence{Card: "7"}})
+	ledger := filepath.Join(s.Dir, pid, "ledger.jsonl")
+	if err := os.Mkdir(ledger, 0o700); err != nil { // unreadable as a ledger
+		t.Fatal(err)
+	}
+	if err := s.Forget(pid, e.Ref(), true); err == nil {
+		t.Fatal("want a ledger error")
+	}
+	if _, err := s.Get(pid, e.Ref()); err != nil {
+		t.Fatalf("entry must survive a failed scrub: %v", err)
+	}
+	os.Remove(ledger)
+	dir := filepath.Join(s.Dir, pid)
+	if err := s.withLock(dir, func() error {
+		return s.appendLedgerLocked(pid, Outcome{Dot: "security", Card: "7", Kind: OutcomeDismissed, Body: "CSRF tokens on /admin are intentionally omitted."})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Forget(pid, e.Ref(), true); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if led, _ := s.Ledger(pid); len(led) != 0 {
+		t.Fatalf("ledger %+v", led)
+	}
+	if _, err := s.Get(pid, e.Ref()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("entry still there: %v", err)
+	}
+}
+
+func TestSeeProjectSetsAsideCorruptMetaAndWrapsVersion(t *testing.T) {
+	s := testStore(t)
+	dir := filepath.Join(s.Dir, pid)
+	os.MkdirAll(dir, 0o700)
+	meta := filepath.Join(dir, "meta.json")
+	os.WriteFile(meta, []byte("{oops"), 0o600)
+	if err := s.SeeProject(Project{ID: pid, Name: "herdr-dots", Root: "/r"}); err != nil {
+		t.Fatal(err)
+	}
+	matches, _ := filepath.Glob(meta + ".corrupt-*")
+	if len(matches) != 1 {
+		t.Fatalf("corrupt meta not set aside: %v", matches)
+	}
+	if b, _ := os.ReadFile(matches[0]); string(b) != "{oops" {
+		t.Fatal("set-aside file lost the original bytes")
+	}
+	if ps, err := s.Projects(); err != nil || len(ps) != 1 || ps[0].Name != "herdr-dots" {
+		t.Fatalf("%+v %v", ps, err)
+	}
+	future := []byte(`{"version":2,"id":"` + pid + `"}`)
+	os.WriteFile(meta, future, 0o600)
+	err := s.SeeProject(Project{ID: pid, Name: "x"})
+	if !errors.Is(err, ErrVersion) || !strings.Contains(err.Error(), "meta.json") {
+		t.Fatalf("err %v", err)
+	}
+	if b, _ := os.ReadFile(meta); !bytes.Equal(b, future) {
+		t.Fatal("newer meta overwritten")
+	}
+}
+
+func TestProjectsSurfacesLockAndCorruptMetaErrors(t *testing.T) {
+	s := testStore(t)
+	if err := s.SeeProject(Project{ID: pid, Name: "herdr-dots", Root: "/r"}); err != nil {
+		t.Fatal(err)
+	}
+	s.Limits.LockTimeout = 100 * time.Millisecond
+	held, err := lockfile.TryLock(filepath.Join(s.Dir, pid, "memory.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Projects(); !errors.Is(err, ErrLocked) {
+		t.Fatalf("Projects: %v", err)
+	}
+	if _, ok, err := s.FindProject(pid); ok || !errors.Is(err, ErrLocked) {
+		t.Fatalf("FindProject: %v %v", ok, err)
+	}
+	held.Release()
+	os.WriteFile(filepath.Join(s.Dir, pid, "meta.json"), []byte("{oops"), 0o600)
+	ps, err := s.Projects()
+	if !errors.Is(err, ErrCorrupt) || len(ps) != 1 || ps[0].ID != pid {
+		t.Fatalf("%+v %v", ps, err)
+	}
+}

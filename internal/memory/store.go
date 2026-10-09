@@ -358,9 +358,16 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		x := &f.Entries[best]
 		x.Uses++
 		x.UpdatedAt = now
-		x.Paths = cleanPaths(append(x.Paths, e.Paths...))
-		if bestScore < 1 && (x.Source != SourceUser || e.Source == SourceUser) {
-			x.Text = e.Text
+		// The developer may reword anything. A model or outcome add may only
+		// reshape an entry of its own source and dot that is not an approved
+		// project convention; otherwise it just bumps uses.
+		rewrite := e.Source == SourceUser ||
+			(x.Source != SourceUser && x.Source == e.Source && x.Dot == e.Dot && !(x.Scope == ScopeProject && x.Status != StatusProposed))
+		if rewrite {
+			x.Paths = cleanPaths(append(x.Paths, e.Paths...))
+			if bestScore < 1 {
+				x.Text = e.Text
+			}
 		}
 		if e.Source == SourceUser && x.Source != SourceUser {
 			x.Source = SourceUser // the developer endorsed it
@@ -371,10 +378,10 @@ func (s *Store) insert(f *scopeFile, e Entry) (Entry, insertResult, error) {
 		if x.Status == StatusProposed && e.Status == StatusActive {
 			x.Status = StatusActive
 		}
-		if e.Pinned {
+		if rewrite && e.Pinned {
 			x.Pinned = true
 		}
-		if e.Evidence != (Evidence{}) {
+		if rewrite && e.Evidence != (Evidence{}) {
 			x.Evidence = e.Evidence
 		}
 		return *x, merged, nil
@@ -515,21 +522,21 @@ func (s *Store) Update(p string, r Ref, fn func(*Entry) error) (Entry, error) {
 // Forget deletes one entry. With scrub it also deletes the ledger lines it
 // came from or that say the same thing.
 func (s *Store) Forget(p string, r Ref, scrub bool) error {
-	var gone Entry
-	err := s.mutate(p, r.Scope, r.Dot, func(f *scopeFile) error {
+	// One lock covers both steps. The ledger is scrubbed first, so a failure
+	// leaves the entry in place and Forget can be retried.
+	return s.mutate(p, r.Scope, r.Dot, func(f *scopeFile) error {
 		i := f.find(r.ID)
 		if i < 0 {
 			return fmt.Errorf("%w: %s", ErrNotFound, r)
 		}
-		gone = f.Entries[i]
+		if scrub && r.Scope != ScopeGlobal {
+			if _, err := s.scrubLedgerLocked(p, f.Entries[i]); err != nil {
+				return err
+			}
+		}
 		f.Entries = slices.Delete(f.Entries, i, i+1)
 		return nil
 	})
-	if err != nil || !scrub || r.Scope == ScopeGlobal {
-		return err
-	}
-	_, err = s.scrubLedger(p, gone)
-	return err
 }
 
 // ForgetAll deletes every entry in one scope file and returns how many.
@@ -800,11 +807,22 @@ func (s *Store) SeeProject(pr Project) error {
 	return s.withLock(dir, func() error {
 		path := filepath.Join(dir, "meta.json")
 		var m ProjectMeta
-		if data, err := os.ReadFile(path); err == nil {
-			_ = json.Unmarshal(data, &m)
+		data, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err == nil {
+			if uerr := json.Unmarshal(data, &m); uerr != nil {
+				aside := fmt.Sprintf("%s.corrupt-%s", path, s.now().Format("20060102T150405.000000000Z"))
+				if rerr := os.Rename(path, aside); rerr != nil {
+					return rerr
+				}
+				s.logf("memory: %s: %v; moved it aside to %s", path, uerr, aside)
+				m = ProjectMeta{}
+			}
 		}
 		if m.Version > fileVersion {
-			return ErrVersion
+			return fmt.Errorf("%w (%s has version %d)", ErrVersion, path, m.Version)
 		}
 		changed := m.ID != pr.ID
 		if changed {
@@ -823,7 +841,7 @@ func (s *Store) SeeProject(pr Project) error {
 		if !changed {
 			return nil
 		}
-		data, err := json.MarshalIndent(m, "", "  ")
+		data, err = json.MarshalIndent(m, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -841,18 +859,29 @@ func (s *Store) Projects() ([]ProjectMeta, error) {
 		return nil, err
 	}
 	var out []ProjectMeta
+	var errs []error
 	for _, e := range ents {
 		if !e.IsDir() || !ValidProjectID(e.Name()) {
 			continue
 		}
 		m := ProjectMeta{Version: fileVersion, ID: e.Name()}
 		dir := filepath.Join(s.Dir, e.Name())
-		_ = s.withReadLock(dir, func() error {
-			if data, err := os.ReadFile(filepath.Join(dir, "meta.json")); err == nil {
-				_ = json.Unmarshal(data, &m)
+		lerr := s.withReadLock(dir, func() error {
+			data, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if err := json.Unmarshal(data, &m); err != nil {
+				return fmt.Errorf("%w: %s/meta.json: %v", ErrCorrupt, e.Name(), err)
 			}
 			return nil
 		})
+		if lerr != nil {
+			errs = append(errs, lerr)
+		}
 		m.ID = e.Name()
 		out = append(out, m)
 	}
@@ -862,7 +891,7 @@ func (s *Store) Projects() ([]ProjectMeta, error) {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 // FindProject looks a project up by id, or by a path at or under one of its
@@ -1035,11 +1064,11 @@ func (s *Store) Ledger(p string) ([]Outcome, error) {
 	return out, err
 }
 
-// scrubLedger deletes the ledger lines of e's dot that came from e's card or
-// say the same thing as e.
-func (s *Store) scrubLedger(p string, e Entry) (int, error) {
+// scrubLedgerLocked deletes the ledger lines of e's dot that came from e's
+// card or say the same thing as e. The caller holds the project lock.
+func (s *Store) scrubLedgerLocked(p string, e Entry) (int, error) {
 	n := 0
-	err := s.withLock(filepath.Join(s.Dir, p), func() error {
+	err := func() error {
 		all, err := s.readLedgerLocked(p)
 		if err != nil {
 			return err
@@ -1059,6 +1088,6 @@ func (s *Store) scrubLedger(p string, e Entry) (int, error) {
 			return nil
 		}
 		return s.writeLedgerLocked(p, kept)
-	})
+	}()
 	return n, err
 }
