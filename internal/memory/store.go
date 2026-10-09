@@ -506,6 +506,9 @@ func findMatch(f *scopeFile, e Entry) (int, float64) {
 	return best, bestScore
 }
 
+// Cap is the entry limit of one scope.
+func (s *Store) Cap(sc Scope) int { return s.capFor(sc) }
+
 func (s *Store) capFor(sc Scope) int {
 	switch sc {
 	case ScopeProject:
@@ -605,13 +608,21 @@ func (s *Store) enforceCap(f *scopeFile, limit int, keep string, now time.Time) 
 	// yield archives the incoming research entry or approved import when
 	// nothing of its rank or lower is left to make room.
 	yield := func() int {
-		if keepRank != capRankNone && live-n > limit {
+		// Never two entries for one: when the cap already archived an entry
+		// of the keep's rank or lower, the fresh one stays.
+		if keepRank != capRankNone && n == 0 && live-n > limit {
 			archive(keepAt)
 			n++
 		}
 		return n
 	}
 	over := min(live-n, active) - limit
+	if keepRank != capRankNone && !keepProposed {
+		// A yielding keep (research or an approved import) that proposals
+		// keep over the limit: entries of its rank or lower that are older
+		// go first, so the fresh one is archived only when none is left.
+		over = max(over, live-n-limit)
+	}
 	if keepProposed || over <= 0 {
 		return yield()
 	}
