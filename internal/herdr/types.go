@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type AgentStatus string
@@ -71,9 +72,11 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("herdr %s: %s", e.Code, e.Message) }
 
+// IsNotFound reports a missing object. Herdr uses specific codes such as
+// "pane_not_found" (0.8.2), so any code ending in "_not_found" counts.
 func IsNotFound(err error) bool {
 	var he *Error
-	return errors.As(err, &he) && he.Code == "not_found"
+	return errors.As(err, &he) && (he.Code == "not_found" || strings.HasSuffix(he.Code, "_not_found"))
 }
 
 // InvocationContext is the subset of HERDR_PLUGIN_CONTEXT_JSON herdr-dots reads.

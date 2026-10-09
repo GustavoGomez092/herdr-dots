@@ -174,7 +174,7 @@ func (s *Server) serve(c net.Conn) {
 	case "pane.get":
 		p, found := s.panes[str("pane_id")]
 		if !found {
-			fail("not_found", "pane not found")
+			fail("pane_not_found", "pane not found") // what real Herdr 0.8.2 returns
 			return
 		}
 		ok(map[string]any{"type": "pane_info", "pane": p})

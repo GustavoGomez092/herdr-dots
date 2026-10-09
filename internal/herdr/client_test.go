@@ -32,6 +32,20 @@ func TestPaneGetAndNotFound(t *testing.T) {
 	}
 }
 
+func TestIsNotFoundMatchesHerdrCodes(t *testing.T) {
+	for code, want := range map[string]bool{
+		"not_found": true, "pane_not_found": true, "plugin_pane_not_found": true,
+		"internal": false, "": false, "not_found_ish": false,
+	} {
+		if got := herdr.IsNotFound(&herdr.Error{Code: code}); got != want {
+			t.Errorf("IsNotFound(%q) = %v, want %v", code, got, want)
+		}
+	}
+	if herdr.IsNotFound(nil) {
+		t.Error("nil is not not-found")
+	}
+}
+
 func TestWorkDirPrefersForeground(t *testing.T) {
 	p := herdr.PaneInfo{Cwd: "/a", ForegroundCwd: "/b"}
 	if p.WorkDir() != "/b" {
