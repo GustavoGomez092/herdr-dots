@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -20,7 +21,8 @@ import (
 )
 
 // maxBody caps how much of a response is read.
-const maxBody = 8 << 20
+// A var only so tests can shrink it.
+var maxBody int64 = 8 << 20
 
 // StatusError is a non-2xx response. Body is already redacted and clipped.
 type StatusError struct {
@@ -61,7 +63,7 @@ func (c Client) Do(ctx context.Context, method, url string, body, out any) (int,
 	}
 	hc := c.HTTP
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = sameHostClient
 	}
 	var lastErr error
 	status := 0
@@ -90,11 +92,14 @@ func (c Client) Do(ctx context.Context, method, url string, body, out any) (int,
 			lastErr = c.scrub(err)
 		} else {
 			status = resp.StatusCode
-			data, rerr := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+			data, rerr := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 			resp.Body.Close()
 			if status >= 200 && status < 300 {
 				if rerr != nil {
 					return status, c.scrub(rerr)
+				}
+				if int64(len(data)) > maxBody {
+					return status, fmt.Errorf("response too large (over %d bytes)", maxBody)
 				}
 				if out == nil || len(bytes.TrimSpace(data)) == 0 {
 					return status, nil
@@ -108,7 +113,13 @@ func (c Client) Do(ctx context.Context, method, url string, body, out any) (int,
 			if !Retryable(status) {
 				return status, lastErr
 			}
-			wait = retryAfter(resp.Header)
+			var tooLong bool
+			wait, tooLong = retryAfter(resp.Header, c.maxWait())
+			if tooLong {
+				// The server asked for longer than MaxWait: sleeping that
+				// long would stall the run, so report the real status now.
+				return status, lastErr
+			}
 		}
 		if attempt >= c.Retries {
 			return status, lastErr
@@ -130,7 +141,7 @@ func (c Client) Do(ctx context.Context, method, url string, body, out any) (int,
 }
 
 func (c Client) backoff(attempt int) time.Duration {
-	base, maxw := c.Base, c.MaxWait
+	base, maxw := c.Base, c.maxWait()
 	if base <= 0 {
 		base = 500 * time.Millisecond
 	}
@@ -144,26 +155,68 @@ func (c Client) backoff(attempt int) time.Duration {
 	return d/2 + rand.N(d/2+1) // jitter in [d/2, d]
 }
 
-// retryAfter reads retry-after-ms or Retry-After (seconds or HTTP date).
-func retryAfter(h http.Header) time.Duration {
-	if v := h.Get("Retry-After-Ms"); v != "" {
-		if ms, err := strconv.ParseFloat(v, 64); err == nil && ms >= 0 {
-			return time.Duration(ms * float64(time.Millisecond))
+// retryAfter reads Retry-After-Ms or Retry-After (seconds or HTTP date).
+// It returns 0 when there is no usable hint (absent, NaN, Inf, negative or a
+// past date), and tooLong when the hint exceeds maxw. The comparison is done
+// on the float before any Duration conversion, so huge values cannot overflow.
+func retryAfter(h http.Header, maxw time.Duration) (wait time.Duration, tooLong bool) {
+	limit := maxw.Seconds()
+	secs := func(v float64) (time.Duration, bool, bool) { // wait, tooLong, ok
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+			return 0, false, false
+		}
+		if v > limit {
+			return 0, true, true
+		}
+		return time.Duration(v * float64(time.Second)), false, true
+	}
+	if v := strings.TrimSpace(h.Get("Retry-After-Ms")); v != "" {
+		if ms, err := strconv.ParseFloat(v, 64); err == nil {
+			if d, long, ok := secs(ms / 1000); ok {
+				return d, long
+			}
 		}
 	}
 	v := strings.TrimSpace(h.Get("Retry-After"))
 	if v == "" {
-		return 0
+		return 0, false
 	}
-	if s, err := strconv.ParseFloat(v, 64); err == nil && s >= 0 {
-		return time.Duration(s * float64(time.Second))
+	if s, err := strconv.ParseFloat(v, 64); err == nil {
+		d, long, _ := secs(s)
+		return d, long
 	}
 	if t, err := http.ParseTime(v); err == nil {
 		if d := time.Until(t); d > 0 {
-			return d
+			if d.Seconds() > limit {
+				return 0, true
+			}
+			return d, false
 		}
 	}
-	return 0
+	return 0, false
+}
+
+func (c Client) maxWait() time.Duration {
+	if c.MaxWait <= 0 {
+		return 8 * time.Second
+	}
+	return c.MaxWait
+}
+
+// sameHostClient is used when Client.HTTP is nil. It refuses redirects to a
+// different host, so configured auth headers (x-api-key and friends) can never
+// be forwarded to a third party. A caller-supplied HTTP client keeps its own
+// policy.
+var sameHostClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if req.URL.Host != via[0].URL.Host {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	},
 }
 
 func (c Client) scrub(err error) error {
