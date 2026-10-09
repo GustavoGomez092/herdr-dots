@@ -39,6 +39,9 @@ func TestBackgroundRunCapNeverRoundsToNoCap(t *testing.T) {
 // for another dot's ask while the review is still routing its result.
 func TestFinishedPaidReviewIsNotDoubleCounted(t *testing.T) {
 	sec, fe := dot("Security", dots.ModeQueue), dot("Frontend", dots.ModeQueue)
+	// Frontend never reviews turns, so only the ask can make it busy (its
+	// catch-up review on attach would otherwise race the ask).
+	fe.Trigger.OnTurn = false
 	reached, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	unblock := sync.OnceFunc(func() { close(release) })
