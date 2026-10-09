@@ -9,6 +9,8 @@ package diff
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -118,6 +120,7 @@ type Model struct {
 	seen    []bool // per file: its whole diff has been on screen
 	meta    patchstore.Meta
 	cardID  string
+	sum     string // SHA-256 of the exact patch bytes shown
 	caller  Caller
 	file    int // selected file
 	top     int // first diff line shown
@@ -141,7 +144,8 @@ func New(patch []byte, meta patchstore.Meta, cardID string, c Caller) Model {
 	for i := range files {
 		files[i].Path = clean(files[i].Path)
 	}
-	return Model{files: files, meta: meta, cardID: cardID, caller: c}.markSeen()
+	h := sha256.Sum256(patch)
+	return Model{files: files, meta: meta, cardID: cardID, caller: c, sum: hex.EncodeToString(h[:])}.markSeen()
 }
 
 // Failed is a viewer that only explains why the patch can't be shown.
@@ -340,11 +344,11 @@ func (m *Model) hunk(d int) {
 }
 
 func (m Model) apply() tea.Cmd {
-	c, id := m.caller, m.cardID
+	c, id, sum := m.caller, m.cardID, m.sum
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		return appliedMsg{err: c.Call(ctx, ipc.CmdApplyPatch, ipc.CardArgs{ID: id})}
+		return appliedMsg{err: c.Call(ctx, ipc.CmdApplyPatch, ipc.CardArgs{ID: id, SHA256: sum})}
 	}
 }
 

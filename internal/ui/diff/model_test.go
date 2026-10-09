@@ -139,7 +139,7 @@ func TestApplyNeedsYes(t *testing.T) {
 		t.Fatalf("n must not apply: %v", c.calls)
 	}
 	m = send(m, "A", "y")
-	if len(c.calls) != 1 || c.calls[0] != ipc.CmdApplyPatch+` {"id":"7"}` {
+	if len(c.calls) != 1 || c.calls[0] != ipc.CmdApplyPatch+` {"id":"7","sha256":"`+samplePatchSHA+`"}` {
 		t.Fatalf("calls %v", c.calls)
 	}
 	if v := m.View(); !strings.Contains(v, "applied to your working tree") {

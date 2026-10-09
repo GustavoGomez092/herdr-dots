@@ -1,6 +1,8 @@
 package diff
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -10,6 +12,11 @@ import (
 
 	"herdr-dots/internal/patchstore"
 )
+
+var samplePatchSHA = func() string {
+	h := sha256.Sum256([]byte(samplePatch))
+	return hex.EncodeToString(h[:])
+}()
 
 const riskyPatch = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n" +
 	"diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n"

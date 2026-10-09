@@ -91,6 +91,9 @@ type SendArgs struct {
 type CardArgs struct {
 	ID   string `json:"id"`
 	Body string `json:"body,omitempty"`
+	// SHA256 (hex) binds CmdApplyPatch to the patch bytes the user saw; the
+	// engine refuses an apply whose hash isn't the card's current patch.
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 type SummonArgs struct {
