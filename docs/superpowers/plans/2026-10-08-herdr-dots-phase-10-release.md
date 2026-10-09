@@ -8,12 +8,12 @@
 
 **Tech Stack:** Go 1.25 (existing dependencies only, no new module). Native Go fuzzing. GoReleaser v2 config (not run locally unless installed), cosign keyless (in the release workflow only), `govulncheck` via `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4`, GitHub Actions (written, never run here), POSIX sh and PowerShell for the install scripts, `actionlint` and `shellcheck` (installed here) for linting.
 
-**Spec:** `docs/superpowers/specs/2026-10-08-herdr-dots-phase-10-release-design.md`, approved with the amendments in `docs/superpowers/decisions/2026-10-08-phase-decisions.md`, which win where they differ: ruling 1 keeps the name "Herdr Dots" (`herdr-dots`) and asks for a data-migration framework instead of a rename; ruling 16 adds no license; the release-gate amendments forbid every outward-facing action, put the migration framework, fuzzing, threat model, soak test and acceptance checklist in scope, stop at a "ready to publish" checklist, and leave the three-OS acceptance run and the Codex live tests to the user. This plan replaces the outline `docs/superpowers/plans/drafts/2026-10-08-herdr-dots-phase-10-release-outline.md`.
+**Spec:** `docs/superpowers/specs/2026-10-08-herdr-dots-phase-10-release-design.md`, approved with the amendments in `docs/superpowers/decisions/2026-10-08-phase-decisions.md`, which win where they differ: ruling 1 keeps the name "Herdr Dots" (`herdr-dots`) and asks for a data-migration framework instead of a rename; ruling 16 adds no license; the release-gate amendments forbid every outward-facing action, put the migration framework, fuzzing, threat model, soak test and acceptance checklist in scope, stop at a "ready to publish" checklist, and leave the three-OS acceptance run, the live provider checks and the Codex live tests to the user. This plan replaces the outline `docs/superpowers/plans/drafts/2026-10-08-herdr-dots-phase-10-release-outline.md`.
 
 **Preconditions (check before Task 1; stop and report if any fails):**
-- Phases 2–9 are merged into the base branch, in roadmap order. In particular these exist: `internal/council`, `internal/credentials`, `internal/pricing`, `internal/backend/toolloop`, `internal/mcpinstall`, `cmd/herdr-dots/setupmcp.go` (`runSetupMCP`), `internal/platform` (Phase 6), `internal/worktree` (Phase 7), `internal/schedule` and `state.OpenDaily` (Phase 8), `internal/history`, `internal/dotpack` and `internal/projectdots` (Phase 9). `internal/version/version.go` says `0.9.0`.
-- Phases 7–9 have no full plans yet; this plan uses the Interfaces blocks of their outlines (`docs/superpowers/plans/drafts/2026-10-08-herdr-dots-phase-{7,8,9}-*-outline.md`) for `schedule.Parse`, `Spec.Next/Prev`, `state.OpenDaily`/`Daily.Add`, `memory.Store.ClaimSchedule`, `history.Open`/`Append`/`Record`, `dotpack.Export`/`Parse`/`ClampPack`, `projectdots.TrustStore.Trust`, `paths.Paths.DailyFile`, `HistoryDir`, `TrustFile`, `WorktreesDir`, `PatchesDir`, and Phase 5's plan for `mcpinstall.CodexBlock`, `UpsertCodexBlock`, `RemoveCodexBlock`, `BlockBegin`, `SaveRecords`, `RecordPath`, `Record`, `ClientClaude`. The reconcile pass replays those code blocks against the merged code; where a name or signature differs, use the real one and keep the test's intent.
-- `GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local go vet ./...` passes on the base (darwin), and `make cross` (Phase 6) passes.
+- The base is `feat/dots-v1` with Phases 2–9 merged (reconciled against `dffabbf`, "merge: P9 Task 12 README, roadmap, notes, 0.9.0"), plus Phase 9's final fix wave if it has landed. These exist and every name this plan uses was checked there: `internal/council`, `internal/credentials`, `internal/pricing`, `internal/secrets` (Phase 9's shared scanner), `internal/backend/toolloop`, `internal/mcpinstall`, `internal/mcpserver`, `cmd/herdr-dots/setupmcp.go` (`runSetupMCP`), `internal/platform` with its portability guard (Phase 6), `internal/worktree` and `internal/patchstore` (Phase 7), `internal/schedule`, `state.OpenDaily`, `queue.OpenInbox` (Phase 8), `internal/history`, `internal/dotpack`, `internal/projectdots` (Phase 9). `internal/version/version.go` says `const Version = "0.9.0"` and Phase 9's `TestVersionIsPhaseNine` pins it.
+- Phase 9's final fix wave landed on `feat/dots-v1` as `0205616` while this pass ran (it touches `internal/dots/store.go`, `project.go`, `internal/memory/store.go`, `internal/ui/memui/model.go`, `internal/dotpack/dotpack.go` and the README, and adds no getter, persisted file or version pin). The final plan text was replayed on `0205616` too: every diff applied and the full verification set passed (decision 41). Later changes (Phase 9's residual rounds) may move lines in files this plan edits (`internal/engine/engine.go`, `cmd/herdr-dots/main.go`, `cmd/herdr-dots/engine.go`, `internal/memory/store.go`, `internal/dots/store.go`, `internal/ui/memui/model.go`, `README.md`). Every diff carries its exact context; if `git apply` refuses a hunk, make the same edit by hand and run `gofmt -w` on the file. If it adds a `paths.Paths` getter, a persisted file, a version pin or a deferred finding, Tasks 2, 5 and 9 say where it goes.
+- `GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local go vet ./...` passes on the base (darwin), and `make cross` (Phase 6) passes (both verified at `dffabbf`).
 
 ## Global Constraints
 
@@ -22,12 +22,13 @@ Phase 10 constraints:
 - **No outward-facing action, ever:** no `git push`, no tag (local or remote), no GitHub topic, no marketplace listing, no `gh` command that writes, no GoReleaser publish. `goreleaser` runs only as `goreleaser release --snapshot --clean --skip=publish,sign` (or `goreleaser build --snapshot`), only if `command -v goreleaser` finds it; never install it, never run `goreleaser release` without `--snapshot`.
 - **No license.** No `LICENSE` file is added (ruling 16). Docs say "License: not chosen yet" and the ready-to-publish checklist lists it as a blocker.
 - **The name stays "Herdr Dots"** (plugin id, module, binary `herdr-dots`), ruling 1. The `[◆ Name dot]` delivery header and `transcript.FromDots` are unchanged.
-- **Wording.** The product may be called "feature complete on paper" only in Task 13's README and acceptance notes, and always with the caveats: unverified on Linux and Windows hardware, Codex not live-verified, license and publishing pending. Nothing may say released, ready, done or finished. Until Task 13, docs say "release candidate, not released".
+- **Wording.** The product may be called "feature complete on paper" only in Task 13's README and acceptance notes, and always with the caveats: unverified on Linux and Windows hardware, live providers and Codex not verified in the acceptance run, license and publishing pending. Nothing may say released, ready, done or finished. Until Task 13, docs say "release candidate, not released".
 - **Migration safety:** a file is only ever rewritten atomically, after its original is saved as `<file>.bak-v<old>` (mode 0600), and only under the lock that guards it; a failed migration leaves the file untouched and read-only; a file a newer version wrote is never written (`fsutil.ErrNewerVersion`).
 - **Install safety:** `scripts/build.sh` and `build.ps1` never run or keep an archive that failed the checksum from `release/SHA256SUMS` in the cloned tree; a failed install leaves `bin/` without a half-installed binary.
 - **Snapshot budgets (spec F9):** at most 10 broadcasts a second, at most 256 KB per snapshot, at most 100 cards and 50 feed entries per pane; a card is shown whole or not at all.
 - **No telemetry** (spec F10): nothing phones home; the only network traffic the plugin itself makes is the install-time download and the backends the developer configures.
-- Every task's verification runs, from the repo root: `gofmt -l .` (prints nothing), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...`, `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...` (all six must succeed; Phase 6 made Windows build clean).
+- Every task's verification runs, from the repo root, "The verification gate" below: `gofmt -l internal cmd scripts` (prints nothing; not `gofmt -l .`, which walks into `.claude/worktrees` and `.worktrees` checkouts), `go vet` (also with `-tags soak` for the engine), `go test -race`, the Linux build, the Windows build and vet, and `GOOS=windows go test -c` for the packages the task touched (Phase 6 made Windows build clean).
+- **Phase 6's portability guard** (`internal/platform/portability_test.go`): product code starts every child process with `platform.Command`/`CommandContext`, sets `cmd.Env = platform.ChildEnv(...)`, and has no `runtime.GOOS` branch. Tests that check modes skip or use `platformtest.AssertPrivateFile` on Windows, and test paths are built with `filepath.Join` so they are absolute on every OS.
 
 All earlier Global Constraints still apply (v1 through Phase 9):
 - **Phase 2 memory is VITAL.** Memory text goes only in the user prompt; model writes follow the op rules (project scope is proposed until approved; models never write dismissed, preference or global entries, never edit user entries or other dots' entries); only outcome and user findings suppress repeats; secrets are scanned. Phase 10 changes to memory code (Tasks 3 and 9) must keep `go test ./internal/memory/ ./internal/engine/` green, including the Phase 2 VITAL tests.
@@ -46,28 +47,46 @@ All earlier Global Constraints still apply (v1 through Phase 9):
 No human was available; every judgment call is recorded here. Each can be reversed.
 
 1. **No rename, so no `internal/rename`, no legacy-header parsing, no `setup-keys --migrate` or `setup-mcp --migrate` (ruling 1).** The spec's F1–F4 and its §4.1 renames (module, binary, manifest id, `DotPrefix`, `PlanMigrate`, `LegacyDirs`) are dropped. What ruling 1 keeps is the data-migration framework (Task 2): a later rename becomes one more registered migration plus a copier, without touching the stores. The "migrated from" notice and `migrate --from` are dropped with the rename; `herdr-dots migrate` (Task 7) runs schema migrations instead.
-2. **Missing `version` = 1, and 1.0 writers are unchanged.** Spec F7 says every file "gains `version`". Every kind is at version 1 in 1.0 and "missing means 1", so the framework reads versions without any store writing a new key. This keeps every 1.0 file byte-identical to what 0.9 wrote (so a downgrade to 0.9 still loads), keeps Phases 3–9's structs untouched in one task (no merge conflicts across nine phases), and avoids a real hazard: `attachments.json` and `usage.json` are JSON objects keyed by pane id, where a top-level `version` key would be decoded as a pane and break the loaders. The first kind that reaches version 2 writes its key in the migration that creates it (and `Probe` reads a numeric top-level `version`, which a pane-keyed map can never hold). Files that already carry `version` (memory, `mcp-install.json`, Phase 8's `schedule.json`/`daily.json`) keep it.
-3. **Read-only mode is one gate in `fsutil.WriteFileAtomic`.** Every state and config write goes through it (verified for v1–Phase 2; Phases 3–9 follow the same rule). `migrate.Run` calls `fsutil.ProtectNewer(path)` for a newer file and `WriteFileAtomic` then returns `fsutil.ErrNewerVersion`; the store keeps working in memory and logs the failed save. Append-only JSONL logs (feed, memory ledger, Phase 9 history) are not kinds: their records only gain optional fields, and a breaking change must use a new file name (rule written in `CONTRIBUTING.md`).
-4. **Who migrates what.** The engine runs `Run` at start, holding its session lock, over config, shared state and its own session dir. State-root kinds are shared by every session's engine, so a migration can be registered only for a state-root kind that declares its lock (memory's `memory.lock`; Phase 8's `daily.json` declares none yet, so it can't be migrated until it does: `Set.Validate` enforces this). Processes that write outside the engine (`manage`, `keys`, `dots`, `setup-mcp`, `uninstall-extras`) run a read-only `DryRun` first so they too refuse to overwrite newer files; memory kinds are skipped there because the memory store already refuses newer files itself (`memory.ErrVersion`). `herdr-dots migrate` skips session dirs whose engine is running.
-5. **Legacy fixtures are the formats the code really wrote.** `legacy_test.go` holds 0.1, 0.2 and 0.3 files byte-exact from the v1/Phase 2/Phase 3 code and loads them through the real loaders after `Run`. Files Phases 4–9 introduced are produced by those phases' own writers in `writers_test.go` (`credentials.File.Set`, `mcpinstall.SaveRecords`, `TrustStore.Trust`, `state.Daily.Add`, `memory.Store.ClaimSchedule`, `history.Store.Append`), which is exactly what 0.4–0.9 write because Phase 10 changes no writer. `TestEveryPathsFileIsClassified` makes every `paths.Paths` getter either a kind or an explicitly unversioned path, so a later phase can't add a file silently.
-6. **Fuzzing found two problems while planning; one is a product bug.** A short run of the new targets found that `memory.ExportTOML` writes `ref = "d:"` for an entry that has no id yet, which `ImportTOML` then rejects (crasher `FuzzImportTOML/8a748f204ecc8c6f`, committed as a regression input; fixed in Task 3). It also showed that `ParseStance` maps invalid UTF-8 to U+FFFD (the fuzz invariant counts runes, not bytes). Task 3 runs every target for 60 s and fixes what it finds in the same task, committing each crasher under `testdata/fuzz/`.
-7. **Fuzz targets beyond the spec's list:** `council.ParseDigest`/`ParseStance` (chair output reaches the queue), `config.Load` (the kill switches must fail closed on every input), the dot file loader (dots are shared files in Phase 9), `memory.ScanSecrets`, the scope-file loader, the Codex config block editor (`mcpinstall`, it edits the developer's `~/.codex/config.toml`) and the credentials file reader. `IPC request decoding` is fuzzed at `ipc.serveConn` over `net.Pipe`, which covers every command's JSON decode path.
+2. **Missing `version` = 1, and 1.0 writers are unchanged.** Spec F7 says every file "gains `version`". Every kind is at version 1 in 1.0 and "missing means 1", so the framework reads versions without any store writing a new key. This keeps every 1.0 file byte-identical to what 0.9 wrote (so a downgrade to 0.9 still loads), keeps Phases 3–9's structs untouched in one task (no merge conflicts across nine phases), and avoids a real hazard: `attachments.json` and `usage.json` are JSON objects keyed by pane id, where a top-level `version` key would be decoded as a pane and break the loaders. The first kind that reaches version 2 writes its key in the migration that creates it (and `Probe` reads a numeric top-level `version`, which a pane-keyed map can never hold). Files that already carry `version` (memory, `mcp-install.json`, Phase 8's `schedule.json`/`daily.json`) keep it. (Refined by decision 24, reconciled: `trusted.json` carries `version` too, and `credentials.toml` and `inbox.json` join the map-shaped and versionless files.)
+3. **Read-only mode is one gate in `fsutil.WriteFileAtomic`.** Every state and config write goes through it (verified for v1–Phase 2; Phases 3–9 follow the same rule). `migrate.Run` calls `fsutil.ProtectNewer(path)` for a newer file and `WriteFileAtomic` then returns `fsutil.ErrNewerVersion`; the store keeps working in memory and logs the failed save. Append-only JSONL logs (feed, memory ledger, Phase 9 history) are not kinds: their records only gain optional fields, and a breaking change must use a new file name (rule written in `CONTRIBUTING.md`). (Reconciled: verified at `dffabbf` for every writer of a kind, Phases 3–9 included; see decision 24.)
+4. **Who migrates what.** The engine runs `Run` at start, holding its session lock, over config, shared state and its own session dir. State-root kinds are shared by every session's engine, so a migration can be registered only for a state-root kind that declares its lock (memory's `memory.lock`; Phase 8's `daily.json` declares none yet, so it can't be migrated until it does: `Set.Validate` enforces this). Processes that write outside the engine (`manage`, `keys`, `dots`, `setup-mcp`, `uninstall-extras`) run a read-only `DryRun` first so they too refuse to overwrite newer files; memory kinds are skipped there because the memory store already refuses newer files itself (`memory.ErrVersion`). `herdr-dots migrate` skips session dirs whose engine is running. (Refined by decision 24, reconciled: `daily.json`, `inbox.json` and `trusted.json` now declare their `<file>.lock`; `memory` and `mcp` are left out of the writing commands, decision 37.)
+5. **Legacy fixtures are the formats the code really wrote.** `legacy_test.go` holds 0.1, 0.2 and 0.3 files byte-exact from the v1/Phase 2/Phase 3 code and loads them through the real loaders after `Run`. Files Phases 4–9 introduced are produced by those phases' own writers in `writers_test.go` (`credentials.File.Set`, `mcpinstall.SaveRecords`, `TrustStore.Trust`, `state.Daily.Add`, `memory.Store.ClaimSchedule`, `history.Store.Append`), which is exactly what 0.4–0.9 write because Phase 10 changes no writer. `TestEveryPathsFileIsClassified` makes every `paths.Paths` getter either a kind or an explicitly unversioned path, so a later phase can't add a file silently. (Refined by decision 24, reconciled: `writers_test.go` uses the merged writers and adds `patchstore.Put`, `Inbox.Put` and `SeeDots`.)
+6. **Fuzzing found two problems while planning; one is a product bug.** A short run of the new targets found that `memory.ExportTOML` writes `ref = "d:"` for an entry that has no id yet, which `ImportTOML` then rejects (crasher `FuzzImportTOML/8a748f204ecc8c6f`, committed as a regression input; fixed in Task 3). It also showed that `ParseStance` maps invalid UTF-8 to U+FFFD (the fuzz invariant counts runes, not bytes). Task 3 runs every target for 60 s and fixes what it finds in the same task, committing each crasher under `testdata/fuzz/`. (Reconciled: the `ExportTOML` bug is still present at `dffabbf`; the reconcile pass's own fuzz run found a third problem, decision 26.)
+7. **Fuzz targets beyond the spec's list:** `council.ParseDigest`/`ParseStance` (chair output reaches the queue), `config.Load` (the kill switches must fail closed on every input), the dot file loader (dots are shared files in Phase 9), `memory.ScanSecrets`, the scope-file loader, the Codex config block editor (`mcpinstall`, it edits the developer's `~/.codex/config.toml`) and the credentials file reader. `IPC request decoding` is fuzzed at `ipc.serveConn` over `net.Pipe`, which covers every command's JSON decode path. (Extended by decision 26, reconciled.)
 8. **Snapshot trimming never cuts text.** The spec suggested trimming; cutting a card body would show the developer one text and send another, which breaks the UI rule. `view.Trim` keeps whole cards in queue order (most severe, then oldest), drops feeds to 5 entries first, then drops the last card of the fullest pane one at a time, down to one card per pane. `Snapshot()` trims outside `e.mu`.
 9. **Broadcast throttle:** leading edge plus one trailing broadcast. The first change after a quiet 100 ms goes out at once; later changes in the window coalesce into one trailing broadcast (spawned through `e.spawn`) that carries the final state. Measured while planning: 1,000 changes in 1 s give at most 11 broadcasts.
-10. **The soak test lives in `internal/engine` (`//go:build soak && (darwin || linux)`),** not `test/soak/`: it reuses the engine test rig (fake Herdr server, fake backend, fake readers) instead of duplicating it. CPU and peak RSS come from `getrusage`. A 45 s smoke while planning gave 14.4 MB peak RSS, 0.58 % idle CPU and 19 KB snapshots. GitHub-hosted jobs stop at 6 hours, so CI runs 15 minutes on pushes and 5 hours nightly; the 8-hour run happens locally in Task 13 (or, if the session can't wait, it becomes a user gate with the longest completed run recorded).
+10. **The soak test lives in `internal/engine` (`//go:build soak && (darwin || linux)`),** not `test/soak/`: it reuses the engine test rig (fake Herdr server, fake backend, fake readers) instead of duplicating it. CPU and peak RSS come from `getrusage`. A 45 s smoke while planning gave 14.4 MB peak RSS, 0.58 % idle CPU and 19 KB snapshots. GitHub-hosted jobs stop at 6 hours, so CI runs 15 minutes on pushes and 5 hours nightly; the 8-hour run happens locally in Task 13 (or, if the session can't wait, it becomes a user gate with the longest completed run recorded). (Reconciled numbers at `dffabbf`, decision 28.)
 11. **`NO_COLOR` needs no code.** lipgloss v1.1.0 picks its color profile with termenv's `EnvColorProfile` (`renderer.go:74`), which returns the no-color profile when `NO_COLOR` is set (`termenv.go:69`); bold, faint and reverse stay, so selection and severity stay visible. The spec's `style.NoColor()` is dropped; the README documents `NO_COLOR`.
 12. **Version source of truth is `internal/version/VERSION`,** embedded with `go:embed`, so the install scripts read the same value. `version.Source` (`release`/`source`) and `version.Commit` come from `-ldflags -X`; without them `CommitID()` reads Go's VCS stamp. `herdr-dots version` and `--version` print `herdr-dots 1.0.0-rc.1 (source, commit 1a2b3c4d5e6f)`.
 13. **Where the repository comes from.** Herdr installs with `git clone` (herdr.dev/docs/plugins), so `build.sh` reads `owner/repo` from `release/REPO` or, when that file is empty, from the clone's GitHub `origin` remote. Both files under `release/` are committed empty in 1.0.0-rc.1: no release exists, so every install builds from source; the release workflow fills `SHA256SUMS`, and the developer fills `REPO` if Herdr's clone has no usable origin.
 14. **Release flow (written, never run):** a `v<VERSION>-rc.N` tag runs the three-OS tests, a 10-minute fuzz pass per target and a GoReleaser build with nothing published, and opens a pull request that commits `release/SHA256SUMS` and `release/ASSET_ENV` (version, asset commit, timestamp). A `v<VERSION>` tag on the merged commit rebuilds from the pinned inputs, refuses to continue unless the archives are byte-identical to the committed checksums, signs them with cosign (keyless) and creates a **draft** release. The spec's "rc commits SHA256SUMS" can't put the checksums in the rc commit itself; the PR plus reproducible rebuild keeps the spec's guarantee (the tree a user installs carries the checksums of the assets they download). Reproducibility (`-trimpath`, `-buildvcs=false`, pinned `mod_timestamp` and archive `mtime`) is unverified without GoReleaser; if it doesn't hold, the publish job fails closed at its `diff`.
 15. **Six targets, as the spec says,** including `windows/arm64`, which Phase 6 left unsupported. It is cross-compiled and published like the others; the README marks it "built, not tested".
-16. **`build.ps1` and `build.sh` run the same steps,** and their tests share fixtures. The PowerShell tests run wherever `pwsh` or `powershell` exists (CI's ubuntu and windows runners); here they skip. Phase 6's `TestWindowsBuildScriptBuildsTheExe` pinned strings of the old script; Task 6 updates it.
+16. **`build.ps1` and `build.sh` run the same steps,** and their tests share fixtures. The PowerShell tests run wherever `pwsh` or `powershell` exists (CI's ubuntu and windows runners); here they skip. Phase 6's `TestWindowsBuildScriptBuildsTheExe` pinned strings of the old script; Task 6 updates it. (Reconciled: the update is now a diff, Task 6 Step 4.)
 17. **`release-local.sh`** builds the same six archives and `SHA256SUMS` with plain `go build`, `tar` and `zip` when GoReleaser isn't installed, so the install path is tested end to end with real binaries (`HERDR_DOTS_E2E_RELEASE=1`, verified while planning for darwin/arm64 and linux/amd64).
 18. **`verify-release`** re-hashes the kept archive (`bin/release/<asset>`) against `release/SHA256SUMS`, checks that `bin/herdr-dots` is the binary inside it, and runs `cosign verify-blob` with the repository's release-workflow identity when cosign and a `.sigstore.json` bundle exist. Without cosign it says so; it never downloads anything.
 19. **`uninstall-extras`** removes the MCP entries through Phase 5's `setup-mcp --remove` (its own preview, confirmation and backups) and the keybindings through a new `keys.RemoveBlock`, which deletes only `[[keys.command]]` tables whose command is `herdr-dots.*` and keeps every other byte (a setup-keys round trip is byte-identical). `--purge` deletes the config and state dirs only after the developer types `purge herdr-dots`, even with `--yes`, and never while an engine runs.
-20. **Triage of deferred findings (Tasks 9 and 10).** Folded: the four notable Phase 2 items (git config execution in hostile repos, zero-width secret evasion, the nested-repo `FindProject` prefix match, the memui approve screen in tiny popups), plus Unicode bidi controls in model text (an approval-screen spoof), `DeleteDot` leaving ledger excerpts (the Phase 2 completion note scheduled it for "a later phase"; none took it), dot slugs that could name files outside the dots dir, a feed file that kept a loose mode, and two panics (`TruncateRunes(n<=0)`, `Feed.Recent(n<0)`). Everything else is a documented known issue with its reason. The rule for items Phases 3–9 add to their ledgers before Phase 10 runs is in Task 9.
-21. **Git calls get a guard test.** Beyond fixing `memory.ExecGit` (`core.fsmonitor=false`, `core.pager=cat`, `protocol.allow=never`, `GIT_NO_LAZY_FETCH=1`), `TestEveryGitCallDisablesRepositoryPrograms` fails if any product file that starts git (including Phase 7's `internal/worktree`) lacks `core.fsmonitor=false` and `core.hooksPath=`.
+20. **Triage of deferred findings (Tasks 9 and 10).** Folded: the four notable Phase 2 items (git config execution in hostile repos, zero-width secret evasion, the nested-repo `FindProject` prefix match, the memui approve screen in tiny popups), plus Unicode bidi controls in model text (an approval-screen spoof), `DeleteDot` leaving ledger excerpts (the Phase 2 completion note scheduled it for "a later phase"; none took it), dot slugs that could name files outside the dots dir, a feed file that kept a loose mode, and two panics (`TruncateRunes(n<=0)`, `Feed.Recent(n<0)`). Everything else is a documented known issue with its reason. The rule for items Phases 3–9 add to their ledgers before Phase 10 runs is in Task 9. (Refined by decisions 29–32, reconciled: several of these were already fixed by Phases 6–8, and every ledger, v1 to Phase 9, is triaged.)
+21. **Git calls get a guard test.** Beyond fixing `memory.ExecGit` (`core.fsmonitor=false`, `core.pager=cat`, `protocol.allow=never`, `GIT_NO_LAZY_FETCH=1`), `TestEveryGitCallDisablesRepositoryPrograms` fails if any product file that starts git (including Phase 7's `internal/worktree`) lacks `core.fsmonitor=false` and `core.hooksPath=`. (Refined by decision 29, reconciled: `ExecGit` already has every flag but `core.pager=cat`, which a non-terminal git never uses; the guard test stays as a pin.)
 22. **The spec's manage-popup footer ("Outriders 1.0.0 · MCP ✓ · keys ✓") is dropped:** it belonged to the rename, Phase 5 already shows the MCP status there, and `--version` reports the version. The footer is a churn-heavy file shared by Phases 3–9.
 23. **Security review:** Task 11 runs the Claude Code `security-review` skill over the whole tree (not just a diff) and writes the human-read notes; findings rated High or Critical are fixed in Task 11, the rest go to the known issues. `govulncheck` runs through `go run`; if the module can't be downloaded (offline), that is recorded and becomes a user gate.
+24. **Every persisted file, with its version (reconciled).** The inventory in Task 2's Interfaces block was read from the code at `dffabbf`. Kinds: config, dot, credentials, prices, mcp-install, trust (`trusted.json.lock`, self-guarded by `projectdots.ErrNewer`), memory-scope, memory-meta, schedule (all `memory.lock`, self-guarded by `memory.ErrVersion`), daily (`daily.json.lock`, self-guarded by `state.ErrDailyVersion`), inbox (`inbox.json.lock`), attachments, queue, usage, patch-meta. `Appended` names the three JSONL logs (feed, memory ledger, history) and `External` the formats read from outside the plugin's directories (`.dotpack.toml` format 1, the memory TOML export version 1, repository project dots). `TestEveryPathsFileIsClassified` covers every getter, `InboxFile` included.
+25. **Keys never reach a report (reconciled).** `credentials.toml` is a `Secret` kind: a parse error quotes the offending line, so its `Corrupt`/`Failed` text is replaced (`TestBrokenCredentialsAreReportedWithoutTheirText`). Backups are written with `fsutil.WriteFileAtomic(…, 0o600)`, so they get the owner-only DACL on Windows too, and the test checks them with `platformtest.AssertPrivateFile`.
+26. **Twenty-four fuzz targets (reconciled).** Added for the parsers the merged phases introduced: `FuzzParseCLIOutput` (claude and codex CLI output), `FuzzDecodeStrict` (`dots.DecodeStrict` and `DecodeProject`), `FuzzDiffHeaders` and `FuzzUnquoteC` (Phase 7's diff header parser), `FuzzDiffViewParse` (the patch viewer). `FuzzDotpackParse` uses the real `Export(d, mem, ExportOptions)` and `Prepare` (there is no `ClampPack`; idempotence is "clamping a prepared dot again changes nothing", `Clamp.Fact`). `FuzzCredentialsFile` checks `Last4` as `"…"` plus four bytes; `FuzzImportTOML` also compares `Source` and `From`. A 10 s run found that `FuzzCodexBlock`'s invariant was wrong (crasher `a763424096dd21b2`, kept); then every target passed 30 s. Not fuzzed, on purpose: the MCP server's JSON-RPC (the go-sdk decodes it into typed tool inputs), `herdr.ParseInvocationContext` (`encoding/json` into a flat struct), `worktree.parseRaw`/`parseNumstat` (git's own output) and the scrollback reader (a plain-text tail).
+27. **The first-`{`-to-last-`}` extraction stays (reconciled; ruling P8-R7).** `ParseVerdict`, `ParseReply` and `ParseMemoryOps` still take that span. It fails closed (two objects never parse as one, so a wrong verdict is never accepted, only a malformed one), the fuzz targets check every accepted reply is sanitized and capped, and the triage lists it as a known issue; the string-aware extractor P8-R7 promised did not land in Phase 8 and is follow-up work, not a release blocker.
+28. **Throttle and soak against the merged engine (reconciled).** `broadcast` resets `pending` when `e.spawn` refuses after `Wait`, so a stopping engine never wedges the throttle. The merged engine already caps each pane's feed at 20, so `MaxFeedPerPane` (50) is a backstop. The 60 s soak at `dffabbf`: 240 runs, 57 broadcasts, biggest snapshot 23 KB, peak RSS 21.8 MB, idle CPU 0.58 %. All engine, UI, IPC and MCP tests pass with the throttle.
+29. **Already fixed, so only pinned (reconciled).** Phases 6–8 gave every git child `core.fsmonitor=false`, the null hooks path, `protocol.allow=never`, `GIT_ALLOW_PROTOCOL=none` and `GIT_NO_LAZY_FETCH=1`; `SanitizeModelText` drops bidi controls; Phase 7 Task 0 made `DeleteDot` scrub ledger lines, asides and orphaned proposals. Task 9 drops the old `ExecGit`, `gitEnv`, `sanitize.go`, `bidi_test.go` and `DeleteDot` edits and keeps `TestExecGitRunsNothingTheRepositoryConfigures` and `TestEveryGitCallDisablesRepositoryPrograms` as pins (both pass at `dffabbf`).
+30. **The invisible-character fix goes in `internal/secrets` (reconciled).** Phase 9 moved the patterns to `secrets.Scan`, which `memory.ScanSecrets`, `dots.Encode`, dot packs and history call, so the fix there covers every caller. `TestFindProjectPrefersTheNestedRepository` names its projects so the outer one sorts first (`Store.projects()` sorts by name), or it would pass on the old code by luck.
+31. **Slug checks are file-name safety, not `Slugify`'s form (reconciled).** `Slugify(slug) == slug` would stop the manage popup from editing a dot file the developer named by hand (`My_Dot.toml`). `validSlug` refuses what can name another file (empty, `/`, `\`, `:`, NUL, a non-local name per `filepath.IsLocal`, which also refuses Windows device names). Project dots never reach `Load`/`Save`/`Delete`.
+32. **Two flaky tests, fixed in their tests (reconciled).** `TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies`: `startStub`'s stop returned before `ipc.Serve` closed its listener, and a closing Unix listener unlinks its path, so it could delete the next stub's socket; the stop now waits for `Serve`. The Phase 7 draft tests: the rig's `eventually` gave git-heavy drafts 3 s; it now allows 15 s. Both ran green under `-race` with load (`-count=50`; drafts `-count=6` beside two other packages).
+33. **Version pins and manifest (reconciled).** One test pins the version at `dffabbf` (`TestVersionIsPhaseNine`, renamed `TestVersionIsTheReleaseCandidateInTheBinary`); the manifest edit is a diff; `keys.Defaults()` has four bindings (Phase 3 added council), which `TestRemoveBlockKeepsEverythingElseByteForByte` now counts. A binary without Go's VCS stamp prints `commit unknown`.
+34. **Live provider checks are user gates (reconciled).** Task 13 no longer runs `go test -tags live` or the provider part of the macOS smoke (a card from a Claude pane, then `suppressed`); both join the ready-to-publish checklist with the API backends and Codex. The memui part of the smoke stays, with a proposal made by `memory import`.
+35. **`verify-release` starts cosign through `internal/platform` (reconciled).** Phase 6's portability guard failed on `exec.Command`; it now uses `platform.Command`, `platform.ChildEnv` and `platform.HideWindow`.
+36. **Tests that run on Windows CI (reconciled).** `TestUninstallRemovesMCPAndKeysWithABackupAndKeepsData` checks the config's mode only off Windows; `TestSafeToPurgeRefusesHomeRootAndRelativePaths` builds its paths with `filepath.Join` under a temp dir (`/Users/me` is not absolute on Windows); the migrate backup check uses `platformtest.AssertPrivateFile`.
+37. **Writing commands (reconciled).** `manage`, `keys`, `dots`, `setup-mcp` and `uninstall-extras` run the read-only check first. `memory` and `mcp` write only memory files, which refuse newer versions themselves, and the MCP server's start must stay fast, so they are left out.
+38. **The verification gate (reconciled).** `gofmt -l internal cmd scripts` (Task 6 adds Go files under `scripts/`; `gofmt -l .` walks into other checkouts under `.claude/worktrees`), `go vet -tags soak ./internal/engine/` as well, and `GOOS=windows go test -c` for each task's packages.
+39. **The README moves by its real headings (reconciled).** Task 12's table maps the README as it is at `dffabbf` (`### Backends and keys`, `### Dots MCP server: …`, `### Proactive dots (0.8.0)`, …). The detailed `## Privacy and safety` bullets move verbatim to `docs/guide/privacy-and-safety.md` (the README keeps the short list and links it), and `## Known gaps in this scaffold` merges into `## Known issues`. The wording checks exclude three technical phrases moved verbatim (`Patch ready`, "a finished run", Herdr reporting `done`).
+40. **The roadmap edit is Phase 10's own row only (reconciled).** Task 13 replaces the version and increment cells of the Phase 10 row; the checklist stays unchecked.
+41. **Replayed on Phase 9's final fix wave as well (reconciled).** `feat/dots-v1` moved to `0205616` ("merge: Phase 9 final fix wave") during this pass. Tasks 1–10 replayed from the final text onto `0205616` apply cleanly and pass `gofmt`, `vet` (and `-tags soak`), the race suite, the Linux and Windows builds and 48 Windows test binaries; `FuzzDecodeStrict`, `FuzzDotFile`, `FuzzDotpackParse` and `FuzzImportTOML` ran 15 s each against the wave's new TOML pre-scan. The wave's three "Parked → Phase 10" lines are in the triage notes.
 
 ## Confirmed while planning (2026-10-08)
 
@@ -77,8 +96,8 @@ No human was available; every judgment call is recorded here. Each can be revers
 | V2 | Is the chosen name free (GitHub, marketplace, trademark)? | Not checked here: naming and publishing are the developer's decisions. "Herdr Dots" overlaps OpenAI's "Dots" (spec §2); recorded as a publishing risk in the ready-to-publish checklist | spec §2, ruling 1 | user gate |
 | V3 | Network during `[[build]]`; where Herdr installs from | `plugin install` clones with `git` (default branch, or `--ref`), runs build steps after confirmation, gives them no runtime env, documents no network restriction; `plugin link` runs no build; there is no `plugin update` (reinstall) | herdr.dev/docs/plugins (fetched 2026-10-08) | yes: the clone carries `release/SHA256SUMS` and an `origin` remote; tests force offline with `HERDR_PLUGIN_BUILD_OFFLINE=1` |
 | V4 | Per-platform `[[build]]` | Item-level `platforms` on `[[build]]` work; Phase 6 already splits `sh scripts/build.sh` / `powershell ... scripts/build.ps1` | Phase 6 plan, decision 2 (Herdr source) | yes |
-| T1 | Tools on this machine | `actionlint` and `shellcheck` installed; `goreleaser`, `cosign`, `govulncheck`, `pwsh` and `codex` not installed; Go 1.25.7, git 2.52.0, Herdr 0.8.2 | `command -v` | goreleaser snapshot replaced by `release-local.sh`; PowerShell tests skip here |
-| T2 | Compile check | Every code block of Tasks 2–10 that touches real code compiled and passed `go test -race` on a copy of HEAD (v1 + Phase 2 + Phase 3 Tasks 1–3, 5) with the edits applied; `go vet`, `gofmt` and the linux/amd64 build clean; the soak smoke and the release e2e ran | scratch copy, Go 1.25.7 | yes (Windows build fails at HEAD only because Phase 6 isn't built yet) |
+| T1 | Tools on this machine | `actionlint`, `shellcheck`, `zip` and `ruby` installed; `goreleaser`, `cosign`, `govulncheck`, `pwsh`, `powershell` and `codex` not installed; Go 1.25.7, Herdr 0.8.2 (rechecked 2026-10-09) | `command -v` | goreleaser snapshot replaced by `release-local.sh`; PowerShell tests skip here |
+| T2 | Compile check (reconciled 2026-10-09) | Every task was replayed in wave order on `dffabbf` (Phases 2–9 merged) from this plan's text; after each wave `gofmt -l internal cmd scripts`, `go vet ./...` (and `-tags soak`), `go test -race ./...`, the Linux build, the Windows build and vet, and `GOOS=windows go test -c` for the wave's packages passed; `make cross` built 48 Windows test binaries; the 60 s soak, `make snapshot`, the release e2e install, the `migrate --dry-run` scratch run, `actionlint` and `shellcheck` ran; every fuzz target ran 10 s and 30 s | scratch worktree, Go 1.25.7 | yes |
 
 ## Review Focus
 
@@ -87,7 +106,7 @@ The five inputs the spec implies but its tests don't exercise, most likely to bi
 1. **A file from a newer herdr-dots next to current ones** (a downgrade after trying 1.1). Expect it read, never rewritten by the engine or by `manage`/`setup-mcp`, a toast naming it, and everything else working. Tests: `TestFutureQueueIsReadButNeverRewritten`, `TestNewerFileIsReadOnlyAndNeverRewritten` (Task 2), `TestWritingCommandsProtectNewerFiles`, `TestMigrateCommandReportsAndSkipsRunningSessions` (Task 7).
 2. **An install with no network, or a tampered download, on a machine without Go.** Expect a clear message that says what to do, nothing half-installed in `bin/`, and never a binary that failed its checksum. Tests: `TestOfflineWithoutGoFailsWithInstructionsAndAnEmptyBin`, `TestUnreachableServerWithoutGoFailsCleanly`, `TestChecksumMismatchFallsBackToASourceBuild`, `TestArchiveWithoutTheBinaryIsRejected`, `TestPowerShellRefusesAMismatchAndFailsWithoutGo` (Task 6).
 3. **A Herdr `config.toml` that mixes herdr-dots bindings with the developer's own tables and comments.** Expect `uninstall-extras` to remove only herdr-dots bindings, keep every other byte, back up first, and say which bindings it couldn't edit. Tests: `TestRemoveBlockKeepsEverythingElseByteForByte`, `TestRemoveBlockCountsBindingsItCannotRemove`, `TestUninstallRemovesMCPAndKeysWithABackupAndKeepsData` (Task 8).
-4. **A hostile repository** (a clone whose `.git/config` sets `core.fsmonitor`/`core.pager`, or memory text with zero-width or bidi characters). Expect no program from the repository to run, secrets still caught, and screen text that reads as stored. Tests: `TestExecGitRunsNothingTheRepositoryConfigures`, `TestEveryGitCallDisablesRepositoryPrograms`, `TestInvisibleCharactersDoNotHideASecret`, `TestSanitizeDropsBidiControls` (Task 9).
+4. **A hostile repository** (a clone whose `.git/config` sets `core.fsmonitor`/`core.pager`, a model-written patch with a forged header, or memory text with zero-width or bidi characters). Expect no program from the repository to run, no symlink created, secrets still caught, and screen text that reads as stored. Tests: `TestExecGitRunsNothingTheRepositoryConfigures`, `TestEveryGitCallDisablesRepositoryPrograms`, `TestInvisibleCharactersDoNotHideASecret` (Task 9), `FuzzDiffHeaders`, `FuzzDiffViewParse` (Task 3), and Phase 2's `TestSanitizeModelTextRemovesBidiKeepsEmojiJoiners`.
 5. **Hours of heavy use: a burst of state changes, 150 cards on one pane, huge card bodies.** Expect at most 10 broadcasts a second with the final state delivered, snapshots under 256 KB, no card text cut, and flat memory. Tests: `TestBroadcastsAreCoalescedAndTheLastStateArrives`, `TestTrimStaysUnderTheByteBudgetWithoutCuttingACard`, `TestTrimKeepsOneCardPerPaneEvenOverBudget`, `TestSoak` (Task 4, run long in Task 13).
 
 ---
@@ -106,8 +125,8 @@ Each task runs in its own git worktree branched from the wave's base (the base b
 | 6 | Install scripts (verify, fall back) and `verify-release` | Task 5 | 2 |
 | 7 | Migrations at startup, read-only protection, `migrate` command | Task 2 | 2 |
 | 8 | `uninstall-extras` and `keys.RemoveBlock` | Task 3 | 2 |
-| 9 | Hardening triage A: memory, git, text (and the triage notes) | Task 3 | 2 |
-| 10 | Hardening triage B: memui approve fit, slugs, feed, panics | Task 3 | 2 |
+| 9 | Hardening triage A: secrets, nested projects, git pins (and the triage notes) | Task 3 | 2 |
+| 10 | Hardening triage B: memui approve fit, slugs, feed, panics, flaky tests | Task 3 | 2 |
 | 11 | Threat model, security review, `SECURITY.md` | Tasks 6–10 | 3 |
 | 12 | User docs: README, guide, CHANGELOG, CONTRIBUTING | Tasks 6–10 | 3 |
 | 13 | Acceptance checklist, soak run, ready-to-publish checklist | all | 4 |
@@ -117,38 +136,42 @@ Each task runs in its own git worktree branched from the wave's base (the base b
 **Files per task** (disjoint within each wave):
 - Task 1: `docs/superpowers/notes/2026-10-08-phase-10-verification.md`.
 - Task 2: `internal/migrate/migrate.go`, `kinds.go`, `migrate_test.go`, `legacy_test.go`, `writers_test.go`; `internal/fsutil/readonly.go`, `readonly_test.go`, `atomic.go`.
-- Task 3: `internal/backend/fuzz_test.go`, `internal/transcript/fuzz_test.go`, `internal/memory/fuzz_test.go`, `internal/memory/tomlio.go`, `internal/memory/testdata/fuzz/FuzzImportTOML/8a748f204ecc8c6f`, `internal/council/fuzz_test.go`, `internal/keys/fuzz_test.go`, `internal/config/fuzz_test.go`, `internal/dots/fuzz_test.go`, `internal/ipc/fuzz_test.go`, `internal/schedule/fuzz_test.go`, `internal/dotpack/fuzz_test.go`, `internal/mcpinstall/fuzz_test.go`, `internal/credentials/fuzz_test.go`, `scripts/fuzz.sh`; any parser file a crash points at, with its crasher under that package's `testdata/fuzz/` (never a file another Wave 1 task owns).
+- Task 3: `internal/backend/fuzz_test.go`, `internal/transcript/fuzz_test.go`, `internal/memory/fuzz_test.go`, `internal/memory/tomlio.go`, `internal/memory/testdata/fuzz/FuzzImportTOML/8a748f204ecc8c6f`, `internal/council/fuzz_test.go`, `internal/keys/fuzz_test.go`, `internal/config/fuzz_test.go`, `internal/dots/fuzz_test.go`, `internal/ipc/fuzz_test.go`, `internal/schedule/fuzz_test.go`, `internal/dotpack/fuzz_test.go`, `internal/mcpinstall/fuzz_test.go`, `internal/mcpinstall/testdata/fuzz/FuzzCodexBlock/a763424096dd21b2`, `internal/credentials/fuzz_test.go`, `internal/worktree/fuzz_test.go`, `internal/ui/diff/fuzz_test.go`, `scripts/fuzz.sh`; any parser file a crash points at, with its crasher under that package's `testdata/fuzz/` (never a file another Wave 1 task owns).
 - Task 4: `internal/engine/broadcast.go`, `broadcast_test.go`, `engine.go`, `soak_test.go`, `soak_darwin_test.go`, `soak_linux_test.go`; `internal/view/trim.go`, `trim_test.go`.
-- Task 5: `internal/version/VERSION`, `version.go`, `version_test.go`; `cmd/herdr-dots/main.go` and every `*_test.go` that pins the old version (found by the grep in Step 5); `herdr-plugin.toml`; `.goreleaser.yaml`; `.github/workflows/ci.yml`, `release.yml`; `Makefile`; `release/SHA256SUMS`, `release/REPO`; `scripts/release-local.sh`; `.gitignore`.
+- Task 5: `internal/version/VERSION`, `version.go`, `version_test.go`; `cmd/herdr-dots/main.go`, `cmd/herdr-dots/memwire_test.go` (the one version pin at `dffabbf`); `herdr-plugin.toml`; `.goreleaser.yaml`; `.github/workflows/ci.yml`, `release.yml`; `Makefile`; `release/SHA256SUMS`, `release/REPO`; `scripts/release-local.sh`; `.gitignore`.
 - Task 6: `scripts/build.sh`, `build.ps1`, `build_test.go`, `build_ps1_test.go`, `release_test.go`; `cmd/herdr-dots/verifyrelease.go`, `verifyrelease_test.go`, `platform_manifest_test.go`.
 - Task 7: `cmd/herdr-dots/migrate.go`, `migrate_test.go`, `main.go`, `engine.go`.
 - Task 8: `internal/keys/remove.go`, `remove_test.go`; `cmd/herdr-dots/uninstall.go`, `uninstall_test.go`.
-- Task 9: `internal/memory/secrets.go`, `project.go`, `store.go`, `hardening_test.go`, `gitcalls_test.go`; `internal/textutil/sanitize.go`, `bidi_test.go`; `docs/superpowers/notes/2026-10-08-phase-10-triage.md`.
-- Task 10: `internal/ui/memui/model.go`, `model_test.go`; `internal/delivery/delivery.go`, `truncate_test.go`; `internal/dots/store.go`, `slug_test.go`; `internal/state/feed.go`, `feedmode_test.go`.
+- Task 9: `internal/secrets/secrets.go`; `internal/memory/store.go`, `hardening_test.go`, `gitcalls_test.go`; `docs/superpowers/notes/2026-10-08-phase-10-triage.md`.
+- Task 10: `internal/ui/memui/model.go`, `model_test.go`; `internal/delivery/delivery.go`, `truncate_test.go`; `internal/dots/store.go`, `slug_test.go`; `internal/state/feed.go`, `feedmode_test.go`; `internal/mcpserver/engine_test.go`; `internal/engine/engine_test.go`.
 - Task 11: `docs/security/threat-model.md`, `docs/security/2026-10-08-security-review.md`, `SECURITY.md`; product files a High or Critical finding points at (never a docs file Task 12 owns).
 - Task 12: `README.md`, `docs/guide/*.md`, `CHANGELOG.md`, `CONTRIBUTING.md`.
 - Task 13: `docs/superpowers/notes/1.0-acceptance.md`, `docs/release/ready-to-publish.md`, `README.md` (status block only), `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, the Task 1 notes file (wrap-up section).
 
-**Gate after Wave 1:** after merging Tasks 1–5, the full verification list in Global Constraints passes, and `GOTOOLCHAIN=local go test -run '^Fuzz' ./...` (seed corpora only) passes.
+**Gate after Wave 1:** after merging Tasks 1–5, "The verification gate" passes for every package, and `GOTOOLCHAIN=local go test -run '^Fuzz' ./...` (seed corpora only) passes.
 
-**Gate after Wave 2:** `make cross` passes; `GOTOOLCHAIN=local go test -race ./...` passes; `actionlint .github/workflows/*.yml` prints nothing; `shellcheck -s sh scripts/*.sh` prints nothing.
+**Gate after Wave 2:** `make cross` passes (48 Windows test binaries at the reconcile pass); `GOTOOLCHAIN=local go test -race ./...` passes (Phase 6's portability guard included); `actionlint .github/workflows/*.yml` prints nothing; `shellcheck -s sh scripts/*.sh` prints nothing.
 
-**Test-name hygiene:** helpers added here, by package. `migrate`: `widgetSet`, `noLock`, `writeFile`, `readFile`, `legacyTree`, `snapshotTree`, consts `legacyDot`, var `legacy`. `fsutil`: none. `backend`: `hasControl`, `seedReplies`, `checkOps`. `transcript`: `checkTurns`. `memory`: `char` (Task 9), no new helper in Task 3. `council`, `keys`, `config`, `dots`, `schedule`, `dotpack`, `mcpinstall`, `credentials`: none. `ipc`: `fuzzHandler`. `engine`: `soakEnv`, `cpuTime`, `peakRSS`, consts `soakMaxIdleCPU`, `soakMaxRSS`, `soakDots`, `soakPanes`, `rssUnit`, `minBroadcastGap` (product). `view`: `bigPane`, `jsonSize`. `version`: none. `scripts` (new package, tests only): `skipOnWindows`, `toolDir`, `tarGz`, `sum`, `pluginRoot`, `release`, `goEnv`, `runBuild`, `runInstalled`, `readInstallSource`, `binLeftovers`, `powershell`, `zipBytes`, `psRoot`, `runPS`, consts `testVersion`, `testRepo`, `testPlat`, `testAsset`, `fakeBinary`, `winAsset`, var `unixTools`. `main` (cmd/herdr-dots): `vrTarGz`, `vrRoot`, `vrRun` (Task 6); `migratePaths`, `writeTestFile` (Task 7); `uninstallRig`, `newUninstallRig`, const `herdrConfig` (Task 8). Product names in `main`: Task 6 `verifyIO`, `vrAssetRe`, `vrRepoRe`, `vrSigIssuer`, `vrReadRecord`, `vrChecksum`, `vrFileSHA256`, `vrMemberSHA256`, `vrExists`; Task 7 `startupMigrations`, `readOnlyNotice`, `writingCommands`, `protectNewerFiles`, `sessionDirRe`, `migrateCmd`; Task 8 `uninstallIO`, `uninstallSessionRe`, `purgeConfirm`, `removeKeyBlock`, `purgeDirs`, `uninstallConfirm`, `safeToPurge`, `runningEngines`; Task 5 `printVersion`. `delivery`, `dots`, `state`, `textutil`: none. Before adding any of these, run `grep -rn "func <name>\b\|<name> =" <package dir>`; if Phases 2–9 already define it, add the suffix `P10` everywhere the task uses it.
+**Test-name hygiene:** helpers added here, by package. `migrate` (new package): `widgetSet`, `noLock`, `writeFile`, `readFile`, `legacyTree`, `snapshotTree`, `writerTree`, consts `legacyDot`, var `legacy`; product `memoryLock`, `siblingLock`, `quiet`, `withLock`, `backupPath`, `checkVersion`. `fsutil`: none. `backend`: `hasControl`, `seedReplies`, `checkOps`. `transcript`: `checkTurns`. `memory`: `char` (Task 9), no new helper in Task 3. `council`, `keys`, `config`, `dots`, `schedule`, `dotpack`, `mcpinstall`, `credentials`, `worktree`, `ui/diff`: none (Task 3); `keys` product `blockHeader`, `tableHeaderRe`, `commandTableRe`, `ourCommandRe` (Task 8); `dots` product `ErrBadSlug`, `validSlug` (Task 10); `secrets` product `stripInvisible`, `scan` (Task 9). `ipc`: `fuzzHandler`. `engine`: `soakEnv`, `cpuTime`, `peakRSS`, consts `soakMaxIdleCPU`, `soakMaxRSS`, `soakDots`, `soakPanes`, `rssUnit`, `minBroadcastGap` (product). `view`: `bigPane`, `jsonSize`. `version`: none. `scripts` (new package, tests only): `skipOnWindows`, `toolDir`, `tarGz`, `sum`, `pluginRoot`, `release`, `goEnv`, `runBuild`, `runInstalled`, `readInstallSource`, `binLeftovers`, `powershell`, `zipBytes`, `psRoot`, `runPS`, consts `testVersion`, `testRepo`, `testPlat`, `testAsset`, `fakeBinary`, `winAsset`, var `unixTools`. `main` (cmd/herdr-dots): `vrTarGz`, `vrRoot`, `vrRun` (Task 6); `migratePaths`, `writeTestFile` (Task 7); `uninstallRig`, `newUninstallRig`, const `herdrConfig` (Task 8). Product names in `main`: Task 6 `verifyIO`, `vrAssetRe`, `vrRepoRe`, `vrSigIssuer`, `vrReadRecord`, `vrChecksum`, `vrFileSHA256`, `vrMemberSHA256`, `vrExists`; Task 7 `startupMigrations`, `readOnlyNotice`, `writingCommands`, `protectNewerFiles`, `sessionDirRe`, `migrateCmd`; Task 8 `uninstallIO`, `uninstallSessionRe`, `purgeConfirm`, `removeKeyBlock`, `purgeDirs`, `uninstallConfirm`, `safeToPurge`, `runningEngines`; Task 5 `printVersion`. `delivery`, `state`, `mcpserver`: none. The reconcile pass compiled every one of these names into its package at `dffabbf` with no collision; if Phase 9's final fix wave adds one, run `grep -rn "func <name>\b\|<name> =" <package dir>` and add the suffix `P10` everywhere the task uses it.
 
 ### Shared files with Phases 3–9
 
-Phases 3–9 merge before Phase 10, so these files carry their changes. The diffs below are against v1 + Phase 2 + the built part of Phase 3 (the code at HEAD when this plan was written). Where a hunk doesn't apply because a later phase moved a line, make the same edit by hand: every hunk shows the exact lines to remove and add.
+Phases 3–9 are merged, so these files carry their changes. Every diff in this plan was regenerated by the reconcile pass against `dffabbf` (Wave 2 diffs against `dffabbf` plus Wave 1), so it applies with `git apply` as written. If Phase 9's final fix wave moves a line, make the same edit by hand: every hunk shows the exact lines to remove and add.
 
 | File | Changed by | Phase 10 task | What Phase 10 changes |
 |---|---|---|---|
-| `internal/engine/engine.go` | 3, 4, 5, 7, 8, 9 | 4 | adds the `bc throttle` field, renames `Snapshot` to `buildSnapshot`, removes `broadcast` (moved to `broadcast.go`) |
+| `internal/engine/engine.go` | 3–9 | 4 | adds the `bc throttle` field, renames `Snapshot` to `buildSnapshot`, removes `broadcast` (moved to `broadcast.go`) |
+| `internal/engine/engine_test.go` | 1–9 | 10 | `eventually` waits up to 15 s |
 | `cmd/herdr-dots/main.go` | 3, 4, 5, 7, 9 | 5, 7 | version entries (5); one `protectNewerFiles` line in `dispatch` (7) |
-| `cmd/herdr-dots/engine.go` | 3, 4, 5, 6 | 7 | two insertions in `serveEngine` |
+| `cmd/herdr-dots/memwire_test.go` | 2, 9 | 5 | the version pin |
+| `cmd/herdr-dots/engine.go` | 3–9 | 7 | two insertions in `serveEngine` |
+| `cmd/herdr-dots/platform_manifest_test.go` | 6 | 6 | `TestWindowsBuildScriptBuildsTheExe` pins the new script |
 | `internal/fsutil/atomic.go` | 6 | 2 | one check at the top of `WriteFileAtomic` |
-| `internal/memory/project.go` | 6 | 9 | `ExecGit` flags, `gitEnv` adds `GIT_NO_LAZY_FETCH=1` (Phase 6 made the hooks path `platform.DevNull`) |
-| `internal/memory/store.go` | 5, 6, 8, 9 | 9 | `FindProject` deepest match, `DeleteDot` ledger lines |
-| `internal/memory/tomlio.go` | — | 3 | `ExportTOML` omits an empty ref |
-| `internal/ui/memui/model.go`, `model_test.go` | — | 10 | approve screen fit |
+| `internal/secrets/secrets.go` | 9 | 9 | `Scan` also scans without invisible characters |
+| `internal/memory/store.go` | 2–9 | 9 | `FindProject` deepest match |
+| `internal/memory/tomlio.go` | 2, 9 | 3 | `ExportTOML` omits an empty ref |
+| `internal/mcpserver/engine_test.go` | 5, 6 | 10 | `startStub` waits for `Serve` |
+| `internal/ui/memui/model.go`, `model_test.go` | 2, 5, 9 | 10 | approve screen fit |
 | `internal/dots/store.go` | 4, 9 | 10 | slug validation |
 | `internal/state/feed.go` | 7, 8 | 10 | mode tightening, `Recent(n<=0)` |
 | `herdr-plugin.toml` | 3, 5, 6, 7 | 5 | version, comment, description |
@@ -156,15 +179,16 @@ Phases 3–9 merge before Phase 10, so these files carry their changes. The diff
 | `.github/workflows/ci.yml` | 6 | 5 | replaced whole (keeps Phase 6's matrix) |
 | `Makefile` | 6 | 5 | new targets |
 | `README.md` | every phase | 12, 13 | restructured (12), status block (13) |
+| `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md` | — | 13 | the Phase 10 row's version and increment cells |
 
 ## File Structure
 
 ```
 internal/migrate/migrate.go          (new)  Kind, Migration, Set, Roots, Options, Report, Probe, Validate, Run (backups, locks, read-only marks)
-internal/migrate/kinds.go            (new)  Default(): every persisted file kind in 1.0; Unversioned; KindPaths
+internal/migrate/kinds.go            (new)  Default(): every persisted file kind in 1.0; Unversioned; KindPaths; Appended; External
 internal/fsutil/readonly.go          (new)  ErrNewerVersion, ProtectNewer, Protected, ResetProtected, CheckWritable
 internal/fsutil/atomic.go            (mod)  WriteFileAtomic refuses protected paths
-internal/*/fuzz_test.go              (new)  16 fuzz targets (Task 3)
+internal/*/fuzz_test.go              (new)  24 fuzz targets in 14 packages (Task 3)
 internal/memory/tomlio.go            (mod)  ExportTOML: no ref for an entry without an id
 scripts/fuzz.sh                      (new)  run every fuzz target for N each
 internal/engine/broadcast.go         (new)  throttle, Snapshot (trimmed), broadcast (coalesced), sendSnapshot
@@ -187,12 +211,13 @@ cmd/herdr-dots/migrate.go            (new)  startupMigrations, readOnlyNotice, p
 cmd/herdr-dots/engine.go             (mod)  migrations before stores open; read-only toast
 internal/keys/remove.go              (new)  RemoveBlock
 cmd/herdr-dots/uninstall.go          (new)  uninstall-extras [--purge] [--yes]
-internal/memory/secrets.go           (mod)  scan without invisible characters too
-internal/memory/project.go           (mod)  ExecGit: no fsmonitor, pager or lazy fetch
-internal/memory/store.go             (mod)  FindProject deepest root; DeleteDot drops ledger lines
+internal/secrets/secrets.go          (mod)  scan without invisible characters too
+internal/memory/store.go             (mod)  FindProject deepest root
 internal/memory/gitcalls_test.go     (new)  guard: every git call disables repository programs
-internal/textutil/sanitize.go        (mod)  drop bidi controls
+internal/memory/hardening_test.go    (new)  invisible-character secrets, hostile-repo git, nested projects
 internal/ui/memui/model.go           (mod)  approve only when the whole proposal fits
+internal/mcpserver/engine_test.go    (mod)  startStub waits for Serve (flaky test)
+internal/engine/engine_test.go       (mod)  eventually waits up to 15 s (draft tests under load)
 internal/delivery/delivery.go        (mod)  TruncateRunes(n<=0)
 internal/dots/store.go               (mod)  ErrBadSlug: Load/Save/Delete refuse non-file-name slugs
 internal/state/feed.go               (mod)  owner-only feed file; Recent(n<=0)
@@ -205,20 +230,20 @@ docs/superpowers/notes/*.md          (new)  verification, triage, 1.0 acceptance
 docs/release/ready-to-publish.md     (new)  the developer's checklist from here to a published 1.0.0
 ```
 
-**Conventions for code steps.** New files are given in full. Changes to existing files are unified diffs: save the block to a file (for example `/tmp/p10-task.patch`) and run `git apply /tmp/p10-task.patch` from the repo root. If a hunk doesn't apply because a neighboring line changed in Phases 3–9, make the same edit by hand (every hunk shows the exact lines), then run `gofmt -w` on the touched files. Every Go block in Tasks 2–10 that touches code existing at HEAD was compiled and tested while planning (see "Confirmed while planning", T2). Blocks that use Phase 4–9 packages (`writers_test.go`, four fuzz files, `uninstall.go`'s call to `runSetupMCP`) follow those phases' Interfaces blocks and could not be compiled here.
+**Conventions for code steps.** New files are given in full. Changes to existing files are unified diffs: save the block to a file (for example `/tmp/p10-task.patch`) and run `git apply /tmp/p10-task.patch` from the repo root. If a hunk doesn't apply because Phase 9's final fix wave moved a neighboring line, make the same edit by hand (every hunk shows the exact lines), then run `gofmt -w` on the touched files. Every code block in Tasks 1–10 was replayed from this text on `dffabbf` (Phases 2–9 merged) by the reconcile pass, compiled and tested (see "Confirmed while planning", T2).
 
 **The verification gate** (each task's last test step spells it out):
 
 ```bash
-gofmt -l .
-GOTOOLCHAIN=local go vet ./...
+gofmt -l internal cmd scripts
+GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go vet -tags soak ./internal/engine/
 GOTOOLCHAIN=local go test -race ./...
 GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
-GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
-GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...
+GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...
+mkdir -p "${TMPDIR:-/tmp}/p10-wintest" && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p10-wintest/" <the task's packages>; rm -rf "${TMPDIR:-/tmp}/p10-wintest"
 ```
 
-Expected: `gofmt` prints nothing; the other five succeed.
+Expected: `gofmt` prints nothing; the others succeed. (`gofmt -l .` would walk into the checkouts under `.claude/worktrees` and `.worktrees`.)
 
 ---
 
@@ -281,7 +306,7 @@ Only the developer can do these; Phase 10 prepares each one.
 1. Choose a license and add `LICENSE` (ruling 16). No license is chosen.
 2. Decide the name for publishing (keep "Herdr Dots" or rename; the migration framework supports a rename).
 3. Run the feature-complete acceptance run on Linux and on Windows (Herdr Windows beta) hardware, and on macOS with a real Herdr install.
-4. Install Codex and run the Codex live tests (`go test -tags live ./internal/backend/ ./internal/council/`).
+4. Run the live provider checks: the Claude live tests and the provider part of the macOS smoke, the API backends with your keys, then install Codex and run the Codex live tests (`go test -tags live ./internal/backend/ ./internal/council/`).
 5. Create the GitHub repository, push, and let CI run on three OSes.
 6. Tag `v1.0.0-rc.N`, merge the checksum PR, set `internal/version/VERSION` to `1.0.0` when the acceptance run passes, tag `v1.0.0`, publish the draft release.
 7. Add the `herdr-plugin` topic and check the listing on herdr.dev/plugins.
@@ -310,9 +335,34 @@ git commit -m "docs: Phase 10 verification notes, baseline and user gates"
 - Modify: `internal/fsutil/atomic.go` (top of `WriteFileAtomic`)
 
 **Interfaces:**
-- Consumes: `fsutil.WriteFileAtomic`; `lockfile.Acquire(path string, timeout time.Duration) (*Lock, error)`, `(*Lock).Release()`; `paths.Paths{ConfigDir, StateDir, SessionDir}` and its getter methods (reflection); the loaders `config.Load`, `dots.LoadAll`, `queue.Open`, `state.OpenAttachments`, `state.OpenUsage`, `state.OpenFeed`, `memory.Open`/`List` (tests only); Phase 4–9 writers in `writers_test.go` only (Preconditions).
+- Consumes: `fsutil.WriteFileAtomic`; `lockfile.Acquire(path string, timeout time.Duration) (*Lock, error)`, `(*Lock).Release()`, `lockfile.TryLock(path string) (*Lock, error)`; `paths.Paths{ConfigDir, StateDir, SessionDir}`, `paths.New` and the getter methods (reflection); the loaders `config.Load`, `dots.LoadAll`, `dots.DecodeStrict`, `queue.Open`, `state.OpenAttachments`, `state.OpenUsage`, `state.OpenFeed`, `memory.Open`/`List`/`ImportTOML`, `dotpack.Parse`/`Format`/`ErrFormat` (tests only); the Phase 4–9 writers, tests only: `credentials.File.Set`, `mcpinstall.SaveRecords`/`RecordPath`/`Record`/`ClientClaude`, `patchstore.Open`/`Put`/`Update`/`Meta`/`StatusReady`, `state.OpenDaily`/`Daily.Add`, `queue.OpenInbox`/`Inbox.Put`, `memory.Store.SeeDots`/`ClaimSchedule`, `history.Open`/`Append`/`Record`/`TypeRun`/`KindReview`, `state.OutcomePass`, `(*projectdots.TrustStore).Trust(project, rel, path string, sum [32]byte, caps []string)`, `projectdots.Sum`.
 - Produces (package `fsutil`): `var ErrNewerVersion error`; `func ProtectNewer(path string)`; `func Protected(path string) bool`; `func ResetProtected()`; `func CheckWritable(path string) error`; `WriteFileAtomic` returns an error wrapping `ErrNewerVersion` for a protected path.
-- Produces (package `migrate`): `type Format string` (`JSON`, `TOML`); `type Root int` (`ConfigRoot`, `StateRoot`, `SessionRoot`); `type Kind struct{ Name string; Root Root; Globs []string; Format Format; Current int; Lock func(file string) string; SelfGuarded bool }`; `type Migration struct{ Kind string; From int; Apply func([]byte) ([]byte, error) }`; `type Set struct{ Kinds []Kind; Migrations []Migration }`; `type Roots struct{ Config, State, Session string }`; `func RootsOf(p paths.Paths) Roots`; `type Options struct{ DryRun bool; LockTimeout time.Duration; Logf func(string, ...any) }`; `type Report struct{ Migrated, Pending, ReadOnly, Failed, Corrupt, Backups []string }` with `Empty() bool` and `Summary() string`; `func Probe(data []byte, f Format) (int, error)`; `func (Set) Validate() error`; `func (Set) Run(r Roots, o Options) (Report, error)`; `func Default() Set`; `var Unversioned map[string]string`; `var KindPaths map[string]string`.
+- Produces (package `migrate`): `type Format string` (`JSON`, `TOML`); `type Root int` (`ConfigRoot`, `StateRoot`, `SessionRoot`); `type Kind struct{ Name string; Root Root; Globs []string; Format Format; Current int; Lock func(file string) string; SelfGuarded bool; Secret bool }`; `type Migration struct{ Kind string; From int; Apply func([]byte) ([]byte, error) }`; `type Set struct{ Kinds []Kind; Migrations []Migration }`; `type Roots struct{ Config, State, Session string }`; `func RootsOf(p paths.Paths) Roots`; `type Options struct{ DryRun bool; LockTimeout time.Duration; Logf func(string, ...any) }`; `type Report struct{ Migrated, Pending, ReadOnly, Failed, Corrupt, Backups []string }` with `Empty() bool` and `Summary() string`; `func Probe(data []byte, f Format) (int, error)`; `func (Set) Validate() error`; `func (Set) Run(r Roots, o Options) (Report, error)`; `func Default() Set`; `var Unversioned map[string]string`; `var KindPaths map[string]string`; `var Appended map[string]string` (the append-only JSONL logs); `var External map[string]string` (formats read from outside the plugin's directories).
+
+Every persisted file at `dffabbf`, with its version (verified by reading the code; Plan decision 24):
+
+| File | Kind / class | Version today | Writer and guard |
+|---|---|---|---|
+| `CONFIG_DIR/config.toml` | `config` | none (= 1) | the developer; `config.Load` fails closed on a bad file |
+| `CONFIG_DIR/dots/*.toml` | `dot` | none (= 1) | `dots.Save` (`fsutil.WriteFileAtomic`) |
+| `CONFIG_DIR/credentials.toml` | `credentials` (Secret) | none (= 1); a table per provider, so it can never hold a top-level `version` | `credentials.File.Set`/`Remove` |
+| `CONFIG_DIR/prices.toml` | `prices` | none (= 1) | the developer |
+| `CONFIG_DIR/mcp-install.json` | `mcp-install` | `"version": 1` | `mcpinstall.SaveRecords` |
+| `CONFIG_DIR/trusted.json` | `trust` (lock `trusted.json.lock`, self-guarded) | `"version": 1` | `TrustStore.Trust`/`Revoke*`; `projectdots.ErrNewer` |
+| `STATE_DIR/memory/<p>/project.json`, `dots/<slug>.json`, `_global/dots/<slug>.json` | `memory-scope` (lock `memory.lock`, self-guarded) | `"version": 1` | `memory.Store`; `memory.ErrVersion` |
+| `STATE_DIR/memory/<p>/meta.json` | `memory-meta` (same) | `"version": 1` | `SeeProject`, `SeeDots` |
+| `STATE_DIR/memory/<p>/schedule.json` | `schedule` (same) | `"version": 1` | `ClaimSchedule` |
+| `STATE_DIR/memory/<p>/ledger.jsonl` | `Appended` | per line | `RecordOutcome` (append) |
+| `STATE_DIR/daily.json` | `daily` (lock `daily.json.lock`, self-guarded) | `"version": 1` | `Daily.Add`; `state.ErrDailyVersion` |
+| `STATE_DIR/inbox.json` | `inbox` (lock `inbox.json.lock`) | none (= 1) | `Inbox.Put`/claims |
+| `STATE_DIR/history/<slug>.jsonl` | `Appended` (`HistoryDir`) | per line | `history.Store.Append` |
+| `SESSION_DIR/attachments.json`, `queue.json`, `usage.json` | `attachments`, `queue`, `usage` | none (= 1); attachments and usage are pane-keyed maps | the engine |
+| `SESSION_DIR/patches/<id>.json` | `patch-meta` | none (= 1) | `patchstore.Put`/`Update` (the `.patch` files are git output, not a format of ours) |
+| `SESSION_DIR/feed.jsonl` | `Appended` (`FeedFile`) | per line | `Feed.Append` |
+| `SESSION_DIR/dotspanes.json`, `engine.lock`, `engine.log`, the socket, `CONFIG_DIR/.state-dir` | `Unversioned` | — | runtime files |
+| `*.dotpack.toml` (export files) | `External` | `[pack] format = 1` | `dotpack.Export`; `dotpack.Parse` refuses another format |
+| memory export `.toml` | `External` | `version = 1` | `memory.ExportTOML`; `ImportTOML` refuses a newer version |
+| `<repo>/.herdr-dots/dots/*.toml` | `External` | none | the repository; `dots.DecodeStrict` refuses unknown keys |
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -371,6 +421,7 @@ import (
 
 	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/lockfile"
+	"herdr-dots/internal/platform/platformtest"
 )
 
 // widgetSet is a test-only kind at version 3 with two JSON migrations: v1
@@ -474,9 +525,7 @@ func TestRunUpgradesOldFilesBacksThemUpAndIsIdempotent(t *testing.T) {
 	if b := readFile(t, old+".bak-v1"); b != `{"name":"alpha"}` {
 		t.Fatalf("backup holds %q", b)
 	}
-	if st, _ := os.Stat(old + ".bak-v1"); st.Mode().Perm() != 0o600 {
-		t.Fatalf("backup mode %v", st.Mode().Perm())
-	}
+	platformtest.AssertPrivateFile(t, old+".bak-v1") // 0600, or an owner-only DACL on Windows
 	if b := readFile(t, cur); b != `{"version":3,"title":"gamma","tags":["x"]}` {
 		t.Fatalf("a current file was rewritten: %s", b)
 	}
@@ -844,66 +893,152 @@ func TestEveryPathsFileIsClassified(t *testing.T) {
 }
 ```
 
-Create `internal/migrate/writers_test.go` (files Phases 4–9 write, produced by their own writers; written against those phases' Interfaces blocks, see Preconditions):
+Create `internal/migrate/writers_test.go` (files Phases 4–9 write, produced by their own merged writers; a broken `credentials.toml` is reported without its text; the external formats refuse newer versions):
 
 ```go
 package migrate
 
 import (
-	"crypto/sha256"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"herdr-dots/internal/credentials"
+	"herdr-dots/internal/dotpack"
+	"herdr-dots/internal/dots"
 	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/history"
 	"herdr-dots/internal/mcpinstall"
 	"herdr-dots/internal/memory"
+	"herdr-dots/internal/patchstore"
+	"herdr-dots/internal/paths"
 	"herdr-dots/internal/projectdots"
+	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 )
 
-// Phases 4–9 write these files; Phase 10 changes none of their writers, so
-// what the writers produce today is what 0.4–0.9 left on disk. All of it is
-// current in 1.0, and the JSONL history is not a kind at all.
-func TestFilesWrittenByPhases4To9AreCurrent(t *testing.T) {
-	t.Cleanup(fsutil.ResetProtected)
+// writerTree writes every file Phases 4–9 added, with the writers that
+// wrote them in 0.4–0.9. Phase 10 changes none of those writers, so what they
+// produce today is what an existing install has on disk.
+func writerTree(t *testing.T) (Roots, paths.Paths) {
+	t.Helper()
 	base := t.TempDir()
-	r := Roots{Config: filepath.Join(base, "config"), State: filepath.Join(base, "state"), Session: filepath.Join(base, "session")}
+	p := paths.New(filepath.Join(base, "config"), filepath.Join(base, "state"), "/tmp/herdr-test.sock")
+	r := RootsOf(p)
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	const proj = "g-0123456789abcdef"
 
-	cf := credentials.File{Path: filepath.Join(r.Config, "credentials.toml"), Env: func(string) string { return "" }}
+	cf := credentials.File{Path: p.CredentialsFile(), Env: func(string) string { return "" }}
 	if err := cf.Set("anthropic", "sk-ant-api03-"+strings.Repeat("aB3d", 12)); err != nil {
-		t.Fatalf("credentials (Phase 4): %v", err)
+		t.Fatalf("credentials.toml (Phase 4): %v", err)
 	}
-	if err := mcpinstall.SaveRecords(mcpinstall.RecordPath(r.Config), []mcpinstall.Record{{
+	if err := mcpinstall.SaveRecords(mcpinstall.RecordPath(p.ConfigDir), []mcpinstall.Record{{
 		Client: mcpinstall.ClientClaude, Scope: "user", Command: []string{"/x/bin/herdr-dots", "mcp"}, At: now}}); err != nil {
 		t.Fatalf("mcp-install.json (Phase 5): %v", err)
 	}
-	if err := (projectdots.TrustStore{Path: filepath.Join(r.Config, "trusted.json")}).Trust(
-		"/repo/.herdr-dots/dots/review.toml", sha256.Sum256([]byte("name = \"Review\"")), nil); err != nil {
-		t.Fatalf("trusted.json (Phase 9): %v", err)
+	ps := patchstore.Open(p.PatchesDir())
+	if err := ps.Put(patchstore.Meta{ID: "0123456789abcdef", Dot: "security", Pane: "w1:p1", Repo: "/repo", Status: patchstore.StatusReady}); err != nil {
+		t.Fatalf("patches/<id>.json (Phase 7): %v", err)
 	}
-	d, err := state.OpenDaily(filepath.Join(r.State, "daily.json"))
+	d, err := state.OpenDaily(p.DailyFile())
 	if err != nil {
 		t.Fatalf("daily.json (Phase 8): %v", err)
 	}
 	if err := d.Add("security", "research", 0.01, now); err != nil {
 		t.Fatalf("daily.json (Phase 8): %v", err)
 	}
-	st := memory.Open(filepath.Join(r.State, "memory"), memory.DefaultLimits())
-	if _, err := st.ClaimSchedule("g-0123456789abcdef", "security", now); err != nil {
+	if err := queue.OpenInbox(p.InboxFile()).Put(queue.Card{Project: proj, Dot: "security", DotName: "Security",
+		Severity: "warn", Body: "Scheduled review: token logged.", Mode: "queue", Origin: "scheduled"}); err != nil {
+		t.Fatalf("inbox.json (Phase 8): %v", err)
+	}
+	st := memory.Open(p.MemoryDir(), memory.DefaultLimits())
+	if err := st.SeeDots(proj, []string{"security"}, now); err != nil {
+		t.Fatalf("meta.json (Phase 8): %v", err)
+	}
+	if _, err := st.ClaimSchedule(proj, "security", now, now); err != nil {
 		t.Fatalf("schedule.json (Phase 8): %v", err)
 	}
-	if err := history.Open(filepath.Join(r.State, "history")).Append(history.Record{T: "run", At: now, Dot: "security"}); err != nil {
+	if err := history.Open(p.HistoryDir()).Append(history.Record{T: history.TypeRun, At: now, Dot: "security",
+		Kind: history.KindReview, Outcome: state.OutcomePass}); err != nil {
 		t.Fatalf("history (Phase 9): %v", err)
 	}
+	if err := (&projectdots.TrustStore{Path: p.TrustFile()}).Trust(proj, ".herdr-dots/dots/review.toml",
+		"/repo/.herdr-dots/dots/review.toml", projectdots.Sum([]byte("name = \"Review\"\n")), nil); err != nil {
+		t.Fatalf("trusted.json (Phase 9): %v", err)
+	}
+	return r, p
+}
 
+// Everything Phases 4–9 write is current in 1.0, and the JSONL history is
+// not a kind at all.
+func TestFilesWrittenByPhases4To9AreCurrent(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	r, _ := writerTree(t)
 	rep, err := Default().Run(r, Options{})
 	if err != nil || !rep.Empty() || len(rep.Backups) != 0 {
 		t.Fatalf("files written by Phases 4–9 must be current: %+v %v", rep, err)
+	}
+}
+
+// Every Phase 4–9 file a newer herdr-dots wrote is kept read-only, and its
+// own writer then fails with ErrNewerVersion instead of dropping what it
+// doesn't know.
+func TestNewerPhase4To9FilesStayReadOnly(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	r, p := writerTree(t)
+	inbox := `{"version":2,"next":1,"cards":[],"lanes":["a"]}`
+	patch := `{"version":2,"id":"0123456789abcdef","dot":"security","pane":"w1:p1","repo":"/repo","files":0,"bytes":0,"status":"ready","created_at":"2026-10-08T12:00:00Z","updated_at":"2026-10-08T12:00:00Z"}`
+	writeFile(t, p.InboxFile(), inbox)
+	writeFile(t, filepath.Join(p.PatchesDir(), "0123456789abcdef.json"), patch)
+	writeFile(t, mcpinstall.RecordPath(p.ConfigDir), `{"version":3,"installs":[]}`)
+	rep, err := Default().Run(r, Options{})
+	if err != nil || len(rep.ReadOnly) != 3 || len(rep.Migrated) != 0 {
+		t.Fatalf("report %+v %v", rep, err)
+	}
+	err = queue.OpenInbox(p.InboxFile()).Put(queue.Card{Project: "g-0123456789abcdef", Dot: "security", Body: "x", Mode: "queue"})
+	if !errors.Is(err, fsutil.ErrNewerVersion) || readFile(t, p.InboxFile()) != inbox {
+		t.Fatalf("a newer inbox must not be rewritten: %v", err)
+	}
+	if _, err := patchstore.Open(p.PatchesDir()).Update("0123456789abcdef", func(m *patchstore.Meta) { m.Stat = "x" }); !errors.Is(err, fsutil.ErrNewerVersion) {
+		t.Fatalf("a newer patch record must not be rewritten: %v", err)
+	}
+	if err := mcpinstall.SaveRecords(mcpinstall.RecordPath(p.ConfigDir), nil); !errors.Is(err, fsutil.ErrNewerVersion) {
+		t.Fatalf("newer mcp-install.json must not be rewritten: %v", err)
+	}
+}
+
+// credentials.toml holds keys: a broken one is reported without the parse
+// error, which would quote the line (and the key) into engine.log.
+func TestBrokenCredentialsAreReportedWithoutTheirText(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	r, p := writerTree(t)
+	key := "sk-ant-api03-" + strings.Repeat("Zq9x", 12)
+	writeFile(t, p.CredentialsFile(), "[anthropic]\napi_key = \""+key+"\n")
+	rep, _ := Default().Run(r, Options{})
+	if len(rep.Corrupt) != 1 || strings.Contains(rep.Summary(), "Zq9x") || !strings.Contains(rep.Corrupt[0], "details withheld") {
+		t.Fatalf("report %q", rep.Summary())
+	}
+}
+
+// Formats herdr-dots reads from outside its directories check their own
+// version: a newer pack or memory export is refused, never half-read.
+func TestExternalFormatsRefuseNewerVersions(t *testing.T) {
+	if len(External) == 0 || len(Appended) == 0 {
+		t.Fatal("External and Appended document the formats Run does not cover")
+	}
+	if _, err := dotpack.Parse([]byte("[pack]\nformat = 2\n")); !errors.Is(err, dotpack.ErrFormat) {
+		t.Fatalf("a format-2 pack: %v", err)
+	}
+	if _, err := memory.ImportTOML([]byte("version = 2\n")); !errors.Is(err, memory.ErrVersion) {
+		t.Fatalf("a version-2 memory export: %v", err)
+	}
+	if _, err := dots.DecodeStrict([]byte("version = 2\nname = \"X\"\n")); err == nil {
+		t.Fatal("a project dot with a key this version doesn't know must be refused")
+	}
+	if dotpack.Format != 1 {
+		t.Fatalf("dotpack.Format = %d: register the change in External and CHANGELOG.md", dotpack.Format)
 	}
 }
 ```
@@ -976,14 +1111,16 @@ func CheckWritable(path string) error {
 }
 ```
 
-Apply to `internal/fsutil/atomic.go` (Phase 6 added Windows DACL and rename-retry code below this point; the check goes first):
+Apply to `internal/fsutil/atomic.go` (the check goes first, before the Windows DACL and rename-retry code Phase 6 added; the doc comment gains one sentence):
 
 ```diff
 --- a/internal/fsutil/atomic.go
 +++ b/internal/fsutil/atomic.go
-@@ -10,6 +10,9 @@
- // it over path, so readers never observe a half-written file. The parent
- // directory is created with 0700.
+@@ -15,7 +15,11 @@ var restrictFn = restrict
+ // also gets an owner-only DACL on Windows, applied to the temp file before any
+ // byte is written, and a write whose privacy can't be set fails. On Windows
+ // the rename is retried briefly while another process has the old file open.
++// A file a newer herdr-dots wrote (see ProtectNewer) is never replaced.
  func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 +	if err := CheckWritable(path); err != nil {
 +		return err
@@ -993,7 +1130,6 @@ Apply to `internal/fsutil/atomic.go` (Phase 6 added Windows DACL and rename-retr
  		return err
 ```
 
-Also add one sentence to the `WriteFileAtomic` doc comment: `// A file a newer herdr-dots wrote (see ProtectNewer) is never replaced.`
 
 - [ ] **Step 4: The framework and the kinds**
 
@@ -1066,9 +1202,13 @@ type Kind struct {
 	// files are shared by every session's engine, so a migration can only be
 	// registered for a state-root kind that has a lock.
 	Lock func(file string) string
-	// SelfGuarded kinds refuse newer versions in their own loader (memory),
-	// so a read-only check (Options.DryRun) can skip them.
+	// SelfGuarded kinds refuse newer versions in their own loader (memory,
+	// schedule, daily, trust), so a read-only check (Options.DryRun) can skip
+	// them.
 	SelfGuarded bool
+	// Secret kinds hold keys (credentials.toml). A TOML or JSON parse error
+	// quotes the offending line, so their errors are never reported or logged.
+	Secret bool
 }
 
 // Migration upgrades one kind of file from version From to From+1. Apply
@@ -1284,7 +1424,7 @@ func (s Set) one(k Kind, file string, o Options, rep *Report) {
 	v, err := Probe(data, k.Format)
 	switch {
 	case err != nil:
-		rep.Corrupt = append(rep.Corrupt, fmt.Sprintf("%s: %v", file, err))
+		rep.Corrupt = append(rep.Corrupt, fmt.Sprintf("%s: %v", file, quiet(k, err)))
 		return
 	case v == k.Current:
 		return
@@ -1304,6 +1444,7 @@ func (s Set) one(k Kind, file string, o Options, rep *Report) {
 		}
 	}
 	if err := upgrade(); err != nil {
+		err = quiet(k, err)
 		fsutil.ProtectNewer(file)
 		rep.Failed = append(rep.Failed, fmt.Sprintf("%s: %v", file, err))
 		rep.ReadOnly = append(rep.ReadOnly, file)
@@ -1311,6 +1452,14 @@ func (s Set) one(k Kind, file string, o Options, rep *Report) {
 		return
 	}
 	o.Logf("migrate: %s upgraded from version %d to %d", file, v, k.Current)
+}
+
+// quiet replaces the error of a Secret kind: its text may quote a key.
+func quiet(k Kind, err error) error {
+	if k.Secret {
+		return errors.New("unreadable (details withheld: the file holds keys)")
+	}
+	return err
 }
 
 func withLock(lockPath string, timeout time.Duration, fn func() error) func() error {
@@ -1357,7 +1506,9 @@ func (s Set) upgrade(k Kind, file string, rep *Report) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(backup, data, 0o600); err != nil {
+	// The backup is as private as the file (an owner-only DACL on Windows):
+	// credentials.toml and memory are backed up too.
+	if err := fsutil.WriteFileAtomic(backup, data, 0o600); err != nil {
 		return err
 	}
 	if err := fsutil.WriteFileAtomic(file, out, st.Mode().Perm()); err != nil {
@@ -1393,7 +1544,7 @@ package migrate
 import "path/filepath"
 
 // memoryLock is the lock that guards a memory file: memory.lock in its
-// project (or _global) directory, two levels up for files under dots/.
+// project (or _global) directory, one level up for files under dots/.
 func memoryLock(file string) string {
 	dir := filepath.Dir(file)
 	if filepath.Base(dir) == "dots" {
@@ -1401,6 +1552,10 @@ func memoryLock(file string) string {
 	}
 	return filepath.Join(dir, "memory.lock")
 }
+
+// siblingLock is <file>.lock, the lock daily.json, inbox.json and
+// trusted.json are written under.
+func siblingLock(file string) string { return file + ".lock" }
 
 // Default is every persisted file kind herdr-dots 1.0 knows. Every kind is
 // at version 1 and there are no migrations yet. Kinds a phase adds must be
@@ -1410,25 +1565,31 @@ func Default() Set {
 		// Config dir (the developer edits these; atomic replace keeps them safe).
 		{Name: "config", Root: ConfigRoot, Globs: []string{"config.toml"}, Format: TOML, Current: 1},
 		{Name: "dot", Root: ConfigRoot, Globs: []string{"dots/*.toml"}, Format: TOML, Current: 1},
-		{Name: "credentials", Root: ConfigRoot, Globs: []string{"credentials.toml"}, Format: TOML, Current: 1}, // Phase 4
-		{Name: "prices", Root: ConfigRoot, Globs: []string{"prices.toml"}, Format: TOML, Current: 1},           // Phase 4
-		{Name: "mcp-install", Root: ConfigRoot, Globs: []string{"mcp-install.json"}, Format: JSON, Current: 1}, // Phase 5
-		{Name: "trust", Root: ConfigRoot, Globs: []string{"trusted.json"}, Format: JSON, Current: 1},           // Phase 9
+		// credentials.toml is a table per provider: it can never hold a
+		// top-level version key, so it stays at 1 until its format changes
+		// shape. It holds keys, so a parse error's text is never reported.
+		{Name: "credentials", Root: ConfigRoot, Globs: []string{"credentials.toml"}, Format: TOML, Current: 1, Secret: true},
+		{Name: "prices", Root: ConfigRoot, Globs: []string{"prices.toml"}, Format: TOML, Current: 1},
+		{Name: "mcp-install", Root: ConfigRoot, Globs: []string{"mcp-install.json"}, Format: JSON, Current: 1},
+		{Name: "trust", Root: ConfigRoot, Globs: []string{"trusted.json"}, Format: JSON, Current: 1,
+			Lock: siblingLock, SelfGuarded: true}, // projectdots.ErrNewer
 
 		// State dir, shared by every session.
 		{Name: "memory-scope", Root: StateRoot, Globs: []string{"memory/*/project.json", "memory/*/dots/*.json"},
-			Format: JSON, Current: 1, Lock: memoryLock, SelfGuarded: true},
+			Format: JSON, Current: 1, Lock: memoryLock, SelfGuarded: true}, // memory.ErrVersion
 		{Name: "memory-meta", Root: StateRoot, Globs: []string{"memory/*/meta.json"},
 			Format: JSON, Current: 1, Lock: memoryLock, SelfGuarded: true},
 		{Name: "schedule", Root: StateRoot, Globs: []string{"memory/*/schedule.json"},
-			Format: JSON, Current: 1, Lock: memoryLock}, // Phase 8
-		{Name: "daily", Root: StateRoot, Globs: []string{"daily.json"}, Format: JSON, Current: 1}, // Phase 8; add its lock before migrating it
+			Format: JSON, Current: 1, Lock: memoryLock, SelfGuarded: true},
+		{Name: "daily", Root: StateRoot, Globs: []string{"daily.json"}, Format: JSON, Current: 1,
+			Lock: siblingLock, SelfGuarded: true}, // state.ErrDailyVersion
+		{Name: "inbox", Root: StateRoot, Globs: []string{"inbox.json"}, Format: JSON, Current: 1, Lock: siblingLock},
 
 		// One session's directory (the engine that runs Run holds its lock).
 		{Name: "attachments", Root: SessionRoot, Globs: []string{"attachments.json"}, Format: JSON, Current: 1},
 		{Name: "queue", Root: SessionRoot, Globs: []string{"queue.json"}, Format: JSON, Current: 1},
 		{Name: "usage", Root: SessionRoot, Globs: []string{"usage.json"}, Format: JSON, Current: 1},
-		{Name: "patch-meta", Root: SessionRoot, Globs: []string{"patches/*.json"}, Format: JSON, Current: 1}, // Phase 7
+		{Name: "patch-meta", Root: SessionRoot, Globs: []string{"patches/*.json"}, Format: JSON, Current: 1},
 	}}
 }
 
@@ -1438,17 +1599,17 @@ func Default() Set {
 var Unversioned = map[string]string{
 	"EngineLock":       "runtime lock, rewritten by every engine",
 	"EngineLog":        "log text",
-	"EngineSock":       "socket",
-	"EngineEndpoint":   "socket or pipe name (Phase 6)",
+	"EngineSock":       "socket (Unix)",
+	"EngineEndpoint":   "socket or named pipe",
 	"FeedFile":         "append-only JSONL: records only gain optional fields",
 	"DotsPanesFile":    "runtime cache of open Dots panes, rebuilt on demand",
 	"StatePointerFile": "one line of text: the state dir",
-	"HistoryDir":       "append-only JSONL per dot (Phase 9): records only gain optional fields",
-	"WorktreesDir":     "git worktrees (Phase 7), owned by git and pruned",
+	"HistoryDir":       "append-only JSONL per dot: records only gain optional fields",
+	"WorktreesDir":     "transient git worktrees, owned by git and pruned",
 }
 
 // KindPaths maps paths.Paths methods to the kind that covers what they
-// return. Methods of phases that are not built yet are harmless here.
+// return.
 var KindPaths = map[string]string{
 	"ConfigFile":      "config",
 	"DotsDir":         "dot",
@@ -1457,29 +1618,48 @@ var KindPaths = map[string]string{
 	"TrustFile":       "trust",
 	"MemoryDir":       "memory-scope",
 	"DailyFile":       "daily",
+	"InboxFile":       "inbox",
 	"AttachmentsFile": "attachments",
 	"QueueFile":       "queue",
 	"UsageFile":       "usage",
 	"PatchesDir":      "patch-meta",
+}
+
+// Appended lists the append-only JSONL logs. They are not kinds: each line
+// is one record that only ever gains optional fields, and a breaking change
+// must use a new file name (CONTRIBUTING.md).
+var Appended = map[string]string{
+	"feed.jsonl":            "session feed (state.Feed)",
+	"memory/*/ledger.jsonl": "card outcomes a dot learned from (memory.Store ledger)",
+	"history/*.jsonl":       "per-dot run history (history.Store)",
+}
+
+// External lists formats herdr-dots reads from files outside its own
+// directories. Run never touches them; each reader checks its own version
+// and refuses a newer one.
+var External = map[string]string{
+	".dotpack.toml":           "dot pack, top-level format = 1; dotpack.Parse refuses a newer format (ErrFormat)",
+	"memory export (.toml)":   "herdr-dots memory export, version = 1; memory.ImportTOML refuses a newer version (ErrVersion)",
+	".herdr-dots/dots/*.toml": "project dot files in a repository; dots.DecodeStrict refuses keys it doesn't know",
 }
 ```
 
 - [ ] **Step 5: Classify every `paths.Paths` getter the merged phases added**
 
 Run: `GOTOOLCHAIN=local go test ./internal/migrate/ -run TestEveryPathsFileIsClassified -v`
-Expected: PASS. If it fails naming a method, that phase added a persisted path this plan didn't know: add a kind to `Default()` (and the method to `KindPaths`) when it is a whole-file JSON or TOML store, or add the method to `Unversioned` with the reason (append-only JSONL, runtime lock, cache, socket). A state-root kind without a lock gets no `Lock` (it can't be migrated until it declares one).
+Expected: PASS (at `dffabbf` the getters are `DotsDir`, `ConfigFile`, `EngineLock`, `EngineLog`, `AttachmentsFile`, `QueueFile`, `FeedFile`, `UsageFile`, `DotsPanesFile`, `HistoryDir`, `TrustFile`, `WorktreesDir`, `PatchesDir`, `CredentialsFile`, `PricesFile`, `DailyFile`, `InboxFile`, `MemoryDir`, `StatePointerFile`, `EngineEndpoint` and, on Unix, `EngineSock`; every one is classified above). If it fails naming a method, Phase 9's final fix wave added a persisted path: add a kind to `Default()` (and the method to `KindPaths`) when it is a whole-file JSON or TOML store, or add the method to `Unversioned` with the reason (append-only JSONL, runtime lock, cache, socket). A state-root kind without a lock gets no `Lock` (it can't be migrated until it declares one).
 
 - [ ] **Step 6: Run the tests**
 
 Run: `GOTOOLCHAIN=local go test -race ./internal/fsutil/ ./internal/migrate/ -v 2>&1 | grep -E '^(=== RUN|--- |ok|FAIL|PASS)' | grep -v '=== RUN'`
-Expected: PASS for `TestProtectedFileRefusesAtomicWritesAndKeepsItsBytes`, `TestProbeReadsVersionsAndDefaultsToOne`, `TestRunUpgradesOldFilesBacksThemUpAndIsIdempotent`, `TestNewerFileIsReadOnlyAndNeverRewritten`, `TestFailedMigrationLeavesTheFileAndMarksItReadOnly`, `TestMigrationThatForgetsTheVersionFails`, `TestCorruptFileIsReportedAndUntouched`, `TestDryRunReportsPendingWithoutWriting`, `TestLockedFileWaitsThenFailsWithoutChange`, `TestValidateRefusesIncompleteOrUnsafeChains`, `TestBackupNeverOverwritesAnEarlierBackup`, `TestEveryReleasedVersionIsCurrentAndStillLoads` (subtests 0.1, 0.2, 0.3), `TestFutureQueueIsReadButNeverRewritten`, `TestEveryPathsFileIsClassified`, `TestFilesWrittenByPhases4To9AreCurrent`.
+Expected: PASS for `TestProtectedFileRefusesAtomicWritesAndKeepsItsBytes`, `TestProbeReadsVersionsAndDefaultsToOne`, `TestRunUpgradesOldFilesBacksThemUpAndIsIdempotent`, `TestNewerFileIsReadOnlyAndNeverRewritten`, `TestFailedMigrationLeavesTheFileAndMarksItReadOnly`, `TestMigrationThatForgetsTheVersionFails`, `TestCorruptFileIsReportedAndUntouched`, `TestDryRunReportsPendingWithoutWriting`, `TestLockedFileWaitsThenFailsWithoutChange`, `TestValidateRefusesIncompleteOrUnsafeChains`, `TestBackupNeverOverwritesAnEarlierBackup`, `TestEveryReleasedVersionIsCurrentAndStillLoads` (subtests 0.1, 0.2, 0.3), `TestFutureQueueIsReadButNeverRewritten`, `TestEveryPathsFileIsClassified`, `TestFilesWrittenByPhases4To9AreCurrent`, `TestNewerPhase4To9FilesStayReadOnly`, `TestBrokenCredentialsAreReportedWithoutTheirText`, `TestExternalFormatsRefuseNewerVersions` (all verified at `dffabbf` by the reconcile pass).
 
-If `TestFilesWrittenByPhases4To9AreCurrent` fails because a writer is named differently in the merged code, use the real name; if it fails because a Phase 4–9 file is reported `Corrupt` (not a JSON object, not TOML), make that kind's `Format` match the file or move its getter to `Unversioned` with the reason.
+If `TestFilesWrittenByPhases4To9AreCurrent` fails after Phase 9's final fix wave because a Phase 4–9 file is reported `Corrupt` (not a JSON object, not TOML), make that kind's `Format` match the file or move its getter to `Unversioned` with the reason.
 
 - [ ] **Step 7: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed (every existing test still passes: no writer changed).
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed (every existing test still passes: no writer changed).
 
 - [ ] **Step 8: Commit (never push)**
 
@@ -1495,12 +1675,12 @@ git commit -m "feat: schema versions and data-migration framework with a read-on
 **Depends on:** none (Wave 1).
 
 **Files:**
-- Create: `internal/backend/fuzz_test.go`, `internal/transcript/fuzz_test.go`, `internal/memory/fuzz_test.go`, `internal/memory/testdata/fuzz/FuzzImportTOML/8a748f204ecc8c6f`, `internal/council/fuzz_test.go`, `internal/keys/fuzz_test.go`, `internal/config/fuzz_test.go`, `internal/dots/fuzz_test.go`, `internal/ipc/fuzz_test.go`, `internal/schedule/fuzz_test.go`, `internal/dotpack/fuzz_test.go`, `internal/mcpinstall/fuzz_test.go`, `internal/credentials/fuzz_test.go`, `scripts/fuzz.sh`
+- Create: `internal/backend/fuzz_test.go`, `internal/transcript/fuzz_test.go`, `internal/memory/fuzz_test.go`, `internal/memory/testdata/fuzz/FuzzImportTOML/8a748f204ecc8c6f`, `internal/council/fuzz_test.go`, `internal/keys/fuzz_test.go`, `internal/config/fuzz_test.go`, `internal/dots/fuzz_test.go`, `internal/ipc/fuzz_test.go`, `internal/schedule/fuzz_test.go`, `internal/dotpack/fuzz_test.go`, `internal/mcpinstall/fuzz_test.go`, `internal/mcpinstall/testdata/fuzz/FuzzCodexBlock/a763424096dd21b2`, `internal/credentials/fuzz_test.go`, `internal/worktree/fuzz_test.go`, `internal/ui/diff/fuzz_test.go`, `scripts/fuzz.sh`
 - Modify: `internal/memory/tomlio.go` (`ExportTOML`); any parser a fuzz crash points at
 
 **Interfaces:**
-- Consumes: `backend.ParseVerdict`, `ParseReply`, `ParseMemoryOps`, `MaxReviewOps`, `MaxPassOps`, `MemoryOp`; `transcript.ParseClaude`, `ParseCodex`, `FromDots`, `DotPrefix`, `Format`; `memory.ExportTOML`, `ImportTOML`, `ScanSecrets`, `Open`, `List`, `ErrCorrupt`, `ErrVersion`; `council.ParseDigest`, `ParseStance`, `Stance*`; `keys.Existing`, `Plan`, `Block`, `Defaults`; `config.Load`; `dots.LoadAll`, `Load`, `Save`, `templateFS`; `ipc.serveConn` (unexported, same package), `ipc.CmdPing`; Phase 8 `schedule.Parse`, `Spec.Next`, `Spec.Prev`; Phase 9 `dotpack.Export`, `Parse`, `ClampPack`; Phase 5 `mcpinstall.CodexBlock`, `UpsertCodexBlock`, `RemoveCodexBlock`, `BlockBegin`; Phase 4 `credentials.File.List`, `Status`.
-- Produces: fuzz targets `FuzzParseVerdict`, `FuzzParseReply`, `FuzzParseMemoryOps`, `FuzzParseClaude`, `FuzzParseCodex`, `FuzzFromDots`, `FuzzImportTOML`, `FuzzScopeFileLoad`, `FuzzScanSecrets`, `FuzzParseDigest`, `FuzzParseStance`, `FuzzKeysExisting`, `FuzzConfigLoad`, `FuzzDotFile`, `FuzzIPCDecode`, `FuzzScheduleParse`, `FuzzDotpackParse`, `FuzzCodexBlock`, `FuzzCredentialsFile`; `scripts/fuzz.sh [duration]` (default `30s`; Task 5's CI uses it, the release job runs `10m`). `ExportTOML` writes no `ref` for an entry whose `ID` is empty.
+- Consumes (all verified at `dffabbf`): `backend.ParseVerdict`, `ParseReply`, `ParseMemoryOps`, `ParseClaudeOutput`, `ParseCodexOutput`, `Result`, `MaxReviewOps`, `MaxPassOps`, `MemoryOp`; `transcript.ParseClaude`, `ParseCodex`, `FromDots`, `DotPrefix`, `Format`, the test fixtures `claudeSample`, `codexSample`; `memory.ExportTOML`, `ImportTOML`, `ScanSecrets`, `Open`, `List`, `ErrCorrupt`, `ErrVersion`, the test helpers `tomlFixture`, `idNum`; `council.ParseDigest`, `ParseStance`, `Stance*`; `keys.Existing`, `Plan`, `Block`, `Defaults`; `config.Load`; `dots.LoadAll`, `Load`, `Save`, `templateFS`, `DecodeStrict`, `DecodeProject`, `ProjectFile{Base, Path, Rel, Data}`, `IsProjectSlug`, `OriginProject`, `OriginImport`, `ClampDot`, `Clamp.Fact`, `ModeInject`; `ipc.serveConn(ctx, conn, h)` (unexported, same package), `ipc.CmdPing`; Phase 8 `schedule.Parse`, `Spec.Next`, `Spec.Prev`; Phase 9 `dotpack.Export(d dots.Dot, mem []memory.Entry, o ExportOptions)`, `ExportOptions{Note, Version, Now}`, `Parse`, `Prepare(p Pack, keep []string) (dots.Dot, []dots.Clamp, error)`, `memory.ImportKinds`; Phase 5 `mcpinstall.CodexBlock`, `UpsertCodexBlock`, `RemoveCodexBlock`, `BlockBegin`, `BlockEnd`; Phase 4 `credentials.File.List`, `Status.Last4` (`"…"` plus the last four bytes); Phase 7 `worktree.diffHeaders`, `unquoteC`, `gitModes`, `symlinkMode` (unexported, same package) and `ui/diff.Parse`, `File`.
+- Produces: fuzz targets `FuzzParseVerdict`, `FuzzParseReply`, `FuzzParseMemoryOps`, `FuzzParseCLIOutput`, `FuzzParseClaude`, `FuzzParseCodex`, `FuzzFromDots`, `FuzzImportTOML`, `FuzzScopeFileLoad`, `FuzzScanSecrets`, `FuzzParseDigest`, `FuzzParseStance`, `FuzzKeysExisting`, `FuzzConfigLoad`, `FuzzDotFile`, `FuzzDecodeStrict`, `FuzzIPCDecode`, `FuzzScheduleParse`, `FuzzDotpackParse`, `FuzzCodexBlock`, `FuzzCredentialsFile`, `FuzzDiffHeaders`, `FuzzUnquoteC`, `FuzzDiffViewParse` (24); `scripts/fuzz.sh [duration]` (default `30s`; Task 5's CI uses it, the release job runs `10m`). `ExportTOML` writes no `ref` for an entry whose `ID` is empty.
 
 - [ ] **Step 1: Write the fuzz targets**
 
@@ -1614,6 +1794,31 @@ func checkOps(t *testing.T, ops []MemoryOp) {
 			t.Fatalf("op %q survived cleaning", op.Op)
 		}
 	}
+}
+
+// FuzzParseCLIOutput feeds arbitrary bytes to the parsers of the claude and
+// codex CLIs' output (JSON with model text inside). An accepted review has a
+// sanitized message and only clean memory ops.
+func FuzzParseCLIOutput(f *testing.F) {
+	f.Add([]byte(`{"is_error":false,"result":"{\"relevant\":true,\"severity\":\"warn\",\"message\":\"x\"}","total_cost_usd":0.01,"usage":{"input_tokens":3,"output_tokens":2}}`))
+	f.Add([]byte(`{"is_error":true,"result":"\u001b[2Jboom","total_cost_usd":-1}`))
+	f.Add([]byte(`{"type":"item.completed","item":{"type":"agent_message","text":"{\"relevant\":false}"}}` + "\n" + `{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`))
+	f.Add([]byte(`{"type":"turn.failed","error":{"message":"rate limited"}}`))
+	f.Fuzz(func(t *testing.T, out []byte) {
+		for name, parse := range map[string]func([]byte) (Result, error){"claude": ParseClaudeOutput, "codex": ParseCodexOutput} {
+			res, err := parse(out)
+			if err != nil {
+				continue
+			}
+			if hasControl(res.Verdict.Message) {
+				t.Fatalf("%s: unsanitized message %q", name, res.Verdict.Message)
+			}
+			if len(res.Remember) > MaxReviewOps {
+				t.Fatalf("%s: %d ops, the cap is %d", name, len(res.Remember), MaxReviewOps)
+			}
+			checkOps(t, res.Remember)
+		}
+	})
 }
 ```
 
@@ -1737,7 +1942,7 @@ func FuzzImportTOML(f *testing.F) {
 		for i := range es {
 			a, b := es[i], back[i]
 			if a.ID != b.ID || a.Scope != b.Scope || a.Dot != b.Dot || a.Kind != b.Kind || a.Status != b.Status ||
-				a.Pinned != b.Pinned || a.Text != b.Text || strings.Join(a.Paths, "\x00") != strings.Join(b.Paths, "\x00") {
+				a.Pinned != b.Pinned || a.Text != b.Text || a.Source != b.Source || a.From != b.From || strings.Join(a.Paths, "\x00") != strings.Join(b.Paths, "\x00") {
 				t.Fatalf("round trip changed entry %d: %+v -> %+v", i+1, a, b)
 			}
 		}
@@ -1976,6 +2181,42 @@ func FuzzDotFile(f *testing.F) {
 		}
 	})
 }
+
+// FuzzDecodeStrict feeds arbitrary bytes to the strict decoder that reads
+// repository project dots (files other people commit). A file it accepts
+// never claims an origin of its own, and DecodeProject turns it into a
+// project dot under a project-namespaced slug that validates.
+func FuzzDecodeStrict(f *testing.F) {
+	for _, name := range []string{"security", "frontend", "backend"} {
+		if b, err := templateFS.ReadFile("templates/" + name + ".toml"); err == nil {
+			f.Add(string(b))
+		}
+	}
+	f.Add("name = \"X\"\npurpose = \"p\"\norigin = \"user\"\n")
+	f.Add("name = \"X\"\npurpose = \"p\"\n[capabilities]\nwrite = true\nfuture = 1\n")
+	f.Add("name = \"X\"\npurpose = \"p\"\n[delivery]\nmode = \"inject\"\n")
+	f.Add("version = 2\n")
+	f.Fuzz(func(t *testing.T, data string) {
+		d, err := DecodeStrict([]byte(data))
+		if err != nil {
+			return
+		}
+		if d.Origin != "" {
+			t.Fatalf("DecodeStrict trusted the file's origin %q", d.Origin)
+		}
+		pf := ProjectFile{Base: "review", Path: "/repo/.herdr-dots/dots/review.toml", Rel: ".herdr-dots/dots/review.toml", Data: []byte(data)}
+		pd, err := DecodeProject(pf, "g-0123456789abcdef")
+		if err != nil {
+			return
+		}
+		if pd.Origin != OriginProject || !IsProjectSlug(pd.Slug) || pd.SourcePath != pf.Path {
+			t.Fatalf("project dot %q: origin %q, source %q", pd.Slug, pd.Origin, pd.SourcePath)
+		}
+		if err := pd.Validate(); err != nil {
+			t.Fatalf("DecodeProject returned an invalid dot: %v", err)
+		}
+	})
+}
 ```
 
 Create `internal/ipc/fuzz_test.go`:
@@ -2077,40 +2318,65 @@ func FuzzScheduleParse(f *testing.F) {
 }
 ```
 
-Create `internal/dotpack/fuzz_test.go` (Phase 9's `dotpack`; clamping is idempotent):
+Create `internal/dotpack/fuzz_test.go` (Phase 9's `dotpack.Parse`, which already pre-scans for TOML bombs; preparing a pack clamps every risky capability and clamping again changes nothing):
 
 ```go
 package dotpack
 
 import (
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/memory"
 )
 
+// FuzzDotpackParse feeds arbitrary bytes to the pack parser, whose input
+// comes from other people (a file or an https download). It must return
+// quickly (the TOML bomb pre-scan), and a pack it accepts must only carry
+// what may travel; preparing it clamps every risky capability, and clamping
+// the prepared dot again changes nothing.
 func FuzzDotpackParse(f *testing.F) {
 	d := dots.New("Security")
 	d.Purpose = "Flag secrets."
-	if b, err := Export(d, nil, "seed"); err == nil {
+	if b, err := Export(d, nil, ExportOptions{Note: "seed", Version: "1.0.0-rc.1", Now: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)}); err == nil {
 		f.Add(string(b))
 	}
-	f.Add("format = 1\n[dot]\nname = \"x\"\n")
-	f.Add("format = 99\n")
-	f.Add("format = 1\n[dot]\nname = \"W\"\n[dot.capabilities]\nwrite = true\n")
+	f.Add("[pack]\nformat = 1\n[dot]\nname = \"x\"\npurpose = \"p\"\n")
+	f.Add("[pack]\nformat = 99\n")
+	f.Add("[pack]\nformat = 1\n[dot]\nname = \"W\"\npurpose = \"p\"\n[dot.capabilities]\nwrite = true\n[dot.delivery]\nmode = \"inject\"\n")
+	f.Add("[pack]\nformat = 1\n[dot]\nname = \"M\"\npurpose = \"p\"\n[[memory]]\nscope = \"global\"\nkind = \"note\"\ntext = \"x\"\n")
+	f.Add("a = " + strings.Repeat("[", 4000))
 	f.Fuzz(func(t *testing.T, data string) {
 		p, err := Parse([]byte(data))
 		if err != nil {
 			return
 		}
-		once, _ := ClampPack(p, nil)
-		if _, again := ClampPack(once, nil); len(again) != 0 {
-			t.Fatalf("clamping a clamped pack changed it again: %+v", again)
+		if p.Dot.Origin != dots.OriginImport {
+			t.Fatalf("a parsed pack's dot has origin %q", p.Dot.Origin)
+		}
+		for _, e := range p.Memory {
+			if (e.Scope != memory.ScopeDot && e.Scope != memory.ScopeProject) || !slices.Contains(memory.ImportKinds, e.Kind) {
+				t.Fatalf("pack memory that may not travel: %+v", e)
+			}
+		}
+		prepared, _, err := Prepare(p, nil)
+		if err != nil {
+			return
+		}
+		if prepared.Origin != dots.OriginImport || prepared.Capabilities.Write || prepared.Delivery.Mode == dots.ModeInject {
+			t.Fatalf("Prepare kept a risky capability: %+v", prepared)
+		}
+		if _, again := dots.ClampDot(prepared, nil); slices.ContainsFunc(again, func(c dots.Clamp) bool { return !c.Fact }) {
+			t.Fatalf("clamping a prepared dot changed it again: %+v", again)
 		}
 	})
 }
 ```
 
-Create `internal/mcpinstall/fuzz_test.go` (Phase 5's Codex block editor works on the developer's `~/.codex/config.toml`; if the Phase 5 code documents a different behavior for an input, the Phase 5 spec wins: adjust the invariant and say so in the commit message):
+Create `internal/mcpinstall/fuzz_test.go` (Phase 5's Codex block editor works on the developer's `~/.codex/config.toml`):
 
 ```go
 package mcpinstall
@@ -2120,6 +2386,11 @@ import (
 	"testing"
 )
 
+// FuzzCodexBlock edits arbitrary Codex config files the way setup-mcp edits
+// the developer's ~/.codex/config.toml: installing twice is a no-op, and
+// removing after an install leaves no marker line of ours. (The developer's
+// own text may quote the marker inside a longer line; that line is theirs
+// and stays: crasher a763424096dd21b2.)
 func FuzzCodexBlock(f *testing.F) {
 	f.Add("")
 	f.Add("model = \"o3\"\n\n[mcp_servers.other]\ncommand = \"x\"\n")
@@ -2136,14 +2407,19 @@ func FuzzCodexBlock(f *testing.F) {
 			t.Fatalf("installing twice is not a no-op (%v):\n%s\n---\n%s", err, after, again)
 		}
 		removed, found, err := RemoveCodexBlock(after)
-		if err != nil || !found || strings.Contains(removed, BlockBegin) {
+		if err != nil || !found {
 			t.Fatalf("remove after install: found=%v err=%v\n%s", found, err, removed)
+		}
+		for _, l := range strings.Split(removed, "\n") {
+			if m := strings.TrimSpace(l); m == BlockBegin || m == BlockEnd {
+				t.Fatalf("remove after install left a marker line:\n%s", removed)
+			}
 		}
 	})
 }
 ```
 
-Create `internal/credentials/fuzz_test.go` (Phase 4's file reader never shows more than the last four characters of a key):
+Create `internal/credentials/fuzz_test.go` (Phase 4's file reader never shows more than the last four characters of a key; `Last4` is `"…"` plus four bytes):
 
 ```go
 package credentials
@@ -2151,6 +2427,7 @@ package credentials
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -2168,8 +2445,139 @@ func FuzzCredentialsFile(f *testing.F) {
 			return
 		}
 		for _, s := range sts {
-			if len([]rune(s.Last4)) > 4 {
+			// Last4 is "" or "…" plus the key's last four bytes, never more.
+			if rest, ok := strings.CutPrefix(s.Last4, "…"); s.Last4 != "" && (!ok || len(rest) > 4) {
 				t.Fatalf("List shows %q for %s: more than the last four characters", s.Last4, s.Provider)
+			}
+		}
+	})
+}
+```
+
+Create `internal/mcpinstall/testdata/fuzz/FuzzCodexBlock/a763424096dd21b2` (found by the reconcile pass's 10-second run: the developer's own comment quoting the marker text inside a longer line; it stays theirs, which is why the invariant compares whole marker lines):
+
+```text
+go test fuzz v1
+string("# >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)00")
+```
+
+Create `internal/worktree/fuzz_test.go` (Phase 7's diff header parser guards every drafted patch, which is model output):
+
+```go
+package worktree
+
+import (
+	"strings"
+	"testing"
+)
+
+// FuzzDiffHeaders feeds arbitrary bytes to the diff header parser that
+// guards every drafted patch (Phase 7): a patch is model output. It must
+// never panic, and a diff it accepts never creates or changes a symlink and
+// only states modes git prints.
+func FuzzDiffHeaders(f *testing.F) {
+	for _, s := range []string{
+		"diff --git a/x.go b/x.go\nindex 1111111..2222222 100644\n--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-a\n+b\n",
+		"diff --git a/n b/n\nnew file mode 100755\nindex 0000000..1111111\n--- /dev/null\n+++ b/n\n@@ -0,0 +1 @@\n+x\n",
+		"diff --git a/l b/l\nnew file mode 120000\nindex 0000000..1111111\n",
+		"diff --git \"a/q\\\"q.txt\" \"b/q\\\"q.txt\"\nindex 1111111..2222222 100644\n",
+		"diff --git a/a b/b\nrename from a\nrename to b\n",
+		"diff --git a/x b/x\nold mode 100644\nnew mode 100755\n@@ -1 +1 @@\nnew mode 120000\n",
+		"--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n",
+		"diff --git a/x b/x\n+++ b/x\nnew mode 120000\n",
+	} {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, diff []byte) {
+		modes, renames, err := diffHeaders(diff)
+		if err != nil || renames {
+			return
+		}
+		if len(modes) == 0 {
+			t.Fatal("an accepted diff states no path")
+		}
+		for path, m := range modes {
+			if path == "" {
+				t.Fatalf("empty path in %q", diff)
+			}
+			if m.new == symlinkMode {
+				t.Fatalf("%s becomes a symlink in an accepted diff: %q", path, diff)
+			}
+			for _, mode := range []string{m.old, m.new} {
+				if mode != "000000" && !gitModes[mode] {
+					t.Fatalf("%s has mode %q, which git never prints", path, mode)
+				}
+			}
+		}
+	})
+}
+
+// FuzzUnquoteC checks git's C-quoting reader: a name without quotes,
+// backslashes or control bytes reads back as itself, and nothing panics.
+func FuzzUnquoteC(f *testing.F) {
+	for _, s := range []string{`"a/b c"`, `"\303\251"`, `"\"x\""`, `"\777"`, `"unterminated`, `"a\`} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		_, _, _ = unquoteC(s)
+		if strings.ContainsAny(s, "\"\\") || strings.IndexFunc(s, func(r rune) bool { return r < 0x20 }) >= 0 {
+			return
+		}
+		name, rest, ok := unquoteC(`"` + s + `" tail`)
+		if !ok || name != s || rest != " tail" {
+			t.Fatalf("unquoteC(%q) = %q, %q, %v", s, name, rest, ok)
+		}
+	})
+}
+```
+
+Create `internal/ui/diff/fuzz_test.go` (the patch viewer shows model-written diffs):
+
+```go
+package diff
+
+import (
+	"strings"
+	"testing"
+	"unicode"
+)
+
+// FuzzDiffViewParse feeds arbitrary patches to the viewer's parser: the
+// patch text comes from a model. One file per "diff --git " line, hunk
+// indexes inside the file, and no line it keeps for the screen carries a
+// control, tab, newline or format character.
+func FuzzDiffViewParse(f *testing.F) {
+	f.Add([]byte("diff --git a/x.go b/x.go\nindex 1111111..2222222 100755\n--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-a\n+b\n"))
+	f.Add([]byte("diff --git a/l b/l\nnew file mode 120000\n@@ -0,0 +1 @@\n+\x1b]52;c;aGk=\x07target\n"))
+	f.Add([]byte("diff --git a/b.bin b/b.bin\nGIT binary patch\nliteral 3\nKcmV+\n"))
+	f.Add([]byte("noise\ndiff --git a/‮q b/‮q\n"))
+	f.Fuzz(func(t *testing.T, patch []byte) {
+		files := Parse(patch)
+		want := 0
+		for _, l := range strings.Split(strings.TrimRight(string(patch), "\n"), "\n") {
+			if strings.HasPrefix(l, "diff --git ") {
+				want++
+			}
+		}
+		if len(files) != want {
+			t.Fatalf("%d files for %d \"diff --git\" lines", len(files), want)
+		}
+		unsafe := func(r rune) bool {
+			return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+		}
+		for _, fl := range files {
+			if strings.IndexFunc(fl.Path, unsafe) >= 0 {
+				t.Fatalf("path %q reaches the screen raw", fl.Path)
+			}
+			for _, h := range fl.Hunks {
+				if h < 0 || h >= len(fl.Lines) {
+					t.Fatalf("hunk index %d outside %d lines", h, len(fl.Lines))
+				}
+			}
+			for _, l := range fl.Lines {
+				if strings.IndexFunc(l, unsafe) >= 0 {
+					t.Fatalf("line %q reaches the screen raw", l)
+				}
 			}
 		}
 	})
@@ -2202,12 +2610,14 @@ echo "fuzzed $n targets for $FUZZTIME each"
 - [ ] **Step 2: Run the seed corpora (fuzz targets run as tests)**
 
 Run: `GOTOOLCHAIN=local go test -run '^Fuzz' ./internal/... 2>&1 | grep -v '^ok' | head -20`
-Expected: no output (every package `ok`). The four Phase 4/5/8/9 files must compile; if a name differs in the merged code, use the real one.
+Expected: no output (every package `ok`; verified at `dffabbf` by the reconcile pass, before the Step 3 crasher exists).
 
 - [ ] **Step 3: Fuzz `ImportTOML` and see the known failure**
 
 Run: `GOTOOLCHAIN=local go test ./internal/memory/ -run XXX -fuzz FuzzImportTOML -fuzztime 20s 2>&1 | tail -8`
-Expected: FAIL within seconds, `re-import of our own export: entry 1: invalid memory request: memory id "d:" must look like p:m3, d:m9 or g:m2`, and a new file under `internal/memory/testdata/fuzz/FuzzImportTOML/`. (An imported block without `ref` has no id; `ExportTOML` wrote `ref = "d:"` for it, which nothing can import.) Delete the generated file and create the regression input with the exact name and content found while planning, `internal/memory/testdata/fuzz/FuzzImportTOML/8a748f204ecc8c6f`:
+Expected: FAIL within seconds, `re-import of our own export: entry 1: invalid memory request: memory id "d:" must look like p:m3, d:m9 or g:m2`, and a new file under `internal/memory/testdata/fuzz/FuzzImportTOML/`. (An imported block without `ref` has no id; `ExportTOML` wrote `ref = "d:"` for it, which nothing can import.) Delete the generated file, then keep the input found while planning (it still fails at `dffabbf`) as the regression input.
+
+Create `internal/memory/testdata/fuzz/FuzzImportTOML/8a748f204ecc8c6f` (exact name and content):
 
 ```text
 go test fuzz v1
@@ -2221,7 +2631,7 @@ Apply to `internal/memory/tomlio.go`:
 ```diff
 --- a/internal/memory/tomlio.go
 +++ b/internal/memory/tomlio.go
-@@ -43,7 +43,11 @@
+@@ -44,7 +44,11 @@ func ExportTOML(entries []Entry) ([]byte, error) {
  		if paths == nil {
  			paths = []string{}
  		}
@@ -2231,34 +2641,36 @@ Apply to `internal/memory/tomlio.go`:
 +			ref = e.Ref().String()
 +		}
 +		doc.Entry = append(doc.Entry, tomlEntry{Ref: ref, Scope: string(e.Scope), Dot: e.Dot,
- 			Kind: string(e.Kind), Status: string(e.Status), Source: string(e.Source), Pinned: e.Pinned, Paths: paths, Text: e.Text})
+ 			Kind: string(e.Kind), Status: string(e.Status), Source: string(e.Source), Pinned: e.Pinned, Paths: paths, Text: e.Text, From: e.From})
  	}
  	var buf bytes.Buffer
 ```
 
-Run: `GOTOOLCHAIN=local go test ./internal/memory/ -run 'FuzzImportTOML|TestExport|TestDiff' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected: PASS, including `FuzzImportTOML/8a748f204ecc8c6f`.
+Run: `GOTOOLCHAIN=local go test ./internal/memory/ ./cmd/herdr-dots/ -run 'FuzzImportTOML|TOML|Export|Diff' -v 2>&1 | grep -E '^(--- FAIL|ok|FAIL)|8a748f204ecc8c6f'`
+Expected: `--- PASS: FuzzImportTOML/8a748f204ecc8c6f` and both packages `ok` (the memory CLI's export and edit still round-trip).
 
 - [ ] **Step 5: Fuzz every target for 60 seconds and fix what breaks**
 
 Run each target alone (Go fuzzes one target per invocation):
 
 ```bash
-for t in FuzzParseVerdict FuzzParseReply FuzzParseMemoryOps; do GOTOOLCHAIN=local go test ./internal/backend/ -run XXX -fuzz "^$t\$" -fuzztime 60s || break; done
+for t in FuzzParseVerdict FuzzParseReply FuzzParseMemoryOps FuzzParseCLIOutput; do GOTOOLCHAIN=local go test ./internal/backend/ -run XXX -fuzz "^$t\$" -fuzztime 60s || break; done
 for t in FuzzParseClaude FuzzParseCodex FuzzFromDots; do GOTOOLCHAIN=local go test ./internal/transcript/ -run XXX -fuzz "^$t\$" -fuzztime 60s || break; done
 for t in FuzzImportTOML FuzzScopeFileLoad FuzzScanSecrets; do GOTOOLCHAIN=local go test ./internal/memory/ -run XXX -fuzz "^$t\$" -fuzztime 60s || break; done
 for t in FuzzParseDigest FuzzParseStance; do GOTOOLCHAIN=local go test ./internal/council/ -run XXX -fuzz "^$t\$" -fuzztime 60s || break; done
 GOTOOLCHAIN=local go test ./internal/keys/ -run XXX -fuzz FuzzKeysExisting -fuzztime 60s
 GOTOOLCHAIN=local go test ./internal/config/ -run XXX -fuzz FuzzConfigLoad -fuzztime 60s
-GOTOOLCHAIN=local go test ./internal/dots/ -run XXX -fuzz FuzzDotFile -fuzztime 60s
+for t in FuzzDotFile FuzzDecodeStrict; do GOTOOLCHAIN=local go test ./internal/dots/ -run XXX -fuzz "^$t\$" -fuzztime 60s || break; done
 GOTOOLCHAIN=local go test ./internal/ipc/ -run XXX -fuzz FuzzIPCDecode -fuzztime 60s
 GOTOOLCHAIN=local go test ./internal/schedule/ -run XXX -fuzz FuzzScheduleParse -fuzztime 60s
 GOTOOLCHAIN=local go test ./internal/dotpack/ -run XXX -fuzz FuzzDotpackParse -fuzztime 60s
 GOTOOLCHAIN=local go test ./internal/mcpinstall/ -run XXX -fuzz FuzzCodexBlock -fuzztime 60s
 GOTOOLCHAIN=local go test ./internal/credentials/ -run XXX -fuzz FuzzCredentialsFile -fuzztime 60s
+for t in FuzzDiffHeaders FuzzUnquoteC; do GOTOOLCHAIN=local go test ./internal/worktree/ -run XXX -fuzz "^$t\$" -fuzztime 60s || break; done
+GOTOOLCHAIN=local go test ./internal/ui/diff/ -run XXX -fuzz FuzzDiffViewParse -fuzztime 60s
 ```
 
-Expected: `PASS` for each (while planning, the HEAD-code targets passed 8–20 s runs after the Step 4 fix). For every failure: read the crasher (`cat <pkg>/testdata/fuzz/<Target>/<id>`), decide whether the parser or the invariant is wrong (an invariant may only be relaxed when the spec allows the behavior, and the reason goes in the commit message), fix it with the smallest change in that package, keep the crasher file as a regression input, and rerun that target. Never touch a file Tasks 2, 4 or 5 own. A target that slows to `0/sec` for over a minute is a hang: treat it like a crash (Go reports it at the end of `-fuzztime` as a failure).
+Expected: `PASS` for each. The reconcile pass ran every target for 10 s and then 30 s at `dffabbf` with the Step 4 fix: all passed except `FuzzCodexBlock`, whose crasher `a763424096dd21b2` showed that the invariant was wrong (the developer's own comment may quote the marker text inside a longer line); the invariant in Step 1 is the corrected one and the crasher is committed as a regression input. For every failure: read the crasher (`cat <pkg>/testdata/fuzz/<Target>/<id>`), decide whether the parser or the invariant is wrong (an invariant may only be relaxed when the spec allows the behavior, and the reason goes in the commit message), fix it with the smallest change in that package, keep the crasher file as a regression input, and rerun that target. Never touch a file Tasks 2, 4 or 5 own. A target that slows to `0/sec` for over a minute is a hang: treat it like a crash (Go reports it at the end of `-fuzztime` as a failure).
 
 - [ ] **Step 6: Lint the script**
 
@@ -2267,13 +2679,13 @@ Expected: `shellcheck-ok`.
 
 - [ ] **Step 7: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed.
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed.
 
 - [ ] **Step 8: Commit (never push)**
 
 ```bash
-git add internal/backend/fuzz_test.go internal/transcript/fuzz_test.go internal/memory/fuzz_test.go internal/memory/tomlio.go internal/memory/testdata/fuzz internal/council/fuzz_test.go internal/keys/fuzz_test.go internal/config/fuzz_test.go internal/dots/fuzz_test.go internal/ipc/fuzz_test.go internal/schedule/fuzz_test.go internal/dotpack/fuzz_test.go internal/mcpinstall/fuzz_test.go internal/credentials/fuzz_test.go scripts/fuzz.sh
+git add internal/backend/fuzz_test.go internal/transcript/fuzz_test.go internal/memory/fuzz_test.go internal/memory/tomlio.go internal/memory/testdata/fuzz internal/council/fuzz_test.go internal/keys/fuzz_test.go internal/config/fuzz_test.go internal/dots/fuzz_test.go internal/ipc/fuzz_test.go internal/schedule/fuzz_test.go internal/dotpack/fuzz_test.go internal/mcpinstall/fuzz_test.go internal/mcpinstall/testdata/fuzz internal/credentials/fuzz_test.go internal/worktree/fuzz_test.go internal/ui/diff/fuzz_test.go scripts/fuzz.sh
 git add -u   # only the parser files a crash pointed at
 git commit -m "test: fuzz targets for every parser; ExportTOML writes no ref for an unsaved entry (Phase 10)"
 ```
@@ -2289,7 +2701,7 @@ git commit -m "test: fuzz targets for every parser; ExportTOML writes no ref for
 - Modify: `internal/engine/engine.go` (struct field, `Snapshot` renamed, old `broadcast` removed)
 
 **Interfaces:**
-- Consumes: `view.Snapshot`, `view.Pane{Cards []queue.Card; Feed []state.FeedEntry}`; the engine's `e.mu`, `e.watchers`, `e.spawn`; the engine test rig (`newRig`, `newRigWith`, `dot`, `critical`, `fakeReader`, `rig.srv`, `rig.be`, `rig.q`, `rig.setReader`, `rig.mu`, `rig.readers`).
+- Consumes: `view.Snapshot`, `view.Pane{Cards []queue.Card; Feed []state.FeedEntry}` (at `dffabbf` the engine already caps each pane's feed at 20 via `Feed.Recent(pane, 20)`; panes also carry `Drafts`, `Council` and the library, which Trim leaves alone); the engine's `e.mu`, `e.watchers`, `e.spawn(f func()) bool` (false after `Wait`); `(*Engine).TogglePauseAll()`; the engine test rig (`newRig`, `newRigWith`, `dot`, `critical`, `fakeReader`, `fakeBackend.set(vs ...backend.Verdict)` (the last verdict repeats), `fakeBackend.n()`, `rig.srv`, `rig.be`, `rig.q`, `rig.setReader`, `rig.mu`, `rig.readers`, `Deps.PollInterval`).
 - Produces (package `view`): `const MaxSnapshotBytes = 256 << 10`, `MaxCardsPerPane = 100`, `MaxFeedPerPane = 50`; `func Trim(s Snapshot, maxBytes int) Snapshot` (never modifies `s`, never cuts a card).
 - Produces (package `engine`): `const minBroadcastGap = 100 * time.Millisecond`; `type throttle struct{ mu sync.Mutex; pending bool; last time.Time }`; `Engine.bc throttle`; `(*Engine) Snapshot() view.Snapshot` is now trimmed (same signature; `ipc.Handler` unchanged); `(*Engine) buildSnapshot() view.Snapshot` (the old body); `(*Engine) broadcast()` coalesces; `(*Engine) sendSnapshot()`; the soak test `TestSoak` (`-tags soak`, env `SOAK_DURATION`, default 15m, and `SOAK_IDLE`).
 
@@ -2580,14 +2992,19 @@ func (e *Engine) broadcast() {
 	}
 	e.bc.pending = true
 	e.bc.mu.Unlock()
-	e.spawn(func() {
+	if !e.spawn(func() {
 		time.Sleep(wait)
 		e.bc.mu.Lock()
 		e.bc.pending = false
 		e.bc.last = time.Now()
 		e.bc.mu.Unlock()
 		e.sendSnapshot()
-	})
+	}) {
+		// The engine is stopping (Wait ran): no trailing broadcast.
+		e.bc.mu.Lock()
+		e.bc.pending = false
+		e.bc.mu.Unlock()
+	}
 }
 
 // sendSnapshot hands the current snapshot to every watcher, replacing one
@@ -2609,21 +3026,21 @@ func (e *Engine) sendSnapshot() {
 }
 ```
 
-Apply to `internal/engine/engine.go` (Phases 3–9 added fields and code around these lines; the three hunks stay the same: add the field after the memory-state fields, rename `Snapshot` to `buildSnapshot` with its comment, and delete the old `broadcast` function, which now lives in `broadcast.go`):
+Apply to `internal/engine/engine.go` (three hunks against the merged engine: the `bc` field after the Phase 8 commit-poll fields, `Snapshot` renamed to `buildSnapshot` with a comment, and the old `broadcast` deleted, since it now lives in `broadcast.go`):
 
 ```diff
 --- a/internal/engine/engine.go
 +++ b/internal/engine/engine.go
-@@ -86,6 +86,8 @@
- 	memStats map[string]memory.Stats // by project id, for snapshots
- 	origBody map[string]string       // card id → body before its first edit
- 	memToast bool                    // "memory write failed" already shown
-+
-+	bc throttle // spaces snapshot broadcasts (broadcast.go)
+@@ -178,6 +178,8 @@ type Engine struct {
+ 	commitAgain bool             // a HEAD check skipped a dot whose review was queued: check again when it ends
+ 	commitErrs  map[string]bool  // repo dir + git error already logged this session (commits.go); created lazily
  
++	bc throttle // spaces snapshot broadcasts (broadcast.go)
++
  	// wmu/wg/closed track background goroutines so Wait can drain them.
  	wmu    sync.Mutex
-@@ -745,7 +747,8 @@
+ 	wg     sync.WaitGroup
+@@ -1134,7 +1136,8 @@ func (e *Engine) feed(paneID, slug string, turn int, outcome, detail string) {
  	}
  }
  
@@ -2632,8 +3049,8 @@ Apply to `internal/engine/engine.go` (Phases 3–9 added fields and code around 
 +func (e *Engine) buildSnapshot() view.Snapshot {
  	e.mu.Lock()
  	defer e.mu.Unlock()
- 	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll}
-@@ -817,22 +820,6 @@
+ 	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll, WriteEnabled: e.config().WriteEnabled}
+@@ -1230,22 +1233,6 @@ func (e *Engine) Watch() (<-chan view.Snapshot, func()) {
  	}
  }
  
@@ -2850,12 +3267,12 @@ const rssUnit = 1024
 - [ ] **Step 7: Run a short soak**
 
 Run: `GOTOOLCHAIN=local go vet -tags soak ./internal/engine/ && SOAK_DURATION=60s SOAK_IDLE=30s GOTOOLCHAIN=local go test -tags soak -run TestSoak -timeout 10m -v ./internal/engine/ 2>&1 | tail -6`
-Expected: `--- PASS: TestSoak` with a log line like `runs 240, broadcasts 60, biggest snapshot 19293 B, ..., peak RSS 14.4 MB, idle CPU 0.580%, goroutines 20 -> 21` (a 45 s run while planning gave those numbers). The long run is Task 13's.
+Expected: `--- PASS: TestSoak` with a log line like `runs …, broadcasts …, biggest snapshot … B, final snapshot … B, peak RSS … MB, idle CPU …%, goroutines … -> …` (the reconcile pass ran this exact command at `dffabbf` with the Task 4 code: `runs 240, broadcasts 57, biggest snapshot 23141 B, final snapshot 23133 B, peak RSS 21.8 MB, idle CPU 0.579%, goroutines 21 -> 21`, in 120 s). The long run is Task 13's.
 
 - [ ] **Step 8: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed (the soak files are excluded without `-tags soak`).
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed (the soak files build only with `-tags soak`, which the gate vets).
 
 - [ ] **Step 9: Commit (never push)**
 
@@ -3011,16 +3428,34 @@ func String() string {
 }
 ```
 
-`herdr-plugin.toml`: replace `version = "0.9.0"` with `version = "1.0.0-rc.1"`; replace the first comment line (`# Herdr Dots — ... Still a scaffold (0.x), not done.` or the form Phase 9 left) with `# Herdr Dots — always-on specialist agents for Herdr. Release candidate 1.0.0-rc.1: not released.`; and in `description`, replace a trailing `Scaffold release.` (if Phase 9 kept it) with nothing, so it reads `"Specialist agents (dots) that join your Claude Code / Codex sessions and review each turn."`. Change nothing else in the manifest.
+Apply to `herdr-plugin.toml` (the version, the first comment line and the end of `description`; nothing else in the manifest changes):
+
+```diff
+--- a/herdr-plugin.toml
++++ b/herdr-plugin.toml
+@@ -1,9 +1,9 @@
+-# Herdr Dots — always-on specialist agents for Herdr. Still a scaffold (0.x), not done.
++# Herdr Dots — always-on specialist agents for Herdr. Release candidate 1.0.0-rc.1: not released.
+ id = "herdr-dots"
+ name = "Herdr Dots"
+-version = "0.9.0"
++version = "1.0.0-rc.1"
+ min_herdr_version = "0.8.0"
+-description = "Specialist agents (dots) that join your Claude Code / Codex sessions and review each turn. Scaffold release."
++description = "Specialist agents (dots) that join your Claude Code / Codex sessions and review each turn."
+ platforms = ["macos", "linux", "windows"]
+ 
+ # One build step per OS (build steps have no id, so item-level platforms may
+```
 
 - [ ] **Step 4: `version` and `--version`**
 
-Apply to `cmd/herdr-dots/main.go` (Phases 3–9 added more entries to the map; replace only the `"version"` entry, keep every other entry, then run `gofmt -w cmd/herdr-dots/main.go` to realign the map):
+Apply to `cmd/herdr-dots/main.go` (only the `"version"` entry is replaced and `--version` added; the map keeps every Phase 2–9 command; the aligned spacing is gofmt's):
 
 ```diff
 --- a/cmd/herdr-dots/main.go
 +++ b/cmd/herdr-dots/main.go
-@@ -15,10 +15,8 @@
+@@ -15,10 +15,8 @@ import (
  type handler func(args []string) error
  
  var commands = map[string]handler{
@@ -3033,8 +3468,8 @@ Apply to `cmd/herdr-dots/main.go` (Phases 3–9 added more entries to the map; r
  	"engine":     runEngine,
  	"pane":       runPane,
  	"manage":     runManage,
-@@ -28,6 +26,12 @@
- 	"memory":     runMemory,
+@@ -33,6 +31,12 @@ var commands = map[string]handler{
+ 	"mcp":        runMCP,
  }
  
 +// printVersion prints "herdr-dots <version> (<release|source>, commit <id>)".
@@ -3050,20 +3485,34 @@ Apply to `cmd/herdr-dots/main.go` (Phases 3–9 added more entries to the map; r
 
 - [ ] **Step 5: Tests that pin the old version**
 
-Run: `grep -rn '"0\.9\.0"' --include='*_test.go' . ; grep -rn '(scaffold)' --include='*.go' .`
-Expected: a few test lines (each phase pinned its version, for example `cmd/herdr-dots/memwire_test.go` checks `version.Version != "0.2.0"`, later phases' equivalents), and no `(scaffold)` in product code. In each listed test, replace the old version literal with `"1.0.0-rc.1"` in both the comparison and its message. Example, as the line read at HEAD:
+At `dffabbf` exactly one test pins the version: Phase 9's `TestVersionIsPhaseNine` in `cmd/herdr-dots/memwire_test.go`. (The `"0.9.0"` literals in `internal/dotpack` and `internal/ui/manage` tests are `herdr_dots_version` values of example packs, not the binary's version: leave them.) Phase 6's `TestManifestDeclaresEveryPlatformAndOneBuildEach` compares the manifest with `version.Version`, so it follows on its own.
+
+Apply to `cmd/herdr-dots/memwire_test.go`:
 
 ```diff
--	if version.Version != "0.2.0" {
--		t.Fatalf("version %s, want 0.2.0", version.Version)
+--- a/cmd/herdr-dots/memwire_test.go
++++ b/cmd/herdr-dots/memwire_test.go
+@@ -57,8 +57,8 @@ func TestBuildEngineWiresMemory(t *testing.T) {
+ 	}
+ }
+ 
+-func TestVersionIsPhaseNine(t *testing.T) {
+-	if version.Version != "0.9.0" {
+-		t.Fatalf("version %s, want 0.9.0", version.Version)
++func TestVersionIsTheReleaseCandidateInTheBinary(t *testing.T) {
 +	if version.Version != "1.0.0-rc.1" {
 +		t.Fatalf("version %s, want 1.0.0-rc.1", version.Version)
+ 	}
+ }
 ```
+
+Run: `grep -rn 'version.Version != "' --include='*_test.go' cmd internal; grep -rn '(scaffold)' --include='*.go' cmd internal`
+Expected: only `cmd/herdr-dots/memwire_test.go` (`"1.0.0-rc.1"`) and `internal/version/version_test.go`; no `(scaffold)`. If Phase 9's final fix wave added another pin, change it the same way.
 
 - [ ] **Step 6: Run the tests**
 
-Run: `GOTOOLCHAIN=local go test -race ./internal/version/ ./cmd/herdr-dots/ -v 2>&1 | grep -E '^(--- |ok|FAIL)' | head -20; GOTOOLCHAIN=local go run ./cmd/herdr-dots --version`
-Expected: PASS for `TestVersionIsTheReleaseCandidate`, `TestManifestCarriesTheSameVersion`, `TestStringNamesVersionSourceAndCommit`, `TestDispatchVersion` and the updated version pins; the last command prints `herdr-dots 1.0.0-rc.1 (source, commit <12 hex>)` (with `+dirty` when the tree has uncommitted changes).
+Run: `GOTOOLCHAIN=local go test -race ./internal/version/ ./cmd/herdr-dots/ -v 2>&1 | grep -E '^(--- FAIL|ok|FAIL)|Version|Dispatch'; GOTOOLCHAIN=local go build -o "${TMPDIR:-/tmp}/herdr-dots-v" ./cmd/herdr-dots && "${TMPDIR:-/tmp}/herdr-dots-v" --version && "${TMPDIR:-/tmp}/herdr-dots-v" version; rm -f "${TMPDIR:-/tmp}/herdr-dots-v"`
+Expected: PASS for `TestVersionIsTheReleaseCandidate`, `TestManifestCarriesTheSameVersion`, `TestStringNamesVersionSourceAndCommit`, `TestDispatchVersion`, `TestVersionIsTheReleaseCandidateInTheBinary` and `TestManifestDeclaresEveryPlatformAndOneBuildEach`; both commands print `herdr-dots 1.0.0-rc.1 (source, commit <12 hex>)`, with `+dirty` when the tree has uncommitted changes. A binary without Go's VCS stamp (`go run`, or a tree Go can't read as a repository; the reconcile pass's scratch worktree under the temp dir was one) prints `commit unknown`, which is expected.
 
 - [ ] **Step 7: GoReleaser config, release files, local release script**
 
@@ -3512,8 +3961,8 @@ Expected: six archives (`herdr-dots_1.0.0-rc.1_{darwin,linux}_{amd64,arm64}.tar.
 
 - [ ] **Step 12: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed.
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed.
 
 - [ ] **Step 13: Commit (never push, never tag)**
 
@@ -4415,27 +4864,28 @@ try {
 exit $code
 ```
 
-Phase 6's `cmd/herdr-dots/platform_manifest_test.go` pins strings of the old script. Replace the whole `TestWindowsBuildScriptBuildsTheExe` function with:
+Phase 6's `TestWindowsBuildScriptBuildsTheExe` pins strings of the old script.
 
-```go
-func TestWindowsBuildScriptBuildsTheExe(t *testing.T) {
-	b, err := os.ReadFile("../../scripts/build.ps1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(b)
-	for _, want := range []string{
-		"Get-FileHash -Algorithm SHA256", // verifies the download against release/SHA256SUMS
-		"HERDR_PLUGIN_BUILD_OFFLINE",
-		`'.\cmd\herdr-dots'`, // the source-build fallback
-		"Install Go 1.25 or newer",
-		"exit $code",
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("build.ps1 lacks %q", want)
-		}
-	}
-}
+Apply to `cmd/herdr-dots/platform_manifest_test.go`:
+
+```diff
+--- a/cmd/herdr-dots/platform_manifest_test.go
++++ b/cmd/herdr-dots/platform_manifest_test.go
+@@ -112,7 +112,13 @@ func TestWindowsBuildScriptBuildsTheExe(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	s := string(b)
+-	for _, want := range []string{`go build -o 'bin\herdr-dots.exe' '.\cmd\herdr-dots'`, "Go toolchain (>= 1.25) is required", "exit $LASTEXITCODE"} {
++	for _, want := range []string{
++		"Get-FileHash -Algorithm SHA256", // verifies the download against release/SHA256SUMS
++		"HERDR_PLUGIN_BUILD_OFFLINE",
++		`'.\cmd\herdr-dots'`, // the source-build fallback
++		"Install Go 1.25 or newer",
++		"exit $code",
++	} {
+ 		if !strings.Contains(s, want) {
+ 			t.Errorf("build.ps1 lacks %q", want)
+ 		}
 ```
 
 - [ ] **Step 5: Run the script tests**
@@ -4641,6 +5091,7 @@ import (
 	"regexp"
 	"strings"
 
+	"herdr-dots/internal/platform"
 	"herdr-dots/internal/version"
 )
 
@@ -4681,7 +5132,15 @@ func runVerifyRelease(args []string) error {
 	}
 	return verifyRelease(verifyIO{root: root, out: os.Stdout, lookPath: exec.LookPath,
 		run: func(name string, a ...string) (string, error) {
-			out, err := exec.Command(name, a...).CombinedOutput()
+			// Through internal/platform, like every child process (Phase 6's
+			// portability guard): Windows .cmd shims, no console window.
+			cmd, err := platform.Command(name, a)
+			if err != nil {
+				return "", err
+			}
+			cmd.Env = platform.ChildEnv(os.Environ())
+			platform.HideWindow(cmd)
+			out, err := cmd.CombinedOutput()
 			return string(out), err
 		}})
 }
@@ -4861,8 +5320,8 @@ Expected: PASS for `TestVerifyReleaseChecksArchiveAndBinary`, `TestVerifyRelease
 
 - [ ] **Step 9: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed.
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed.
 
 - [ ] **Step 10: Commit (never push)**
 
@@ -4882,7 +5341,7 @@ git commit -m "feat(install): verified prebuilt binaries with a source-build fal
 - Modify: `cmd/herdr-dots/main.go` (`dispatch`), `cmd/herdr-dots/engine.go` (`serveEngine`)
 
 **Interfaces:**
-- Consumes: Task 2's API; `paths.FromEnv`, `paths.Discover`, `paths.New`, `paths.Paths`; `lockfile.Held`, `lockfile.TryLock`; `herdr.Client.Notify(ctx, title, body string) error`.
+- Consumes: Task 2's API; `paths.FromEnv`, `paths.Discover`, `paths.New`, `paths.Paths`; `lockfile.Held`, `lockfile.TryLock`; `herdr.Client.Notify(ctx, title, body string) error` (`herdr.NewFromEnv()` in `serveEngine`); the `commands` map and `dispatch` in `main.go` (Task 5's version). At `dffabbf` the commands that write persisted files outside the engine are `manage` (dots, keys, trust, memory, exports), `keys` (credentials), `dots` (dots, trust, memory imports), `setup-mcp` (`mcp-install.json`), plus Task 8's `uninstall-extras`; `memory` and `mcp` write only memory files, which refuse newer versions themselves (`memory.ErrVersion`), so they are left out and the MCP server's start stays fast.
 - Produces: `func startupMigrations(p paths.Paths, logf func(string, ...any)) migrate.Report`; `func readOnlyNotice(rep migrate.Report) string`; `var writingCommands map[string]bool` (`manage`, `keys`, `dots`, `setup-mcp`, `uninstall-extras`); `func protectNewerFiles(cmd string)` (called by `dispatch` before every command); `var sessionDirRe` (12 hex); command `herdr-dots migrate [--dry-run]` (`runMigrate`, testable `migrateCmd(args []string, p paths.Paths, out io.Writer) error`).
 
 - [ ] **Step 1: Write the failing tests**
@@ -5049,7 +5508,8 @@ func readOnlyNotice(rep migrate.Report) string {
 
 // writingCommands are the commands that write persisted files outside the
 // engine. Before they run, files a newer version wrote are marked read-only
-// in this process too. (Memory files guard their own versions.)
+// in this process too. (`memory` and `mcp` write only memory files, which
+// refuse newer versions themselves.)
 var writingCommands = map[string]bool{
 	"manage": true, "keys": true, "dots": true, "setup-mcp": true, "uninstall-extras": true,
 }
@@ -5138,12 +5598,12 @@ func migrateCmd(args []string, p paths.Paths, out io.Writer) error {
 
 - [ ] **Step 4: Wire them in**
 
-Apply to `cmd/herdr-dots/main.go` (one line in `dispatch`, after the unknown-command check):
+Apply to `cmd/herdr-dots/main.go` (one line in `dispatch`, after the unknown-command check; against Task 5's `main.go`):
 
 ```diff
 --- a/cmd/herdr-dots/main.go
 +++ b/cmd/herdr-dots/main.go
-@@ -49,6 +49,7 @@
+@@ -54,6 +54,7 @@ func dispatch(args []string) error {
  	if !ok {
  		return fmt.Errorf("unknown command %q (%v)", args[0], usage())
  	}
@@ -5153,12 +5613,12 @@ Apply to `cmd/herdr-dots/main.go` (one line in `dispatch`, after the unknown-com
  
 ```
 
-Apply to `cmd/herdr-dots/engine.go` (Phases 3–6 changed `serveEngine` around these lines: the migrations go right after the logger is created, which is after the engine lock is held and before `buildEngine` opens any store; the toast goes right after `herdr.NewFromEnv()` succeeds):
+Apply to `cmd/herdr-dots/engine.go` (in `serveEngine`: the migrations go right after the logger is created, which is after the engine lock is held and before `config.Load` and `buildEngine`/`engineDeps` open any store; the toast goes right after `herdr.NewFromEnv()` succeeds):
 
 ```diff
 --- a/cmd/herdr-dots/engine.go
 +++ b/cmd/herdr-dots/engine.go
-@@ -159,6 +159,7 @@
+@@ -246,6 +246,7 @@ func serveEngine(p paths.Paths) error {
  	}
  	defer lock.Release()
  	logger := log.New(os.Stderr, "herdr-dots ", log.LstdFlags)
@@ -5166,7 +5626,7 @@ Apply to `cmd/herdr-dots/engine.go` (Phases 3–6 changed `serveEngine` around t
  
  	cfg, err := config.Load(p.ConfigFile())
  	if err != nil {
-@@ -168,6 +169,11 @@
+@@ -255,6 +256,11 @@ func serveEngine(p paths.Paths) error {
  	if err != nil {
  		return err
  	}
@@ -5188,12 +5648,12 @@ Expected: PASS for `TestMigrateCommandReportsAndSkipsRunningSessions`, `TestRead
 - [ ] **Step 6: Try the command on a scratch tree**
 
 Run: `D=$(mktemp -d) && mkdir -p "$D/c" "$D/s/0123456789ab" && printf '{"version":2,"cards":[]}' > "$D/s/0123456789ab/queue.json" && HERDR_PLUGIN_CONFIG_DIR="$D/c" HERDR_PLUGIN_STATE_DIR="$D/s" GOTOOLCHAIN=local go run ./cmd/herdr-dots migrate --dry-run; cat "$D/s/0123456789ab/queue.json"; echo; rm -rf "$D"`
-Expected: `read-only 1 (<tmp>/s/0123456789ab/queue.json)` and then the file unchanged: `{"version":2,"cards":[]}` (run while planning; the command works outside Herdr with only the two env vars).
+Expected: `read-only 1 (<tmp>/s/0123456789ab/queue.json)` and then the file unchanged: `{"version":2,"cards":[]}` (run again by the reconcile pass at `dffabbf` plus Tasks 2 and 5; the command works outside Herdr with only the two env vars, through `paths.Discover`).
 
 - [ ] **Step 7: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed.
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed.
 
 - [ ] **Step 8: Commit (never push)**
 
@@ -5212,7 +5672,7 @@ git commit -m "feat: run schema migrations at engine start, keep newer files rea
 - Create: `internal/keys/remove.go`, `internal/keys/remove_test.go`, `cmd/herdr-dots/uninstall.go`, `cmd/herdr-dots/uninstall_test.go`
 
 **Interfaces:**
-- Consumes: `keys.Block`, `keys.Defaults`, `keys.Existing`, `keys.ConfigPath` (call it exactly as `cmd/herdr-dots/setupkeys.go` does after Phase 6); `fsutil.WriteFileAtomic`; `lockfile.Held`, `lockfile.TryLock`; `paths.Discover`, `paths.New`, `paths.Paths`; Phase 5's `runSetupMCP`.
+- Consumes: `keys.Block`, `keys.Defaults` (four bindings since Phase 3: manage, toggle-pane, summon, council), `keys.Existing(data []byte) (map[string]string, error)` (key → command), `keys.ConfigPath(getenv func(string) string, home string) string` (as `cmd/herdr-dots/setupkeys.go` calls it), the test fixture `userConfig` (keys_test.go); `fsutil.WriteFileAtomic`; `lockfile.Held`, `lockfile.TryLock`; `paths.Discover`, `paths.New`, `paths.Paths`; Phase 5's `runSetupMCP(args []string) error` with `--remove` and `--yes`.
 - Produces: `func keys.RemoveBlock(data string) (out string, removed, left int, err error)`; command `herdr-dots uninstall-extras [--purge] [--yes]` (`runUninstallExtras`, testable `uninstallExtras(args []string, u uninstallIO) error`, `type uninstallIO struct{ in io.Reader; out io.Writer; keysPath string; removeMCP func(yes bool) error; paths func() (paths.Paths, error); home string; now func() time.Time }`); `const purgeConfirm = "purge herdr-dots"`; `func safeToPurge(dir, home string) bool`; `func runningEngines(stateDir string) []string`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -5243,7 +5703,7 @@ func TestRemoveBlockKeepsEverythingElseByteForByte(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if removed != 3 || left != 0 {
+		if removed != len(Defaults()) || left != 0 { // manage, toggle-pane, summon, council
 			t.Fatalf("%s: removed %d left %d", c.name, removed, left)
 		}
 		if out != want {
@@ -5289,6 +5749,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -5343,7 +5804,7 @@ func TestUninstallRemovesMCPAndKeysWithABackupAndKeepsData(t *testing.T) {
 	if string(got) != herdrConfig {
 		t.Fatalf("config after uninstall:\n%s", got)
 	}
-	if st, err := os.Stat(r.u.keysPath); err != nil || st.Mode().Perm() != 0o644 {
+	if st, err := os.Stat(r.u.keysPath); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o644) {
 		t.Fatalf("the config keeps its mode: %v", err)
 	}
 	backup, err := os.ReadFile(r.u.keysPath + ".bak-herdr-dots-20261008-120000")
@@ -5424,12 +5885,14 @@ func TestPurgeRefusesWhileAnEngineRuns(t *testing.T) {
 }
 
 func TestSafeToPurgeRefusesHomeRootAndRelativePaths(t *testing.T) {
-	for _, d := range []string{"", "relative/dir", "/", "/Users", "/Users/me", "/a/b"} {
-		if safeToPurge(d, "/Users/me") {
+	home := filepath.Join(t.TempDir(), "home", "me") // absolute on every OS
+	root := filepath.VolumeName(home) + string(filepath.Separator)
+	for _, d := range []string{"", filepath.Join("relative", "dir"), root, filepath.Dir(home), home, filepath.Join(root, "a", "b")} {
+		if safeToPurge(d, home) {
 			t.Errorf("safeToPurge(%q) = true", d)
 		}
 	}
-	if !safeToPurge("/Users/me/.config/herdr/plugins/herdr-dots", "/Users/me") {
+	if !safeToPurge(filepath.Join(home, ".config", "herdr", "plugins", "herdr-dots"), home) {
 		t.Error("a plugin dir under home must be purgeable")
 	}
 }
@@ -5736,7 +6199,6 @@ func runningEngines(stateDir string) []string {
 }
 ```
 
-If Phase 6 changed `keys.ConfigPath`'s signature, change the `keysPath:` line in `runUninstallExtras` to the same call `setupkeys.go` makes.
 
 - [ ] **Step 5: Run the tests**
 
@@ -5745,8 +6207,8 @@ Expected: PASS for `TestUninstallRemovesMCPAndKeysWithABackupAndKeepsData`, `Tes
 
 - [ ] **Step 6: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed.
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed.
 
 - [ ] **Step 7: Commit (never push)**
 
@@ -5757,19 +6219,21 @@ git commit -m "feat: uninstall-extras removes MCP entries and keybindings with b
 
 ---
 
-### Task 9: Hardening triage A: memory, git, text (and the triage notes)
+### Task 9: Hardening triage A: secrets, nested projects, git pins (and the triage notes)
 
 **Depends on:** Task 3 (it changed `internal/memory/tomlio.go` and added `internal/memory/fuzz_test.go`; this task edits other memory files). Wave 2.
 
 **Files:**
-- Create: `internal/memory/hardening_test.go`, `internal/memory/gitcalls_test.go`, `internal/textutil/bidi_test.go`, `docs/superpowers/notes/2026-10-08-phase-10-triage.md`
-- Modify: `internal/memory/secrets.go`, `internal/memory/project.go`, `internal/memory/store.go`, `internal/textutil/sanitize.go` (replaced whole)
+- Create: `internal/memory/hardening_test.go`, `internal/memory/gitcalls_test.go`, `docs/superpowers/notes/2026-10-08-phase-10-triage.md`
+- Modify: `internal/secrets/secrets.go` (`Scan`), `internal/memory/store.go` (`FindProject`)
 
 **Interfaces:**
-- Consumes: `memory.ScanSecrets`, `ExecGit`, `gitEnv`, `ResolveProject`, `realPath`, `Store.SeeProject`, `FindProject`, `RecordOutcome`, `ForgetAll`, `DeleteDot`, `Ledger`, `readLedgerLocked`, `writeLedgerLocked`, `ledgerPath`, test helpers `testStore`, `pid`, `isolateGit`, `newRepo`, `gitT`; `textutil.SanitizeModelText`.
-- Produces: `ScanSecrets` also scans the text with format characters (`unicode.Cf`) and combining marks (`Mn`, `Me`) removed; `var memory.safeGitConfig []string` (`core.fsmonitor=false`, `core.pager=cat`, `protocol.allow=never`) used by `ExecGit`; `gitEnv` adds `GIT_NO_LAZY_FETCH=1`; `FindProject(path)` returns the project with the deepest matching root; `DeleteDot` also deletes the dot's lines from every project ledger (`(*Store) dropLedgerDotLocked(p, dot string) error`); `SanitizeModelText` also drops bidi controls U+202A–U+202E and U+2066–U+2069 (`isBidiControl`); the guard test `TestEveryGitCallDisablesRepositoryPrograms`; the triage notes (Task 12 copies its known issues into the README and CHANGELOG).
+- Consumes: `secrets.Scan` (Phase 9 moved the patterns out of memory: `memory.ScanSecrets`, `dots.Encode`, `dotpack` and `history` all call it); `memory.ScanSecrets`, `ExecGit`, `ResolveProject`, `realPath`, `Store.SeeProject`, `FindProject`, `Project{ID, Name, Root}`, the test helpers `testStore`, `isolateGit`, `newRepo`, `gitT` (`project_test.go`, `store_test.go`). Projects come back from `Store.projects()` sorted by name, then id.
+- Produces: `secrets.Scan` also scans the text with format characters (`unicode.Cf`) and combining marks (`Mn`, `Me`) removed (unexported `stripInvisible`, `scan`); `FindProject(path)` returns the project with the deepest matching root; the pins `TestExecGitRunsNothingTheRepositoryConfigures` and `TestEveryGitCallDisablesRepositoryPrograms`; the triage notes (Task 12 copies its known issues into the README).
 
-- [ ] **Step 1: Write the failing tests**
+What the merged code already has (verified at `dffabbf`, so this task only pins it; Plan decision 29): every git child process (`memory.ExecGit`, `toolloop` repo listing, `worktree.Git`) passes `core.fsmonitor=false`, `core.hooksPath=<null device>` and `protocol.allow=never` with `GIT_ALLOW_PROTOCOL=none` and `GIT_NO_LAZY_FETCH=1`; `textutil.SanitizeModelText` drops the bidi controls (`TestSanitizeModelTextRemovesBidiKeepsEmojiJoiners`); `DeleteDot` scrubs the dot's ledger lines, corrupt asides and orphaned proposals (Phase 7 Task 0: `TestDeleteDotScrubsItsLedgerAndOrphanedProposals`). The old plan's `ExecGit`, `gitEnv`, `sanitize.go`, `bidi_test.go` and `DeleteDot` edits are dropped.
+
+- [ ] **Step 1: Write the tests**
 
 Create `internal/memory/hardening_test.go`:
 
@@ -5851,11 +6315,12 @@ func TestFindProjectPrefersTheNestedRepository(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(inner, "src"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// Register the outer project first, so a first-match search finds it.
-	if err := s.SeeProject(Project{ID: "g-00000000000000aa", Name: "outer", Root: realPath(outer)}); err != nil {
+	// Projects are listed by name: the outer one sorts first, so a
+	// first-match search finds it for every path under it.
+	if err := s.SeeProject(Project{ID: "g-00000000000000aa", Name: "a-outer", Root: realPath(outer)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SeeProject(Project{ID: "g-00000000000000bb", Name: "lib", Root: realPath(inner)}); err != nil {
+	if err := s.SeeProject(Project{ID: "g-00000000000000bb", Name: "z-lib", Root: realPath(inner)}); err != nil {
 		t.Fatal(err)
 	}
 	for arg, want := range map[string]string{
@@ -5868,43 +6333,6 @@ func TestFindProjectPrefersTheNestedRepository(t *testing.T) {
 		if err != nil || !ok || p.ID != want {
 			t.Errorf("FindProject(%s) = %s %v %v, want %s", arg, p.ID, ok, err, want)
 		}
-	}
-}
-
-func TestDeleteDotAlsoDropsItsLedgerLines(t *testing.T) {
-	s := testStore(t)
-	other := "p-00000000000000ff"
-	for _, o := range []Outcome{
-		{Dot: "security", Card: "c1", Kind: OutcomeDismissed, Body: "CSRF on /admin."},
-		{Dot: "frontend", Card: "c2", Kind: OutcomeSent, Body: "Add a skeleton loader."},
-	} {
-		if err := s.RecordOutcome(pid, o); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// A project where the dot left ledger lines but no memory file.
-	if err := s.RecordOutcome(other, Outcome{Dot: "security", Card: "c3", Kind: OutcomeDismissed, Body: "Old finding."}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.ForgetAll(other, ScopeDot, "security"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.DeleteDot("security"); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range []string{pid, other} {
-		led, err := s.Ledger(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, o := range led {
-			if o.Dot == "security" {
-				t.Fatalf("project %s still quotes the deleted dot: %+v", p, o)
-			}
-		}
-	}
-	if led, _ := s.Ledger(pid); len(led) != 1 || led[0].Dot != "frontend" {
-		t.Fatalf("another dot's ledger line was lost: %+v", led)
 	}
 }
 ```
@@ -5979,46 +6407,30 @@ func TestEveryGitCallDisablesRepositoryPrograms(t *testing.T) {
 }
 ```
 
-Create `internal/textutil/bidi_test.go`:
+- [ ] **Step 2: Run them to see the two failures**
 
-```go
-package textutil
-
-import "testing"
-
-func TestSanitizeDropsBidiControls(t *testing.T) {
-	// U+202E (right-to-left override) would show the following text reversed:
-	// what you read on an approval screen would not be what is stored or sent.
-	rlo, pdf, lri, pdi := string(rune(0x202e)), string(rune(0x202c)), string(rune(0x2066)), string(rune(0x2069))
-	zwj := string(rune(0x200d)) // joins emoji: not a bidi control, kept
-	in := "rm -rf build " + rlo + "etavirp" + pdf + " ok " + lri + "x" + pdi + " a" + zwj + "b"
-	if got, want := SanitizeModelText(in), "rm -rf build etavirp ok x a"+zwj+"b"; got != want {
-		t.Fatalf("SanitizeModelText = %q, want %q", got, want)
-	}
-}
-```
-
-- [ ] **Step 2: Run them to see them fail**
-
-Run: `GOTOOLCHAIN=local go test -count=1 ./internal/memory/ ./internal/textutil/ -run 'Invisible|RunsNothing|Nested|DeleteDotAlso|EveryGitCall|Bidi' 2>&1 | grep -E '^(--- FAIL|ok|FAIL)|passed the scanner|ran a program|FindProject\(|still quotes|runs git without|SanitizeModelText ='`
-Expected: FAIL: `TestInvisibleCharactersDoNotHideASecret` (each case `passed the scanner`), `TestExecGitRunsNothingTheRepositoryConfigures` (`ExecGit ran a program from the repository's config`; it skips if this git doesn't run fsmonitor hooks, which git 2.52 does), `TestFindProjectPrefersTheNestedRepository` (the inner paths resolve to `g-00000000000000aa`), `TestDeleteDotAlsoDropsItsLedgerLines` (`still quotes the deleted dot`), `TestEveryGitCallDisablesRepositoryPrograms` (`internal/memory/project.go runs git without -c core.fsmonitor=false`), `TestSanitizeDropsBidiControls`.
+Run: `GOTOOLCHAIN=local go test -count=1 ./internal/memory/ -run 'Invisible|RunsNothing|Nested|EveryGitCall' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Expected (reconcile pass, `dffabbf`): `--- FAIL: TestInvisibleCharactersDoNotHideASecret` (every case `passed the scanner`), `--- FAIL: TestFindProjectPrefersTheNestedRepository` (the inner paths resolve to `g-00000000000000aa`), and `--- PASS` for `TestExecGitRunsNothingTheRepositoryConfigures` and `TestEveryGitCallDisablesRepositoryPrograms`, which pin what Phases 6–8 already did (the first skips where git doesn't run fsmonitor hooks; git 2.52 does).
 
 - [ ] **Step 3: Scan without invisible characters**
 
-Apply to `internal/memory/secrets.go`:
+Apply to `internal/secrets/secrets.go`:
 
 ```diff
---- a/internal/memory/secrets.go
-+++ b/internal/memory/secrets.go
-@@ -43,6 +43,29 @@
+--- a/internal/secrets/secrets.go
++++ b/internal/secrets/secrets.go
+@@ -43,8 +43,31 @@ var entropyTokenRe = regexp.MustCompile(`[A-Za-z0-9+/=_\-]{32,}`)
+ 
+ // Scan reports whether text looks like it contains a credential, and
  // which kind. Model-written memory that matches is refused; user-written
- // memory that matches needs a confirmation.
- func ScanSecrets(text string) (bool, string) {
+-// memory that matches needs a confirmation.
++// memory that matches needs a confirmation. Zero-width and other invisible
++// characters can split a key so no pattern matches ("sk-ant-\u200bapi03-…"),
++// so the text is scanned without them too.
+ func Scan(text string) (bool, string) {
 +	if found, kind := scan(text); found {
 +		return true, kind
 +	}
-+	// Zero-width and other invisible characters can split a key so no
-+	// pattern matches ("sk-ant-\u200bapi03-..."). Scan without them too.
 +	if visible := stripInvisible(text); visible != text {
 +		return scan(visible)
 +	}
@@ -6042,53 +6454,14 @@ Apply to `internal/memory/secrets.go`:
  			return true, p.kind
 ```
 
-- [ ] **Step 4: No repository-configured programs in git**
-
-Apply to `internal/memory/project.go` (Phase 6 changed `core.hooksPath=/dev/null` to `"core.hooksPath="+platform.DevNull` and may wrap the command with `platform`; keep its form and insert `safeGitConfig...` the same way):
-
-```diff
---- a/internal/memory/project.go
-+++ b/internal/memory/project.go
-@@ -27,9 +27,16 @@
- // gitTimeout bounds one ResolveProject call; tests shorten it.
- var gitTimeout = 5 * time.Second
- 
--// ExecGit runs git with hooks disabled, no terminal prompts and no optional locks.
-+// safeGitConfig overrides repository settings that make git run programs
-+// (fsmonitor hooks, a pager) or reach the network (lazy fetches in partial
-+// clones). A hostile repository's .git/config can set any of them; command
-+// line -c options win over it.
-+var safeGitConfig = []string{"-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "protocol.allow=never"}
-+
-+// ExecGit runs git with hooks and repo-configured programs disabled, no
-+// network, no terminal prompts and no optional locks.
- func ExecGit(ctx context.Context, dir string, args ...string) (string, error) {
--	full := append([]string{"-C", dir, "-c", "core.hooksPath=/dev/null"}, args...)
-+	full := append(append([]string{"-C", dir, "-c", "core.hooksPath=/dev/null"}, safeGitConfig...), args...)
- 	cmd := exec.CommandContext(ctx, "git", full...)
- 	cmd.Env = gitEnv(os.Environ())
- 	cmd.WaitDelay = 500 * time.Millisecond
-@@ -55,7 +62,7 @@
- 		}
- 		out = append(out, kv)
- 	}
--	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
-+	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_NO_LAZY_FETCH=1")
- }
- 
- // ResolveProject identifies the project cwd belongs to: the lowest root commit
-```
-
-Then check the other git runners the guard test lists. Phase 4's `toolloop.gitFiles` already passes `core.fsmonitor=false` and the hooks path; Phase 7's `internal/worktree` (and Phase 8's commit poll through it) must pass both too. For any file the guard names, add `"-c", "core.fsmonitor=false"` next to its existing `core.hooksPath` argument (or add both) and note it in the commit message.
-
-- [ ] **Step 5: The deepest project root wins; deleting a dot deletes its ledger lines**
+- [ ] **Step 4: The deepest project root wins**
 
 Apply to `internal/memory/store.go`:
 
 ```diff
 --- a/internal/memory/store.go
 +++ b/internal/memory/store.go
-@@ -935,14 +935,20 @@
+@@ -1119,14 +1119,20 @@ func (s *Store) FindProject(arg string) (ProjectMeta, bool, error) {
  			}
  		}
  	} else {
@@ -6112,191 +6485,110 @@ Apply to `internal/memory/store.go`:
  	}
  	// Nothing matched: say why instead of claiming there is no memory.
  	var errs []error
-@@ -988,14 +994,26 @@
- 		}
- 		dir := filepath.Join(s.Dir, e.Name())
- 		path := filepath.Join(dir, "dots", slug+".json")
--		if _, err := os.Stat(path); err != nil {
-+		_, statErr := os.Stat(path)
-+		hasFile := statErr == nil
-+		hasLedger := false
-+		if e.Name() != GlobalID {
-+			_, lerr := os.Stat(s.ledgerPath(e.Name()))
-+			hasLedger = lerr == nil
-+		}
-+		if !hasFile && !hasLedger {
- 			continue
- 		}
- 		errs = append(errs, s.withLock(dir, func() error {
--			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
--				return err
-+			if hasFile {
-+				if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-+					return err
-+				}
-+				n++
- 			}
--			n++
-+			if hasLedger { // the card excerpts this dot left behind go too
-+				return s.dropLedgerDotLocked(e.Name(), slug)
-+			}
- 			return nil
- 		}))
- 	}
-@@ -1072,6 +1090,25 @@
- 	return fsutil.WriteFileAtomic(s.ledgerPath(p), []byte(b.String()), 0o600)
- }
- 
-+// dropLedgerDotLocked deletes every ledger line of dot. The caller holds the
-+// project lock.
-+func (s *Store) dropLedgerDotLocked(p, dot string) error {
-+	all, err := s.readLedgerLocked(p)
-+	if err != nil {
-+		return err
-+	}
-+	var keep []Outcome
-+	for _, o := range all {
-+		if o.Dot != dot {
-+			keep = append(keep, o)
-+		}
-+	}
-+	if len(keep) == len(all) {
-+		return nil
-+	}
-+	return s.writeLedgerLocked(p, keep)
-+}
-+
- // trimLedgerLocked keeps the newest limit lines and returns how many it dropped.
- func (s *Store) trimLedgerLocked(p string, limit int) (int, error) {
- 	if limit <= 0 {
 ```
 
-- [ ] **Step 6: Drop bidi controls from model text**
+- [ ] **Step 5: Run the tests (including the Phase 2 VITAL suite and every secrets caller)**
 
-Replace `internal/textutil/sanitize.go` with:
+Run: `GOTOOLCHAIN=local go test -race -count=1 ./internal/secrets/ ./internal/memory/ ./internal/dots/ ./internal/dotpack/ ./internal/history/ ./internal/engine/ ./internal/ui/... ./cmd/herdr-dots/ 2>&1 | tail -14`
+Expected: every package `ok` (reconcile pass: all `ok`), including the four tests above, `TestImportPackRefusesInvisibleCarriers`, Phase 2's `TestExecGitNeverRunsHooks`, `TestResolveProjectIgnoresInheritedGitEnv`, `TestScanSecretsFindsCredentials`, `TestScanSecretsIgnoresLookAlikes` and Phase 9's hidden-character tests in `dots` and `dotpack`.
 
-```go
-// Package textutil holds small text helpers shared across packages.
-package textutil
+- [ ] **Step 6: Re-read every ledger and write the triage notes**
 
-import (
-	"strings"
-	"unicode"
-)
+The deferred findings live in the controller's ledgers, `.superpowers/sdd/*/progress.md` (one per phase, v1 to Phase 9; Phase 9's final fix wave may add lines). Read all of them, in the main checkout when this task runs in a worktree:
 
-// SanitizeModelText removes control characters (C0, DEL, C1: ESC, BEL, CSI,
-// OSC...) and Unicode bidi controls from text that came from a model,
-// keeping newlines and tabs. Model output reaches terminals (the Dots pane)
-// and agent prompts, where escape sequences could rewrite the screen or the
-// clipboard, and bidi controls could make text read differently on screen.
-func SanitizeModelText(s string) string {
-	return strings.Map(func(r rune) rune {
-		if (r != '\n' && r != '\t' && unicode.IsControl(r)) || isBidiControl(r) {
-			return -1
-		}
-		return r
-	}, s)
-}
-
-// isBidiControl reports the Unicode bidirectional embedding, override and
-// isolate controls (U+202A..U+202E, U+2066..U+2069). In a terminal they
-// reorder what follows them, so text on an approval screen could read
-// differently from what is stored or sent.
-func isBidiControl(r rune) bool {
-	return (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
-}
-```
-
-- [ ] **Step 7: Run the tests (including the Phase 2 VITAL suite)**
-
-Run: `GOTOOLCHAIN=local go test -race -count=1 ./internal/memory/ ./internal/textutil/ ./internal/engine/ ./internal/ui/... ./cmd/herdr-dots/ 2>&1 | tail -10`
-Expected: every package `ok`, including the six new tests and Phase 2's `TestForgetAllDeleteDotAndPurge`, `TestExecGitNeverRunsHooks`, `TestResolveProjectIgnoresInheritedGitEnv`, `TestScanSecretsFindsCredentials`, `TestScanSecretsIgnoresLookAlikes`, `TestSanitizeModelTextDropsControlsKeepsNewlineTab`.
-
-- [ ] **Step 8: Re-read the ledgers and write the triage notes**
-
-The ledgers grow as Phases 3–9 execute, so re-read them now:
-
-Run: `grep -n "minor (deferred)\|Declined to judge" .superpowers/sdd/*/progress.md "$(git rev-parse --git-common-dir)/../.superpowers/sdd/"*/progress.md 2>/dev/null | sort -u`
-Expected: the v1, Phase 2 and Phase 3 lines listed below, plus any lines Phases 3–9 added (the second path finds the main checkout's ledgers when this task runs in a worktree).
-
-Rule for every line not already listed below: fold it into this task (a small fix plus a test, in a file this task owns or `internal/memory/*`) only if it is a security or privacy issue, a panic or data loss, or a way to act on something the developer didn't see; everything else goes to "Known issues" with its reason. A fold that needs a file another Wave 2 task owns is listed as a known issue with "follow-up" instead.
+Run: `L="$(git rev-parse --git-common-dir)/../.superpowers/sdd"; grep -n -i -E 'minor \(deferred|deferred →|deferred minors|deferred \(|parked|→ phase 10|phase 10 triage|declined to judge|flak|FLAG FOR FINAL' "$L"/*/progress.md .superpowers/sdd/*/progress.md 2>/dev/null | sort -u | wc -l`
+Expected: about 99 lines at `dffabbf` (v1 through Phase 9) plus the Phase 9 final-wave lines (`0205616`). Every one is either folded below, already fixed by a later phase (with the test that shows it), or a known issue with its reason. Rule for a line not already listed: fold it into this task (a small fix plus a test, in `internal/memory/*`, `internal/secrets/*` or the notes) only if it is a security or privacy issue, a panic or data loss, or a way to act on something the developer didn't see; everything else goes to "Known issues" with its reason. A fold that needs a file another Wave 2 task owns is listed as a known issue with "follow-up" instead.
 
 Create `docs/superpowers/notes/2026-10-08-phase-10-triage.md`:
 
 ```markdown
 # Phase 10 triage of deferred review findings
 
-Source: every "minor (deferred)" and "Declined to judge" line in
-`.superpowers/sdd/*/progress.md` (v1, Phase 2, Phase 3 and later phases),
-plus the Phase 2 completion notes (P2-R3, P2-R9). Rule: fold what matters for
-a release (security, privacy, a panic, data loss, acting on something
+Source: every deferred line in `.superpowers/sdd/*/progress.md` (v1 and
+Phases 2–9: "minor (deferred)", "deferred → Phase 10 triage", "Parked →
+Phase 10", "FLAG FOR FINAL REVIEW", flaky-test notes), plus the Phase 2
+completion notes (P2-R3, P2-R9) and ruling P8-R7. Rule: fold what matters
+for a release (security, privacy, a panic, data loss, acting on something
 unseen); list the rest as known issues with the reason.
 
 ## Folded into Phase 10
 
 | Finding (ledger) | Fix | Test |
 |---|---|---|
-| Git config execution in hostile repos (Phase 2 final review, threat model): a repository's `.git/config` can set `core.fsmonitor`, `core.pager` or a promisor remote, and memory's git calls honored them | `memory.ExecGit` passes `-c core.fsmonitor=false -c core.pager=cat -c protocol.allow=never`, env `GIT_NO_LAZY_FETCH=1`; a guard test covers every git call site | `TestExecGitRunsNothingTheRepositoryConfigures`, `TestEveryGitCallDisablesRepositoryPrograms` |
-| Zero-width-character secret evasion (Phase 2): `sk-ant-` + U+200B + key passed the scanner | `ScanSecrets` also scans the text without format characters and combining marks | `TestInvisibleCharactersDoNotHideASecret` |
-| Nested-repo `FindProject` prefix match (Phase 2): the first project whose root prefixes the path won, so a vendored or nested repository resolved to its parent | the deepest matching root wins | `TestFindProjectPrefersTheNestedRepository` |
+| Zero-width-character secret evasion (Phase 2): `sk-ant-` + U+200B + key passed the scanner | `secrets.Scan` (behind `memory.ScanSecrets`, dot packs, `dots.Encode`, history) also scans the text without format characters and combining marks | `TestInvisibleCharactersDoNotHideASecret` |
+| Nested-repo `FindProject` prefix match (Phase 2): the first project (by name) whose root prefixes the path won, so a vendored or nested repository could resolve to its parent | the deepest matching root wins | `TestFindProjectPrefersTheNestedRepository` |
 | memui approve screen clipped in tiny popups (P2-R9): the terminal cut the top lines (who proposed it, kind, paths) while `y` still approved | the approve screen drops the list header; when it still doesn't fit, it says so and `y` refuses until the popup is enlarged | `TestApproveShowsTheFullProposalAndNeedsY` (extended, Task 10) |
-| Model text could carry Unicode bidi controls (found in Phase 10 review): an approval screen could read differently from the stored text | `SanitizeModelText` drops U+202A–U+202E and U+2066–U+2069 | `TestSanitizeDropsBidiControls` |
-| `DeleteDot` leaves ledger/corrupt/proposals (Phase 2 Task 6; the completion note scheduled ledger excerpts for "a later phase", none took it): deleting a dot and its memory kept quotes of its cards | `DeleteDot` deletes the dot's lines from every project ledger | `TestDeleteDotAlsoDropsItsLedgerLines` |
 | `ExportTOML` wrote `ref = "d:"` for an entry without an id (found by fuzzing) | no `ref` for an unsaved entry | `FuzzImportTOML/8a748f204ecc8c6f` (Task 3) |
-| Load/Delete don't sanitize slug (v1 Task 4): `dots.Load/Save/Delete` accepted `../x` | `ErrBadSlug` for any slug `Slugify` couldn't have made | `TestSlugsThatAreNotFileNamesAreRefused` (Task 10) |
+| Load/Delete don't sanitize slug (v1 Task 4): `dots.Load/Save/Delete` accepted `../x` | `ErrBadSlug` for a slug that is not a plain file name in the dots dir (hand-named files keep working) | `TestSlugsThatAreNotFileNamesAreRefused` (Task 10) |
 | O_CREATE doesn't tighten existing file mode (v1 Task 11): an old feed file kept a loose mode | `OpenFeed` makes it 0600 | `TestOpenFeedMakesAnOldLooseFileOwnerOnly` (Task 10) |
 | `Recent(n<0)` panics (v1 Task 11), `TruncateRunes(n<=0)` panics (v1 Task 13) | both return empty | `TestOpenFeedMakesAnOldLooseFileOwnerOnly`, `TestTruncateRunesNeverPanics` (Task 10) |
-| Index-based card selection (v1 Task 18a), fitRoster hiding the selected dot (Phase 2 Task 0), malformed config keeps memory on (Phase 2 Task 5), the Phase 2 Task 14 "flag for final review" items, user-saved findings never suppressing (Phase 2 Task 10) | already fixed by later tasks (selection by id; Phase 2 final fix wave) | existing tests (`TestSelectionFollowsCardIDAcrossSnapshots`, `TestMalformedConfigKeepsLastGoodButDisablesInject`, Phase 2 final-fix tests) |
+| Flaky `TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies` (Phase 6 note, Phase 8 post-merge): the stub engine's listener was closed asynchronously after cancel, and a Unix listener unlinks its socket path on close, so a late close could delete the socket of the engine the test had just started again | the test's `startStub` stop waits for `ipc.Serve` to return (the old listener is closed and unlinked before the test goes on) | `TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies` (`-race -count=50` green, Task 10) |
+| Phase 7 draft tests time out under load: the draft rig waits with `eventually`, whose 3 s deadline a loaded machine's git (worktree add, snapshot, diff) can exceed | `eventually` waits up to 15 s (a passing test never waits for it) | the Phase 7 draft tests under `-race -count=6` with parallel load (Task 10) |
+| `FuzzCodexBlock`'s first invariant was wrong (found by fuzzing): the developer's own comment may quote the marker text inside a longer line | the invariant compares whole marker lines; no product change | `FuzzCodexBlock/a763424096dd21b2` (Task 3) |
+
+## Already fixed by a later phase (verified at `dffabbf`)
+
+| Finding (ledger) | Fixed by | Test |
+|---|---|---|
+| Git config execution in hostile repos (Phase 2 final review): `.git/config` can name `core.fsmonitor`, hooks or transports | Phases 6–8: every git child passes `core.fsmonitor=false`, `core.hooksPath=<null device>`, `protocol.allow=never`, env `GIT_ALLOW_PROTOCOL=none`, `GIT_NO_LAZY_FETCH=1` (`memory.ExecGit`, `toolloop`, `worktree.Git`) | `TestExecGitNeverRunsHooks`, and Task 9's pins `TestExecGitRunsNothingTheRepositoryConfigures`, `TestEveryGitCallDisablesRepositoryPrograms` |
+| Unicode bidi controls in model text (an approval-screen spoof) | `textutil.SanitizeModelText` drops U+202A–U+202E, U+2066–U+2069, U+200E/F, U+061C | `TestSanitizeModelTextRemovesBidiKeepsEmojiJoiners` |
+| `DeleteDot` leaves ledger/corrupt/proposals (Phase 2 Task 6; the completion note scheduled ledger excerpts for a later phase) | Phase 7 Task 0 | `TestDeleteDotScrubsItsLedgerAndOrphanedProposals`, `TestDeleteDotRemovesItsCorruptAsidesOnly` |
+| Memory edit temp file in `os.TempDir` holds plaintext memory (Phase 2 Task 14, flagged) | a private 0700 directory removed with everything the editor leaves | `TestMemoryEditRemovesItsTempDirectory` |
+| `CleanEnv` returns nil, so a child inherits the full environment (v1 Task 8, flagged) | `CleanEnv` always returns a non-nil slice | `TestCleanEnvNeverReturnsNil` |
+| Index-based card selection (v1 Task 18a), malformed config keeps memory on (Phase 2 Task 5), user-saved findings never suppressing (Phase 2 Task 10) | selection by id; every kill switch fails closed; the Phase 2 final fix wave | `TestSelectionFollowsCardIDAcrossSnapshots`, `TestMalformedConfigKeepsLastGoodButDisablesInject`, Phase 2 final-fix tests |
+| Flaky `TestFinishedPaidReviewIsNotDoubleCounted` (Phase 9) | the controller's fix (the frontend's catch-up review raced the ask) | 100/100 runs |
 
 ## Known issues (not fixed in 1.0.0-rc.1)
 
 Each is minor for a release; the reason is given.
 
-- **Dots and engine:** a suppressed verdict still sets the cooldown; an edited-then-dismissed card records the edited text; stats can be stale for a moment after memory is switched off at runtime; `r` doesn't reset `MemoryPasses`; with `memory_enabled = false`, attaching still runs git and writes `meta.json` (P2-R3; git now runs with repository programs disabled). Reason: cosmetic or self-correcting, no data loss.
-- **Engine lifecycle (v1 Task 17):** `lockfile.Held` probes with the real lock (a spurious engine exit is possible if an engine starts during the probe); a crash-looping engine is respawned about every 6 s and the "not ready" error doesn't point at `engine.log`; `e.Wait` doesn't cover in-flight IPC handlers. Reason: rare, recoverable by restarting Herdr; `engine.log` is documented in the README.
-- **IPC (v1 Task 15):** no server write deadlines; `Serve` doesn't close open connections on cancel; `Call` honors a deadline but not cancellation. Reason: local socket, one user; covered by `FuzzIPCDecode` for malformed input.
-- **Herdr client (v1 Task 5):** `call()` honors the deadline but not cancellation; `Subscribe` returns a wrapped closed-connection error on cancel. Reason: the engine always sets deadlines.
-- **Transcripts (v1 Tasks 6, 7):** compact-summary and slash-command records may become turns; the Codex payload type mismatch drops the whole record; a rollout glob `*` can span dashes. Reason: fuzzed for crashes (Task 3); Codex is not live-verified anyway.
-- **Verdicts and backends (v1 Tasks 8, 9):** `Hint` matches a bare "401"/"login" (false positives in the hint text only); `ParseVerdict` takes the first `{` to the last `}`; `codex turn.failed` after an earlier `agent_message` is ignored. Reason: fuzzed; hints are advisory.
+- **Dots and engine (v1, Phase 2):** a suppressed verdict still sets the cooldown; an edited-then-dismissed card records the edited text; stats can be stale for a moment after memory is switched off at runtime; `r` doesn't reset `MemoryPasses`; with `memory_enabled = false`, attaching still runs git and writes `meta.json` (P2-R3; git runs with repository programs disabled). Reason: cosmetic or self-correcting, no data loss.
+- **Engine lifecycle (v1 Task 17):** `lockfile.Held` probes with the real lock (a spurious engine exit is possible if an engine starts during the probe); a crash-looping engine is respawned about every 6 s and the "not ready" error doesn't point at `engine.log`; `e.Wait` doesn't cover in-flight IPC handlers. Reason: rare, recoverable by restarting Herdr; `engine.log` is documented.
+- **IPC and the Herdr client (v1 Tasks 5, 15):** no server write deadlines; `Call` and the Herdr client honor a deadline but not cancellation; `Subscribe` returns a wrapped closed-connection error on cancel. Reason: local socket or pipe, one user, every call has a deadline; malformed input is fuzzed (`FuzzIPCDecode`).
+- **Transcripts (v1 Tasks 6, 7):** compact-summary and slash-command records may become turns; the Codex payload type mismatch drops the whole record; a rollout glob `*` can span dashes. Reason: fuzzed for crashes; Codex is not live-verified anyway.
+- **Verdicts and backends (v1 Tasks 8, 9; ruling P8-R7):** `ParseVerdict`, `ParseReply` and `ParseMemoryOps` take the first `{` to the last `}`, so a reply with prose braces around the JSON is malformed (no card) instead of parsed; `Hint` matches a bare "401"/"login"; `codex turn.failed` after an earlier `agent_message` is ignored. Reason: it fails closed (two objects never parse as one, so no wrong verdict is ever accepted), and the fuzz targets check every accepted reply is sanitized and capped; a string-aware extractor is follow-up work.
 - **Queue and state (v1 Tasks 10, 11):** in-memory state changes before the save, with no rollback when the write fails (with Phase 10's read-only gate this is the intended "read-only mode"); `Open` trusts the persisted `next`; the feed loader ignores a scanner error on a truncated last line. Reason: no data loss on disk; a corrupt file is reported.
-- **Memory (Phase 2 Tasks 3, 6, 7, 8):** `validEntryID` accepts `m+3`/`m007`; `FirstSentence` cuts at abbreviations; `Similar` is unbounded on very long inputs (texts are capped at 500 runes); the secret scanner errs toward refusing (`Bearer` + prose, `tokenizer=`); no final tie-break in memory block order (prompt-cache misses only); prune can delete archived pinned entries with a zero `UpdatedAt`; `.corrupt` files are left for the developer. Reason: false positives refuse rather than leak; archived entries are already out of the prompt.
-- **Memory CLI and UI (Phase 2 Tasks 11–13, 15):** long status lines overflow the viewport; `memory --help` needs the state dir; `M` on an empty library is silent; the chooser can send while disconnected (the call fails visibly). Reason: cosmetic.
-- **Council (Phase 3 Tasks 1, 2, 4):** `ParseDigest` output is not clipped (the card shows it whole; it is sanitized and fuzzed); a negative `max_members` clamps to 2 while 0 means 8; dot names and preflight reasons are rendered as the developer wrote them. Reason: developer-controlled input or cosmetic.
-- **Summon popup (v1 Task 20a):** no in-flight guard, so a double `enter` can summon twice (one extra budgeted run). Reason: budgets cap it; Phase 3 reworked this popup.
-- **setup-keys (v1 Task 21):** backup names have 1 s resolution; `Plan` misses a plugin action already bound to another key. Reason: the backup is written before the change; the developer sees the plan first.
+- **Memory (Phase 2 Tasks 3, 6, 7, 8):** `validEntryID` accepts `m+3`/`m007`; `FirstSentence` cuts at abbreviations; `Similar` is unbounded on very long inputs (texts are capped at 500 runes); the secret scanner errs toward refusing (`Bearer` + prose, `tokenizer=`); no final tie-break in memory block order (prompt-cache misses only); prune can delete archived pinned entries with a zero `UpdatedAt`. Reason: false positives refuse rather than leak; archived entries are already out of the prompt.
+- **Memory CLI and UI (Phase 2 Tasks 11–15):** long status lines overflow the viewport; `memory --help` needs the state dir; `M` on an empty library is silent; the chooser can send while disconnected (the call fails visibly); import skip messages print the entry text to the developer's own terminal. Reason: cosmetic.
+- **Council (Phase 3):** `ParseDigest` output is not clipped (the card shows it whole; it is sanitized and fuzzed); a negative `max_members` clamps to 2 while 0 means 8; dot names and preflight reasons are rendered as the developer wrote them; `councilConventionText` strips any trailing `(…)`; the chair is charged if shutdown lands mid-chair; one council can overrun the pane budget between preflight and member runs. Reason: developer-controlled input, cosmetic, or bounded by one council.
+- **API backends, keys and cost (Phase 4):** `credentials.toml` read-modify-write has no file lock (two `keys set` at the same instant can lose one; the developer reruns it); keys from environment variables are not shape-checked; `Last4` slices bytes (an env key with non-ASCII characters can show a split character); a prices override without `as_of` keeps the embedded date; bad globs and unknown providers in `config.toml` are dropped without a warning; NFC/NFD forms of non-ASCII globs differ; a pane in a repository subdirectory walks the tree without `.gitignore`; the manage popup reads prices once when opened; `CostServed` falls back to the requested model's price when another model served; zero-token failed runs record a known $0; `chairWarned` is set when merge isn't `chair`. Reason: display or accounting edge cases; dollar and call budgets still cap spend.
+- **MCP server (Phase 5):** a rejected proposal can be proposed again (no rejection ledger); a project-level `.codex/config.toml` server is not detected and a relative `CODEX_HOME` is not resolved; the manage footer reports install records, not live client configs; a consulted turn doesn't decrement the cooldown; an ask can run while a council starts on the same pane; `Usage.Add` fsyncs under `e.mu`; `paneClosed` matches an error's text suffix; spend after the last dot is detached isn't shown; turn-review budget checks ignore in-flight asks (overshoot of at most one run); full-scope proposals are archived soon after. Reason: the agent can't approve anything itself, budgets cap spend, and the rest is cosmetic.
+- **Windows (Phase 6):** a residual race between `Purge` and a concurrent writer; `EINVAL`/`ACCESS_DENIED` opens during `Purge` aren't retried; a reader can recreate a purged project as an empty directory; files created with `CreateFile` inherit the private directory's ACL; stale `herdr-dots-run-*` directories aren't swept at start; an aliased `os/exec` import would slip past the portability guard; CI actions are pinned by major tag and run twice on PR branches. Reason: Windows is beta and not run here (user gate); the private directory protects the files.
+- **Write-capable dots (Phase 7):** two engines on one repository drop each other's snapshot refs (by design, X8); an orphaned card whose patch was applied can't be dismissed after a failed card write; `strayOps` can match "index" inside base85 binary data (fails closed, about 1 in 85⁴); the `old mode 120000 → 100644` branch is dead in practice; a stale comment at `patchstore.go:57`; `FlagAgentConfig` lives in a heavier package than it needs; the `ui/diff` sweep test takes about 30 s. Reason: everything fails closed or is cosmetic.
+- **Proactive dots (Phase 8):** no cross-session daily reservation (overshoot of at most one run per session); the daily toast is per engine; `route()` has no re-check after `Add`; research runs `--restricted`, which ignores the developer's own `~/.claude` deny rules, and `tool_deny_globs` isn't in the research settings (research still denies every secret file in `toolloop.DefaultDeny`, has no shell and no WebFetch); `charge()` has no generation check; a huge finite budget is accepted; inbox claims compare-and-delete by token (a suspend longer than the TTL duplicates a card, never loses one); corrupt inbox asides aren't cleaned up. Reason: bounded spend, no unapproved action, and research can't send file contents anywhere but a search query.
+- **Profiles and sharing (Phase 9):** local dot args can still use `claude` short forms (`-c`, `-r`), combined short flags and flags such as `--chrome`, `--remote-control`, `--teleport`, `--from-pr`, `--file`, `--debug-file`, `--bg`, `--permission-prompts`, and `codex` `--output-schema`/`-i` file reads (only the developer's own dot files can carry them: imported and project dots keep no args but `--model`/`--effort`); the pane and memory screen draw `─` and `▸` without the ASCII fallback; `SetASCII` sets an unlocked package variable; `dots untrust FILE` revokes every checkout (fails closed); a scheduled project dot runs the first checkout's copy only; pruning stops scheduled project dots in idle checkouts (fails safe); `scanSeq` is never cleaned; one full-suite flake was seen once and not identified. From Phase 9's final fix wave (after `dffabbf`): a hostile project file within the size limits still costs about 60 ms per 100 MB to pre-scan (no key or table count cap); the templates' delivery mode isn't pinned by a test; `TestAskCouncilCountsAsOneAsk` flaked once under load (the reconcile pass ran it 150 times under load on `0205616` with Phase 10 applied without a failure; the likely cause is the seat's turn being processed after the first council, which resets the per-turn ask count, the same shape as Phase 9's `TestFinishedPaidReviewIsNotDoubleCounted`: if it recurs, wait in `seat` until that turn is processed). Reason: developer-controlled input, fail-closed behavior, bounded cost or test-only.
+- **setup-keys and summon (v1 Tasks 20a, 21):** backup names have 1 s resolution; `Plan` misses a plugin action already bound to another key; a double `enter` in the summon popup can summon twice (one extra budgeted run). Reason: the backup is written before the change and the developer sees the plan first; budgets cap the extra run.
 - **Snapshots (Phase 10):** a pane with more than 100 visible cards shows the first 100 (most severe, oldest) and the rest wait unseen until earlier ones are resolved; the pane doesn't yet say how many are hidden.
-- **Platforms:** `windows/arm64` is built and published but never tested (Phase 6 scope); Linux and Windows have only CI and cross-compiled tests here (user gate); Codex paths are documented-format, not live-verified (user gate).
-- (Later phases: add their deferred lines here by the rule above.)
+- **Platforms:** `windows/arm64` is built and published but never tested; Linux and Windows have only CI and cross-compiled tests here (user gate); Codex paths are documented-format, not live-verified (user gate).
 ```
 
-Append every ledger line from Phases 3–9 that the rule didn't fold to the right bullet (or a new bullet named after the phase), with its reason.
+Then check each "Parked → Phase 10" or deferred line that Phase 9's final fix wave added after `dffabbf` by the same rule, and add it to the right section.
 
-- [ ] **Step 9: Verification gate**
+- [ ] **Step 7: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed.
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed.
 
-- [ ] **Step 10: Commit (never push)**
+- [ ] **Step 8: Commit (never push)**
 
 ```bash
-git add internal/memory/secrets.go internal/memory/project.go internal/memory/store.go internal/memory/hardening_test.go internal/memory/gitcalls_test.go internal/textutil/sanitize.go internal/textutil/bidi_test.go docs/superpowers/notes/2026-10-08-phase-10-triage.md
-git add -u   # only git runner files the guard named, if any
-git commit -m "fix: hostile-repo git calls, invisible-character secret evasion, nested projects, bidi controls, DeleteDot ledger; triage notes (Phase 10)"
+git add internal/secrets/secrets.go internal/memory/store.go internal/memory/hardening_test.go internal/memory/gitcalls_test.go docs/superpowers/notes/2026-10-08-phase-10-triage.md
+git commit -m "fix: invisible-character secret evasion, nested projects; git and bidi pins; triage of every deferred finding (Phase 10)"
 ```
 
 ---
 
-### Task 10: Hardening triage B: memui approve fit, slugs, feed, panics
+### Task 10: Hardening triage B: memui approve fit, slugs, feed, panics, flaky tests
 
 **Depends on:** Task 3 (it added `internal/dots/fuzz_test.go`, which must still pass with slug validation). Wave 2.
 
 **Files:**
 - Create: `internal/delivery/truncate_test.go`, `internal/dots/slug_test.go`, `internal/state/feedmode_test.go`
-- Modify: `internal/ui/memui/model.go`, `internal/ui/memui/model_test.go`, `internal/delivery/delivery.go`, `internal/dots/store.go`, `internal/state/feed.go`
+- Modify: `internal/ui/memui/model.go`, `internal/ui/memui/model_test.go`, `internal/delivery/delivery.go`, `internal/dots/store.go`, `internal/state/feed.go`, `internal/mcpserver/engine_test.go` (`startStub`), `internal/engine/engine_test.go` (`eventually`)
 
 **Interfaces:**
-- Consumes: memui's `Model{width, height, approve, mode}`, `approveScreen`, `wrap`, `clean`, `style.Title`; `delivery.TruncateRunes`; `dots.Slugify`, `Load`, `Save`, `Delete`, `New`; `state.OpenFeed`, `Feed.Recent`.
-- Produces: memui `const approveTail = 3`, `(Model) screenWidth() int`, `(Model) approveFits() bool` (the approve screen plus its 3 tail lines fit `height`; unknown height fits); in confirm mode the list header is dropped, and a popup too small shows "Too small to show the whole proposal (needs N lines, has H). Enlarge the popup to approve." with "any key cancels", and `y` sets status "not approved: the popup is too small to show the whole proposal"; `delivery.TruncateRunes(s, n<=0)` returns `""` when `s` is longer; `var dots.ErrBadSlug`, unexported `validSlug(slug) bool`, `Load`/`Delete`/`Save` return `ErrBadSlug` for slugs `Slugify` couldn't have made; `OpenFeed` chmods an existing feed with group/other bits to 0600; `Feed.Recent(pane, n<=0)` returns nil.
+- Consumes: memui's `Model{width, height, approve, mode}`, `approveScreen`, `wrap`, `clean`, `style.Title`, `style.Dim`; `delivery.TruncateRunes`; `dots.Slugify`, `Load`, `Save`, `Delete`, `New` (project dots never reach these: the manage popup and the CLI handle `OriginProject` dots before calling them, and `cmd`'s `loadDot` already checks `memory.ValidSlug`); `state.OpenFeed`, `Feed.Recent`; `ipc.Listen`, `ipc.Serve` (returns after its listener is closed); the engine test rig's `eventually`, which the Phase 7 draft rig (`patchCard`, `draftsDone`, `noDraftsInFlight`, `reviewsDone`) waits with.
+- Produces: memui `const approveTail = 3`, `(Model) screenWidth() int`, `(Model) approveFits() bool` (the approve screen plus its 3 tail lines fit `height`; unknown height fits); in confirm mode the list header is dropped, and a popup too small shows "Too small to show the whole proposal (needs N lines, has H). Enlarge the popup to approve." with "any key cancels", and `y` sets status "not approved: the popup is too small to show the whole proposal"; `delivery.TruncateRunes(s, n<=0)` returns `""` when `s` is longer; `var dots.ErrBadSlug`, unexported `validSlug(slug) bool` (not empty, no `/`, `\`, `:` or NUL, and `filepath.IsLocal(slug+".toml")`, which also refuses Windows device names), `Load`/`Delete`/`Save` return `ErrBadSlug` for any other slug (a hand-named `My_Dot.toml` keeps working, so the check is file-name safety, not `Slugify`'s canonical form: Plan decision 31); `OpenFeed` chmods an existing feed with group/other bits to 0600; `Feed.Recent(pane, n<=0)` returns nil.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -6334,8 +6626,8 @@ import (
 	"testing"
 )
 
-// A slug reaches Load, Save and Delete from IPC and the MCP server; it must
-// never name a file outside the dots directory.
+// A slug reaches Load, Save and Delete from the manage popup and the CLI; it
+// must never name a file outside the dots directory.
 func TestSlugsThatAreNotFileNamesAreRefused(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "dots")
@@ -6343,22 +6635,22 @@ func TestSlugsThatAreNotFileNamesAreRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	victim := filepath.Join(base, "victim.toml")
-	if err := os.WriteFile(victim, []byte("name = \"x\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(victim, []byte("name = \"x\"\npurpose = \"p\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, slug := range []string{"../victim", "", "a/b", "Security", "x.toml", "-x"} {
+	for _, slug := range []string{"../victim", "", "a/b", `..\victim`, "c:victim"} {
 		if _, err := Load(dir, slug); !errors.Is(err, ErrBadSlug) {
 			t.Errorf("Load(%q): %v", slug, err)
 		}
 		if err := Delete(dir, slug); !errors.Is(err, ErrBadSlug) {
 			t.Errorf("Delete(%q): %v", slug, err)
 		}
-		d := New("Fine")
-		d.Purpose = "p"
-		d.Slug = slug
 		if slug == "" {
 			continue // Save makes a slug from the name
 		}
+		d := New("Fine")
+		d.Purpose = "p"
+		d.Slug = slug
 		if err := Save(dir, d, false); !errors.Is(err, ErrBadSlug) {
 			t.Errorf("Save with slug %q: %v", slug, err)
 		}
@@ -6373,6 +6665,13 @@ func TestSlugsThatAreNotFileNamesAreRefused(t *testing.T) {
 	}
 	if _, err := Load(dir, "fine-dot"); err != nil {
 		t.Fatalf("and load: %v", err)
+	}
+	// A file the developer named by hand keeps loading by its own name.
+	if err := os.WriteFile(filepath.Join(dir, "My_Dot.toml"), []byte("name = \"Mine\"\npurpose = \"p\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Load(dir, "My_Dot"); err != nil || got.Name != "Mine" {
+		t.Fatalf("a hand-named dot file: %+v %v", got, err)
 	}
 }
 ```
@@ -6424,7 +6723,7 @@ Apply to `internal/ui/memui/model_test.go` (the end of `TestApproveShowsTheFullP
 ```diff
 --- a/internal/ui/memui/model_test.go
 +++ b/internal/ui/memui/model_test.go
-@@ -434,11 +434,22 @@
+@@ -450,10 +450,21 @@ func TestApproveShowsTheFullProposalAndNeedsY(t *testing.T) {
  	if strings.Contains(m.View(), "y approve") {
  		t.Fatalf("esc closes the confirm screen:\n%s", m.View())
  	}
@@ -6437,7 +6736,7 @@ Apply to `internal/ui/memui/model_test.go` (the end of `TestApproveShowsTheFullP
 +	sv := press(short, "a").View()
 +	if !strings.Contains(sv, "Too small to show the whole proposal") || strings.Contains(sv, "y approve") || strings.Count(sv, "\n") >= 8 {
 +		t.Fatalf("a too-small popup must say so and fit:\n%s", sv)
- 	}
++	}
 +	press(short, "a", "y")
 +	if e, _ := st.Get(pid, ref); e.Status != memory.StatusProposed || n != 0 {
 +		t.Fatal("y in a popup too small for the proposal must not approve")
@@ -6446,10 +6745,9 @@ Apply to `internal/ui/memui/model_test.go` (the end of `TestApproveShowsTheFullP
 +	grown, _ := press(short, "a").Update(tea.WindowSizeMsg{Width: 60, Height: 40})
 +	if got := strings.Join(strings.Fields(grown.View()), " "); !strings.Contains(got, long) || !strings.Contains(grown.View(), "y approve") {
 +		t.Fatalf("after growing, the whole proposal shows:\n%s", grown.View())
-+	}
+ 	}
  	press(m, "a", "y")
  	if e, _ := st.Get(pid, ref); e.Status != memory.StatusActive || n != 1 {
- 		t.Fatalf("y approves: status %s notified %d", e.Status, n)
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -6464,7 +6762,7 @@ Apply to `internal/ui/memui/model.go`:
 ```diff
 --- a/internal/ui/memui/model.go
 +++ b/internal/ui/memui/model.go
-@@ -370,6 +370,10 @@
+@@ -376,6 +376,10 @@ func (m Model) keysConfirmApprove(k tea.KeyMsg) (tea.Model, tea.Cmd) {
  		m.status = "not approved"
  		return m, nil
  	}
@@ -6475,15 +6773,14 @@ Apply to `internal/ui/memui/model.go`:
  	e := m.approve
  	ref, pid, seen := e.Ref(), m.pidOf(e), e.Text
  	return m, m.mutate("approved "+ref.String(), func(st *memory.Store) error {
-@@ -411,7 +415,27 @@
- 	}
+@@ -418,6 +422,26 @@ func wrap(s string, w int) []string {
  	return lines
  }
-+
+ 
 +// approveTail is the lines View adds under the approve screen: a blank line,
 +// the y prompt and the footer.
 +const approveTail = 3
- 
++
 +// screenWidth is the width View lays out for.
 +func (m Model) screenWidth() int {
 +	if m.width <= 0 {
@@ -6503,7 +6800,7 @@ Apply to `internal/ui/memui/model.go`:
  // approveScreen is the full proposal: who proposed it, its kind, its paths
  // and every word of its text.
  func (m Model) approveScreen(w int) []string {
-@@ -655,10 +679,7 @@
+@@ -687,10 +711,7 @@ func (m Model) list(w int) (lines []string, cur int) {
  }
  
  func (m Model) View() string {
@@ -6515,7 +6812,7 @@ Apply to `internal/ui/memui/model.go`:
  	var head strings.Builder
  	who := clean(m.d.DotName)
  	if who == "" {
-@@ -689,7 +710,11 @@
+@@ -721,7 +742,11 @@ func (m Model) View() string {
  		sc, _, _, want := m.forgetAllTarget()
  		tail.WriteString(fmt.Sprintf("\n%s Type %q and press enter:\n%s\n", style.Title.Render("Forget ALL "+string(sc)+" memory?"), want, m.input.View()))
  	case modeConfirmApprove:
@@ -6528,7 +6825,7 @@ Apply to `internal/ui/memui/model.go`:
  	case modeFilter:
  		tail.WriteString("\n/" + m.input.View() + "\n")
  	case modeEdit:
-@@ -715,7 +740,15 @@
+@@ -747,7 +772,15 @@ func (m Model) View() string {
  
  	lines, cur := m.list(w)
  	if m.mode == modeConfirmApprove {
@@ -6553,7 +6850,7 @@ Apply to `internal/delivery/delivery.go`:
 ```diff
 --- a/internal/delivery/delivery.go
 +++ b/internal/delivery/delivery.go
-@@ -74,6 +74,9 @@
+@@ -79,6 +79,9 @@ func TruncateRunes(s string, n int) string {
  	if len(r) <= n {
  		return s
  	}
@@ -6565,26 +6862,32 @@ Apply to `internal/delivery/delivery.go`:
  
 ```
 
-Apply to `internal/dots/store.go` (Phase 9 may have added project-dot loading beside `Load`; validate only the slugs that name files in the dots dir, as below):
+Apply to `internal/dots/store.go` (`Load`, `Save` and `Delete`; Phase 9's project dots load through `DecodeProject` and never reach them):
 
 ```diff
 --- a/internal/dots/store.go
 +++ b/internal/dots/store.go
-@@ -17,6 +17,13 @@
+@@ -21,6 +21,19 @@ import (
  
  var ErrExists = errors.New("a dot with this name already exists")
  
-+// ErrBadSlug refuses a slug that is not a plain dot file name ("../x", "").
++// ErrBadSlug refuses a slug that is not a plain file name in the dots
++// directory ("../x", "a/b", ""). Slugs reach Load, Save and Delete from the
++// manage popup and the CLI.
 +var ErrBadSlug = errors.New("invalid dot name")
 +
-+// validSlug reports a slug Slugify could have made: lower-case letters,
-+// digits and single dashes. It can never name a file outside the dots dir.
-+func validSlug(slug string) bool { return slug != "" && Slugify(slug) == slug }
++// validSlug reports a slug that names a file directly inside the dots
++// directory: no separator, no NUL, no drive or stream colon, and a local
++// file name (filepath.IsLocal also refuses Windows device names). Files the
++// developer named by hand (My_Dot.toml) keep working.
++func validSlug(slug string) bool {
++	return slug != "" && !strings.ContainsAny(slug, "/\\:\x00") && filepath.IsLocal(slug+".toml")
++}
 +
  type LoadError struct {
  	File string // base name, e.g. "security.toml"
  	Line int    // 0 when not a parse error
-@@ -78,6 +85,9 @@
+@@ -85,6 +98,9 @@ func LoadAll(dir string) ([]Dot, []LoadError) {
  }
  
  func Load(dir, slug string) (Dot, error) {
@@ -6594,7 +6897,7 @@ Apply to `internal/dots/store.go` (Phase 9 may have added project-dot loading be
  	d, err := decode(path(dir, slug))
  	if err != nil {
  		return Dot{}, err
-@@ -94,6 +104,9 @@
+@@ -101,6 +117,9 @@ func Save(dir string, d Dot, create bool) error {
  	if create || d.Slug == "" {
  		d.Slug = Slugify(d.Name)
  	}
@@ -6604,8 +6907,8 @@ Apply to `internal/dots/store.go` (Phase 9 may have added project-dot loading be
  	p := path(dir, d.Slug)
  	if create {
  		if _, err := os.Stat(p); err == nil {
-@@ -198,4 +211,9 @@
- 	return strings.Join(result, "\n")
+@@ -265,4 +284,9 @@ func insertPurpose(tomlStr, purpose string) string {
+ 	return strings.Join(append(lines, PurposeBlock(purpose)), "\n")
  }
  
 -func Delete(dir, slug string) error { return os.Remove(path(dir, slug)) }
@@ -6617,12 +6920,12 @@ Apply to `internal/dots/store.go` (Phase 9 may have added project-dot loading be
 +}
 ```
 
-Apply to `internal/state/feed.go` (Phases 7–8 added outcomes to this file; the two hunks are in `OpenFeed` and `Recent`):
+Apply to `internal/state/feed.go` (the two hunks are in `OpenFeed` and `Recent`):
 
 ```diff
 --- a/internal/state/feed.go
 +++ b/internal/state/feed.go
-@@ -49,6 +49,11 @@
+@@ -69,6 +69,11 @@ func OpenFeed(path string) (*Feed, error) {
  	if st, err := os.Stat(path); err == nil && st.Size() > feedRotateBytes {
  		_ = os.Rename(path, path+".1")
  	}
@@ -6634,7 +6937,7 @@ Apply to `internal/state/feed.go` (Phases 7–8 added outcomes to this file; the
  	file, err := os.Open(path)
  	if err == nil {
  		sc := bufio.NewScanner(file)
-@@ -96,6 +101,9 @@
+@@ -116,6 +121,9 @@ func (f *Feed) Append(e FeedEntry) error {
  
  // Recent returns up to n entries for a pane, oldest first.
  func (f *Feed) Recent(paneID string, n int) []FeedEntry {
@@ -6648,19 +6951,79 @@ Apply to `internal/state/feed.go` (Phases 7–8 added outcomes to this file; the
 
 - [ ] **Step 5: Run the tests**
 
-Run: `GOTOOLCHAIN=local go test -race -count=1 ./internal/delivery/ ./internal/dots/ ./internal/state/ ./internal/ui/... ./internal/engine/ ./cmd/herdr-dots/ 2>&1 | tail -10`
-Expected: every package `ok`, including `TestTruncateRunesNeverPanics`, `TestSlugsThatAreNotFileNamesAreRefused`, `TestOpenFeedMakesAnOldLooseFileOwnerOnly`, the extended `TestApproveShowsTheFullProposalAndNeedsY`, `TestSelectedRowStaysOnScreenInAShortPopup`, and Task 3's `FuzzDotFile` seeds.
+Run: `GOTOOLCHAIN=local go test -race -count=1 ./internal/delivery/ ./internal/dots/ ./internal/state/ ./internal/ui/... ./internal/engine/ ./cmd/herdr-dots/ 2>&1 | tail -12`
+Expected: every package `ok`, including `TestTruncateRunesNeverPanics`, `TestSlugsThatAreNotFileNamesAreRefused`, `TestOpenFeedMakesAnOldLooseFileOwnerOnly`, the extended `TestApproveShowsTheFullProposalAndNeedsY`, `TestSelectedRowStaysOnScreenInAShortPopup`, and Task 3's `FuzzDotFile`/`FuzzDecodeStrict` seeds.
 
-- [ ] **Step 6: Verification gate**
+- [ ] **Step 6: Stabilize the two known flaky tests**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed.
+The ledgers name two (Plan decision 32). `TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies` (Phase 6, again after Phase 8's merge): `startStub`'s stop only cancelled `ipc.Serve`, which closes its listener on its own goroutine, and a Unix listener unlinks its socket path when it closes; a late close could unlink the socket of the stub the test had just started again, so the next dial failed. The Phase 7 draft tests under load: the draft rig waits with `eventually`, whose 3 s deadline a loaded machine's git can exceed. Neither change touches product code.
 
-- [ ] **Step 7: Commit (never push)**
+Apply to `internal/mcpserver/engine_test.go`:
+
+```diff
+--- a/internal/mcpserver/engine_test.go
++++ b/internal/mcpserver/engine_test.go
+@@ -37,6 +37,11 @@ func shortSock(t *testing.T) string {
+ 	return platformtest.Endpoint(t)
+ }
+ 
++// startStub serves a stub engine at path. Its stop function returns only
++// once Serve has returned, so the old listener is closed (and, on Unix, its
++// socket file unlinked) before the test goes on: a listener closed late
++// would unlink the socket of the engine started after it (the flake seen in
++// Phases 6 and 8).
+ func startStub(t *testing.T, path string) context.CancelFunc {
+ 	t.Helper()
+ 	ln, err := ipc.Listen(path)
+@@ -44,8 +49,9 @@ func startStub(t *testing.T, path string) context.CancelFunc {
+ 		t.Fatal(err)
+ 	}
+ 	ctx, cancel := context.WithCancel(context.Background())
+-	go ipc.Serve(ctx, ln, stubEngine{pane: "w1:p1"})
+-	return cancel
++	done := make(chan struct{})
++	go func() { _ = ipc.Serve(ctx, ln, stubEngine{pane: "w1:p1"}); close(done) }()
++	return func() { cancel(); <-done }
+ }
+ 
+ // Review Focus 3: the engine isn't running when the agent first calls a tool.
+```
+
+Apply to `internal/engine/engine_test.go`:
+
+```diff
+--- a/internal/engine/engine_test.go
++++ b/internal/engine/engine_test.go
+@@ -190,9 +190,13 @@ func newRigFull(t *testing.T, opt func(*Deps), eng func(*Engine), ds ...dots.Dot
+ 	return r
+ }
+ 
++// eventually waits for cond. The deadline is generous because drafts and
++// proactive runs shell out to git, which is slow on a loaded machine (the
++// Phase 7 draft tests timed out under load at 3 s); a passing test never
++// waits for it.
+ func eventually(t *testing.T, what string, cond func() bool) {
+ 	t.Helper()
+-	deadline := time.Now().Add(3 * time.Second)
++	deadline := time.Now().Add(15 * time.Second)
+ 	for time.Now().Before(deadline) {
+ 		if cond() {
+ 			return
+```
+
+Run: `GOTOOLCHAIN=local go test -race -count=50 -run TestIPCEngine ./internal/mcpserver/ && (GOTOOLCHAIN=local go test -race -count=3 ./internal/worktree/ ./internal/ui/diff/ >/dev/null & GOTOOLCHAIN=local go test -race -count=6 -run 'Draft|draft' ./internal/engine/; wait)`
+Expected: `ok` for both (the second runs the draft tests six times while other packages load the machine; the reconcile pass ran both green).
+
+- [ ] **Step 7: Verification gate**
+
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed.
+
+- [ ] **Step 8: Commit (never push)**
 
 ```bash
-git add internal/ui/memui/model.go internal/ui/memui/model_test.go internal/delivery/delivery.go internal/delivery/truncate_test.go internal/dots/store.go internal/dots/slug_test.go internal/state/feed.go internal/state/feedmode_test.go
-git commit -m "fix: memui approves only a proposal it shows whole; dot slugs stay file names; owner-only feed; two panics (Phase 10)"
+git add internal/ui/memui/model.go internal/ui/memui/model_test.go internal/delivery/delivery.go internal/delivery/truncate_test.go internal/dots/store.go internal/dots/slug_test.go internal/state/feed.go internal/state/feedmode_test.go internal/mcpserver/engine_test.go internal/engine/engine_test.go
+git commit -m "fix: memui approves only a proposal it shows whole; dot slugs stay file names; owner-only feed; two panics; two flaky tests (Phase 10)"
 ```
 
 ---
@@ -6714,22 +7077,22 @@ file the plugin can).
 
 | # | Threat | Mitigation | Pinned by |
 |---|---|---|---|
-| T1 | Prompt injection in a transcript or a repository file makes a dot run tools that change things | Dots are read-only: claude `--tools Read,Grep,Glob` with hooks disabled, codex `--sandbox read-only`, API dots get a jailed read-only tool loop; denied backend args are dropped; write-capable dots (Phase 7) need two explicit approvals and never get a shell | `TestClaudeBuildCmdIsReadOnlyAndHookless`, `TestClaudeBuildCmdNeverEmitsDeniedArgs`, `TestCodexBuildCmdNeverEmitsDeniedArgs`, `TestValidateRejectsUnsafeBackendArgs`, `TestSafeArgsDropsDeniedFlagsAndTheirValues`, Phase 4 tool-jail tests, Phase 7 gate tests |
-| T2 | Model output with terminal escapes or bidi controls rewrites the screen, the clipboard, or makes approved text read differently | `SanitizeModelText` drops C0/C1 controls and bidi controls before display, storage and delivery | `TestSanitizeModelTextDropsControlsKeepsNewlineTab`, `TestSanitizeDropsBidiControls`, `TestFeedSanitizesDetail`, `TestNamesAreSanitizedOnScreen`, `FuzzParseVerdict`, `FuzzParseDigest` |
+| T1 | Prompt injection in a transcript or a repository file makes a dot run tools that change things | Dots are read-only: claude `--tools Read,Grep,Glob` with hooks disabled, codex `--sandbox read-only`, API dots get a jailed read-only tool loop; denied backend args are dropped; write-capable dots (Phase 7) need two explicit approvals and never get a shell | `TestClaudeBuildCmdIsReadOnlyAndHookless`, `TestClaudeBuildCmdNeverEmitsDeniedArgs`, `TestCodexBuildCmdNeverEmitsDeniedArgs`, `TestValidateRejectsUnsafeBackendArgs`, `TestSafeArgsDropsDeniedFlagsAndTheirValues`, `TestResolveInRootRefusesEscapes`, `TestNoExistenceOracleOutsideRoot`, `TestDefaultDenyCoversCommonCredentialFiles`, `TestClaudeDraftGetsFileToolsAndNoShell`, `TestWriteToolsNeedBothWriteAndPassWrite`, `TestApplyPatchRefusesAPatchThatIsNotTheOneReviewed` |
+| T2 | Model output with terminal escapes or bidi controls rewrites the screen, the clipboard, or makes approved text read differently | `SanitizeModelText` drops C0/C1 controls and bidi controls before display, storage and delivery | `TestSanitizeModelTextDropsControlsKeepsNewlineTab`, `TestSanitizeModelTextRemovesBidiKeepsEmojiJoiners`, `FuzzDiffViewParse`, `FuzzParseCLIOutput`, `TestFeedSanitizesDetail`, `TestNamesAreSanitizedOnScreen`, `FuzzParseVerdict`, `FuzzParseDigest` |
 | T3 | Injected text becomes shared project memory ("always disable CSRF") | Model-written project memory waits as a proposal until the developer approves it seeing the full text; models can't write dismissed, preference or global entries, nor edit user or other dots' entries; memory goes only in the user prompt, framed as reference data | `TestApplyAddsDotActiveAndProjectProposed`, `TestApplyRefusesWhatModelsMayNotWrite`, `TestModelNeverRewritesDeveloperWording`, `TestUserPromptPutsMemoryBeforeConversation`, `TestApproveShowsTheFullProposalAndNeedsY` |
 | T4 | A model suppresses future findings by writing its own "dismissed" entries | Only outcome and user findings suppress repeats | `TestOutcomeMergePromotesModelFinding` and the Phase 2 final-fix suppression tests |
 | T5 | Approving something the developer didn't see (stale selection, clipped popup) | Selection by id; approve/pin refuse text that changed on disk; the approve screen refuses when the popup can't show it whole | `TestSelectionFollowsCardIDAcrossSnapshots`, `TestApproveAndPinRefuseTextThatChangedOnDisk`, `TestApproveShowsTheFullProposalAndNeedsY` |
-| T6 | Secrets end up in memory, the ledger, exports or packs | The secret scanner refuses model writes and asks before user writes; ledger lines that look like secrets are redacted; invisible characters can't split a key; packs never include credentials and are scanned (Phase 9) | `TestScanSecretsFindsCredentials`, `TestRecordOutcomeNeverStoresSecrets`, `TestInvisibleCharactersDoNotHideASecret`, `TestSecretNeedsASecondSave`, `FuzzScanSecrets`, Phase 9 export tests |
-| T7 | API keys leak to logs, the feed, snapshots, IPC, argv or errors | `credentials.toml` 0600 (DACL on Windows) or env indirection; `credentials.Redact` on every error path; keys never on argv | Phase 4 `credentials` and redaction tests, `FuzzCredentialsFile` |
-| T8 | A hostile repository runs code through git (`core.fsmonitor`, `core.pager`, hooks, lazy fetches) | Every git call passes `core.hooksPath` to the null device and `core.fsmonitor=false`; memory's git also `core.pager=cat`, `protocol.allow=never`, `GIT_NO_LAZY_FETCH=1`, and filters `GIT_*` overrides | `TestExecGitRunsNothingTheRepositoryConfigures`, `TestEveryGitCallDisablesRepositoryPrograms`, `TestExecGitNeverRunsHooks`, `TestResolveProjectIgnoresInheritedGitEnv` |
-| T9 | Repository project dots or imported packs smuggle risky capabilities | Project dots need a content-hashed trust; a changed file revokes trust; risky capabilities are clamped on import | Phase 9 trust and clamp tests, `FuzzDotpackParse` |
-| T10 | A dot name or slug from IPC/MCP names a file outside the dots dir | `dots.Load/Save/Delete` refuse slugs `Slugify` couldn't make; memory validates slugs and project ids before any path | `TestSlugsThatAreNotFileNamesAreRefused`, `TestUnsafeIDsAndSlugsAreRefused` |
-| T11 | Another local user talks to the engine or reads state | Socket in a 0700 directory with a 0600 socket (Unix); a per-user DACL'd named pipe with an owner check (Windows); state files 0600, dirs 0700; the feed is tightened to 0600 | `TestEnsureCreatesPrivateDirs`, `TestFilesArePrivate`, `TestOpenFeedMakesAnOldLooseFileOwnerOnly`, Phase 6 pipe tests |
+| T6 | Secrets end up in memory, the ledger, history, exports or packs | The secret scanner (`internal/secrets`) refuses model writes and asks before user writes; ledger lines and history excerpts that look like secrets are redacted; invisible characters can't split a key; packs never include credentials and are scanned (Phase 9) | `TestScanSecretsFindsCredentials`, `TestRecordOutcomeNeverStoresSecrets`, `TestInvisibleCharactersDoNotHideASecret`, `TestSecretNeedsASecondSave`, `FuzzScanSecrets`, `TestExportRefusesSecretsUnlessForced`, `TestExportRefusesDotSecretsEvenWhenForced` |
+| T7 | API keys leak to logs, the feed, snapshots, IPC, argv or errors | `credentials.toml` 0600 (DACL on Windows) or env indirection; `credentials.Redact` on every error path; keys never on argv | `TestPermissiveFileIsRefusedWithoutReadingIt`, `TestMalformedFileErrorNeverQuotesTheKey`, `TestEntryNeverFormatsItsKey`, `TestRedactMasksWholeAuthorizationValues`, `TestBrokenCredentialsAreReportedWithoutTheirText`, `FuzzCredentialsFile` |
+| T8 | A hostile repository runs code through git (`core.fsmonitor`, hooks, transports, lazy fetches) | Every git call passes `core.hooksPath` to the null device, `core.fsmonitor=false` and `protocol.allow=never`, with `GIT_ALLOW_PROTOCOL=none` and `GIT_NO_LAZY_FETCH=1`, and filters `GIT_*` overrides; drafts also turn off filters and submodule recursion | `TestExecGitRunsNothingTheRepositoryConfigures`, `TestEveryGitCallDisablesRepositoryPrograms`, `TestExecGitNeverRunsHooks`, `TestResolveProjectIgnoresInheritedGitEnv` |
+| T9 | Repository project dots or imported packs smuggle risky capabilities | Project dots need a content-hashed trust; a changed file revokes trust; risky capabilities are clamped on import | `TestAnyEditRevokesTrustAndChangesTheStamp`, `TestUntrustedFileIsClampedAndListsWhatItAsks`, `TestCorruptTrustFileFailsClosedAndIsNeverOverwritten`, `TestClampDotTurnsEveryRiskyCapabilityOff`, `FuzzDotpackParse`, `FuzzDecodeStrict` |
+| T10 | A dot name or slug from the popup, the CLI, IPC or MCP names a file outside the dots dir | `dots.Load/Save/Delete` refuse slugs `Slugify` couldn't make; memory validates slugs and project ids before any path | `TestSlugsThatAreNotFileNamesAreRefused`, `TestUnsafeIDsAndSlugsAreRefused` |
+| T11 | Another local user talks to the engine or reads state | Socket in a 0700 directory with a 0600 socket (Unix); a per-user DACL'd named pipe with an owner check (Windows); state files 0600, dirs 0700; the feed is tightened to 0600 | `TestEnsureCreatesPrivateDirs`, `TestFilesArePrivate`, `TestOpenFeedMakesAnOldLooseFileOwnerOnly`, `TestPipeOwnerError`, `TestCheckPrivateEntries` |
 | T12 | Malformed IPC input crashes or hangs the engine | Each connection decodes JSON into typed structs; unknown commands fail | `FuzzIPCDecode` |
-| T13 | A dot's delivered message re-triggers the same dot (loops, runaway spend) | Loop guard on the delivery header; inject never follows a dot-started turn; councils and consulted dots skip the next turn | `TestLoopGuardSkipsTurnStartedByThisDot`, `TestInjectForcedToQueueForDotStartedTurns`, Phase 3 and 5 loop-guard tests, `FuzzFromDots` |
-| T14 | Cost abuse: a chatty model, a recursion through MCP, background research | Call and dollar budgets per dot and per session, ask limits per turn, a global daily budget for background work, MCP tools refuse inside dot runs | `TestBudgetStopsDotAndWarnsOnce`, `TestPlanRefusesWhenThePaneBudgetIsShort`, Phase 4 dollar-budget tests, Phase 5 ask-limit tests, Phase 8 daily-budget tests |
+| T13 | A dot's delivered message re-triggers the same dot (loops, runaway spend) | Loop guard on the delivery header; inject never follows a dot-started turn; councils and consulted dots skip the next turn | `TestLoopGuardSkipsTurnStartedByThisDot`, `TestInjectForcedToQueueForDotStartedTurns`, `TestConsultedDotSkipsTheNextTurnOnly`, `FuzzFromDots` |
+| T14 | Cost abuse: a chatty model, a recursion through MCP, background research | Call and dollar budgets per dot and per session, ask limits per turn, a global daily budget for background work, MCP tools refuse inside dot runs | `TestBudgetStopsDotAndWarnsOnce`, `TestPlanRefusesWhenThePaneBudgetIsShort`, `TestDollarBudgetStopsTheDot`, `TestAskLimiterPerMinuteWindow`, `TestAskChargesDollarsAndRespectsTheDollarBudget`, `TestDailyBudgetStopsBackgroundRunsUntilMidnight`, `TestDecideBackgroundNeverUnlimited`, `TestEveryToolRefusesOutsideHerdr` |
 | T15 | Inject types into the agent while the developer is typing | Inject only when the agent is idle and the pane isn't focused; a runtime kill switch that fails closed | `TestInjectWaitsWhileFocusedThenFlushes`, `TestInjectKillSwitchAppliesAtRuntime`, `TestMalformedConfigKeepsLastGoodButDisablesInject`, `FuzzConfigLoad` |
-| T16 | A write-capable dot's patch escapes the worktree or touches `.git/` | Patch validation (no `.git/`, no escapes, size caps), apply only when the agent is idle, never stage or commit | Phase 7 `worktree.Validate` and apply tests |
+| T16 | A write-capable dot's patch escapes the worktree or touches `.git/` | Patch validation (no `.git/`, no escapes, size caps), apply only when the agent is idle, never stage or commit | `TestEscapesRefusesNTFSAliasesOfDotGit`, `TestValidateRefusesARenameOrCopyThatHidesASourcePath`, `TestACommittedSymlinkCannotBeRetargetedByAForgedDiff`, `TestAnApplyWithoutTheReviewedHashIsRefused`, `FuzzDiffHeaders` |
 | T17 | A tampered or substituted release binary | `build.sh`/`build.ps1` verify the archive against `release/SHA256SUMS` from the cloned tree and never run an unverified binary; the publish job refuses archives that differ from the committed checksums; cosign keyless signatures, checked by `verify-release` | `TestChecksumMismatchFallsBackToASourceBuild`, `TestArchiveWithoutTheBinaryIsRejected`, `TestVerifyReleaseRefusesATamperedArchive`, `TestVerifyReleaseRefusesAReplacedBinary`, `TestVerifyReleaseRunsCosignWithTheWorkflowIdentity` |
 | T18 | Vulnerable dependencies | Few, pinned modules; `govulncheck` in CI and before a release | the `vulncheck` CI job; Task 11 Step 3 result |
 | T19 | Files from a newer version are overwritten by an older binary (data loss after a downgrade) | `migrate.Run` marks them read-only; `WriteFileAtomic` refuses them; migrations back up first and run under the file's lock | `TestNewerFileIsReadOnlyAndNeverRewritten`, `TestFutureQueueIsReadButNeverRewritten`, `TestWritingCommandsProtectNewerFiles`, `TestLockedFileWaitsThenFailsWithoutChange` |
@@ -6741,20 +7104,22 @@ file the plugin can).
 - Homoglyph secrets (Cyrillic look-alikes) and secrets split by spaces pass the scanner.
 - The memory block and dot purposes are prompts: a determined injection can still make a dot *say* something wrong. Dots can't act on it (read-only), and memory written from it waits for approval.
 - `lockfile.Held` probes with the real lock (see the triage notes).
+- Research runs don't apply the developer's `tool_deny_globs` or their own `~/.claude` deny rules (`--restricted`); the plugin's secret-file deny list still applies, and research has no shell and no WebFetch.
+- A dot file the developer writes can still pass some `claude`/`codex` flags the denylist doesn't name (short forms, combined flags; see the triage notes). Imported and project dots keep no args but `--model`/`--effort`.
 - Linux and Windows privacy (modes, DACLs, pipes) is tested in CI only; not run on those systems here.
 ```
 
 - [ ] **Step 2: Check every test the table cites exists**
 
 Run: `for t in $(grep -o 'Test[A-Za-z0-9]*\|Fuzz[A-Za-z0-9]*' docs/security/threat-model.md | sort -u); do grep -rq "func $t(" --include='*_test.go' . || echo "missing: $t"; done`
-Expected: no output. For each `missing:` line, find the real name (`grep -rn '<keyword>' --include='*_test.go' .`) and fix the table; for each "Phase N ... tests" cell, replace it with the real test names from that phase (`grep -rn 'func Test' internal/<package>/`). If no test pins a mitigation, add the row to "Known gaps" instead of citing nothing.
+Expected: no output (the reconcile pass checked every name in the table against `dffabbf` plus Tasks 2–10). For a `missing:` line (a name Phase 9's final fix wave renamed), find the real name (`grep -rn '<keyword>' --include='*_test.go' .`) and fix the table. If no test pins a mitigation, add the row to "Known gaps" instead of citing nothing.
 
 - [ ] **Step 3: Run the security review and govulncheck**
 
 Run: `GOTOOLCHAIN=local go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./... 2>&1 | tail -20`
 Expected: `No vulnerabilities found.` If a vulnerability is reported in a dependency, bump that module (`go get <module>@<fixed version> && go mod tidy`) and rerun; if the tool can't be downloaded (offline) or doesn't build with Go 1.25, try `@latest`, and if that fails too, record "govulncheck: not run (reason)" in the review notes and in the ready-to-publish checklist as a user gate.
 
-Then run the Claude Code `security-review` skill over the whole repository (not only the branch diff), and read these files yourself: `internal/backend/claude.go`, `codex.go`, `exec.go`, `internal/backend/toolloop/*`, `internal/credentials/*`, `internal/memory/apply.go`, `secrets.go`, `project.go`, `internal/engine/deliver.go`, `internal/ipc/ipc.go`, `internal/mcpserver/*`, `internal/worktree/*`, `cmd/herdr-dots/uninstall.go`, `scripts/build.sh`, `scripts/build.ps1`, `.github/workflows/release.yml`.
+Then run the Claude Code `security-review` skill over the whole repository (not only the branch diff), and read these files yourself: `internal/backend/claude.go`, `codex.go`, `exec.go`, `args` handling in `internal/dots/args.go`, `internal/backend/toolloop/*`, `internal/credentials/*`, `internal/secrets/secrets.go`, `internal/memory/apply.go`, `importpack.go`, `project.go`, `internal/engine/deliver.go`, `draft.go`, `projectdots.go`, `internal/ipc/ipc.go`, `internal/mcpserver/*`, `internal/worktree/*`, `internal/projectdots/*`, `internal/dotpack/*`, `internal/history/history.go`, `internal/migrate/*`, `cmd/herdr-dots/uninstall.go`, `cmd/herdr-dots/verifyrelease.go`, `scripts/build.sh`, `scripts/build.ps1`, `.github/workflows/release.yml`.
 
 Create `docs/security/2026-10-08-security-review.md` with this structure and one row per finding (the skill's findings plus yours):
 
@@ -6822,8 +7187,8 @@ The full threat model is in [docs/security/threat-model.md](docs/security/threat
 
 - [ ] **Step 5: Verification gate**
 
-Run the six commands of "The verification gate".
-Expected: `gofmt` prints nothing; the other five succeed.
+Run the commands of "The verification gate".
+Expected: `gofmt` prints nothing; the others succeed.
 
 - [ ] **Step 6: Commit (never push)**
 
@@ -6840,29 +7205,32 @@ git commit -m "docs(security): threat model, security review and SECURITY.md (Ph
 **Depends on:** Tasks 6–10 (commands and behavior are final; the triage notes exist). Wave 3.
 
 **Files:**
-- Create: `docs/guide/README.md`, `docs/guide/dots.md`, `docs/guide/delivery.md`, `docs/guide/memory.md`, `docs/guide/council.md`, `docs/guide/backends.md`, `docs/guide/mcp.md`, `docs/guide/windows.md`, `docs/guide/write-capable.md`, `docs/guide/proactive.md`, `docs/guide/profiles-and-sharing.md`, `docs/guide/install-and-upgrade.md`, `CHANGELOG.md`, `CONTRIBUTING.md`
+- Create: `docs/guide/README.md`, `docs/guide/dots.md`, `docs/guide/delivery.md`, `docs/guide/memory.md`, `docs/guide/council.md`, `docs/guide/backends.md`, `docs/guide/mcp.md`, `docs/guide/windows.md`, `docs/guide/write-capable.md`, `docs/guide/proactive.md`, `docs/guide/profiles-and-sharing.md`, `docs/guide/privacy-and-safety.md`, `docs/guide/install-and-upgrade.md`, `CHANGELOG.md`, `CONTRIBUTING.md`
 - Modify: `README.md` (restructured)
 
 **Interfaces:**
 - Consumes: the README sections Phases 1–9 wrote (moved, not rewritten), Task 9's triage notes (known issues), Task 11's `SECURITY.md` and threat model (linked; Task 11 runs in the same wave, so link the paths whether or not they're merged yet).
-- Produces: README sections `## Status`, `## What it does`, `## Requirements`, `## Install`, `## Quick start`, `## Guide`, `## Privacy and safety`, `## Uninstall`, `## Known issues`, `## Roadmap history`, `## License`; the guide pages; `CHANGELOG.md` with `1.0.0-rc.1` and `0.1.0`–`0.9.0`; `CONTRIBUTING.md` with the schema rules. Task 13 rewrites only the `## Status` block.
+- Produces: README: the title, a status line, an intro paragraph, then `## Status`, `## Requirements`, `## Install`, `## Quick start`, `## Guide`, `## Privacy and safety`, `## Uninstall`, `## Known issues`, `## Roadmap history`, `## License`; the guide pages; `CHANGELOG.md` with `1.0.0-rc.1` and `0.1.0`–`0.9.0`; `CONTRIBUTING.md` with the schema rules. Task 13 rewrites only the `## Status` block.
 
 - [ ] **Step 1: Move the feature sections into the guide**
 
 For each README section Phases 1–9 wrote, move its text (verbatim, then fix headings to start at `##` and fix relative links) into the guide page below. Keep anything that doesn't fit a row in the README.
 
-| README section (as Phases 1–9 named it) | Guide page |
+| README section at `dffabbf` (heading as Phases 1–9 wrote it) | Guide page |
 |---|---|
-| Using it, Delivery modes | `docs/guide/delivery.md` (and the dot editor parts into `dots.md`) |
-| Keybindings, Files | `docs/guide/dots.md` |
-| Dot memory | `docs/guide/memory.md` |
-| Council mode | `docs/guide/council.md` |
-| API backends, keys and cost | `docs/guide/backends.md` |
-| MCP server | `docs/guide/mcp.md` |
-| Windows (beta) | `docs/guide/windows.md` |
-| Write-capable dots | `docs/guide/write-capable.md` |
-| Proactive dots | `docs/guide/proactive.md` |
-| Profiles, history and sharing | `docs/guide/profiles-and-sharing.md` |
+| `## Using it` (its intro) and `### Delivery modes` | `docs/guide/delivery.md` (the dot editor parts into `dots.md`) |
+| `## Keybindings`, `## Files` | `docs/guide/dots.md` |
+| `### Dot memory` | `docs/guide/memory.md` |
+| `### Council mode` | `docs/guide/council.md` |
+| `### Backends and keys` | `docs/guide/backends.md` |
+| `### Dots MCP server: let the main agent ask the dots` | `docs/guide/mcp.md` |
+| `## Windows (beta)` | `docs/guide/windows.md` |
+| `### Write-capable dots (drafts)` | `docs/guide/write-capable.md` |
+| `### Proactive dots (0.8.0)` | `docs/guide/proactive.md` (drop the version from the heading) |
+| `### Profiles, history and sharing (0.9.0)` | `docs/guide/profiles-and-sharing.md` (drop the version from the heading) |
+| `## Privacy and safety` (every bullet, verbatim) | `docs/guide/privacy-and-safety.md`; the README keeps the short list below and links it |
+| `## Known gaps in this scaffold` | merged into the README's `## Known issues` (the live-verification gaps stay there, worded without "scaffold") |
+| `## Roadmap` | the README's `## Roadmap history` table |
 
 Start each guide page with a one-line title and one sentence saying what the feature is, then the moved text. Create `docs/guide/install-and-upgrade.md` with:
 
@@ -6923,11 +7291,12 @@ Create `docs/guide/README.md`:
 - [Write-capable dots](write-capable.md)
 - [Proactive dots](proactive.md)
 - [Profiles, history and sharing](profiles-and-sharing.md)
+- [Privacy and safety](privacy-and-safety.md) (every safety rule in detail)
 ```
 
 - [ ] **Step 2: Rewrite the README around the guide**
 
-Replace the top of `README.md` up to the first moved section with the text below, keep any remaining Phase 1–9 text that didn't move, and end with the sections from `## Privacy and safety` on. Fill `## Known issues` from the triage notes' "Known issues" list (one bullet per group, each linking to `docs/superpowers/notes/2026-10-08-phase-10-triage.md` for detail). Keep the Phase 2 row marked **VITAL** in the roadmap history.
+Replace the top of `README.md` up to the first moved section with the text below, keep any remaining Phase 1–9 text that didn't move, and end with the sections from `## Privacy and safety` on. Fill `## Known issues` from the triage notes' "Known issues" list (one bullet per group, each linking to `docs/superpowers/notes/2026-10-08-phase-10-triage.md` for detail), followed by the live-verification gaps from the old `## Known gaps in this scaffold` section (Codex not live-verified, API backends other than Ollama not live-verified, Windows not run, drafts and proactive dots not run end to end in Herdr, and so on), each kept as written there except the word "scaffold". Keep the Phase 2 row marked **VITAL** in the roadmap history.
 
 ```markdown
 # Herdr Dots
@@ -6949,7 +7318,8 @@ you're away, and can be shared with your team.
 
 1.0.0-rc.1 is a release candidate. What is still open before a 1.0.0
 release: a license, publishing, the three-OS acceptance run on real Linux and
-Windows machines, and live tests with Codex. See
+Windows machines, and the live provider checks (Claude, the API backends and
+Codex). See
 [docs/release/ready-to-publish.md](docs/release/ready-to-publish.md).
 
 ## Requirements
@@ -6984,7 +7354,7 @@ profiles and sharing, install and upgrade.
 - Memory and history stay on your machine, in the plugin's state directory; every entry can be listed, edited, forgotten or purged.
 - Keys stay in `credentials.toml` (owner-only) or environment variables.
 - `NO_COLOR=1` turns colors off (bold, dim and reverse stay).
-- Security policy: [SECURITY.md](SECURITY.md); threat model: [docs/security/threat-model.md](docs/security/threat-model.md).
+- Every rule in detail: [docs/guide/privacy-and-safety.md](docs/guide/privacy-and-safety.md). Security policy: [SECURITY.md](SECURITY.md); threat model: [docs/security/threat-model.md](docs/security/threat-model.md).
 
 ## Uninstall
 
@@ -7033,7 +7403,7 @@ milestones, never released.
 - `herdr-dots uninstall-extras [--purge]`.
 - Snapshot broadcasts capped at 10 a second and 256 KB; an 8-hour soak test.
 - Fuzz tests for every parser; `govulncheck` in CI.
-- Hardening: git never runs programs a repository configures; secrets split by invisible characters are caught; bidi controls are stripped from model text; the memory approve screen refuses when the popup can't show the whole proposal; nested repositories are their own projects; deleting a dot also deletes its ledger quotes; dot names can't escape the dots directory.
+- Hardening: secrets split by invisible characters are caught; the memory approve screen refuses when the popup can't show the whole proposal; nested repositories are their own projects; dot names can't escape the dots directory; an old feed file becomes owner-only; two panics are gone; a memory export of an unsaved entry imports again; every git call's repository-program guard is pinned by a test.
 - Threat model, security review, user guide, `SECURITY.md`, `CONTRIBUTING.md`.
 
 ## 0.9.0
@@ -7141,8 +7511,8 @@ Expected: no output, except links to `SECURITY.md` and `docs/security/threat-mod
 
 - [ ] **Step 6: Check the wording rules**
 
-Run: `grep -n -i -E '\b(released|ready|done|finished|feature complete)\b' README.md CHANGELOG.md docs/guide/*.md | grep -v -i -E 'not released|never released|release candidate|ready-to-publish'`
-Expected: no output (the README says "not released"; "feature complete" appears only after Task 13).
+Run: `grep -n -i -E '\b(released|ready|done|finished|feature complete)\b' README.md CHANGELOG.md docs/guide/*.md | grep -v -i -E 'not released|never released|release candidate|ready-to-publish|Patch ready|finished run|reports .done.'`
+Expected: no output (the README says "not released"; "feature complete" appears only after Task 13). The three exclusions after `ready-to-publish` are technical text moved verbatim from Phases 7–8 (`*Patch ready: …*`, the message a draft sends; "a finished run"; Herdr reporting the `done` agent status).
 
 - [ ] **Step 7: Commit (never push)**
 
@@ -7175,18 +7545,17 @@ Expected: it runs for about 8 h 11 min. Continue with Steps 2–5 meanwhile. If 
 Run, one after the other:
 
 ```bash
-gofmt -l .
+gofmt -l internal cmd scripts
 GOTOOLCHAIN=local go vet ./...
-GOTOOLCHAIN=local go test -race -count=1 ./... 2>&1 | tail -45
+GOTOOLCHAIN=local go test -race -count=1 ./... 2>&1 | tail -50
 GOTOOLCHAIN=local make cross
 GOTOOLCHAIN=local sh scripts/fuzz.sh 60s 2>&1 | tail -3
 HERDR_DOTS_E2E_RELEASE=1 GOTOOLCHAIN=local go test -run TestLocalReleaseInstallsEndToEnd -v -timeout 10m ./scripts/ 2>&1 | tail -3
 GOTOOLCHAIN=local go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./... 2>&1 | tail -3
 actionlint .github/workflows/*.yml && shellcheck -s sh scripts/*.sh && echo lint-ok
-GOTOOLCHAIN=local go test -tags live -count=1 ./internal/backend/ ./internal/council/ 2>&1 | tail -6
 ```
 
-Expected: `gofmt` prints nothing; vet and every package pass; `make cross` succeeds; `fuzzed N targets for 60s each`; the release e2e passes; `No vulnerabilities found.` (or the recorded reason); `lint-ok`; the live tests pass for claude and skip Codex (`codex not installed`), with a small API spend. Before and after the live tests, snapshot `~/.claude/settings.json` (`cp ~/.claude/settings.json "${TMPDIR:-/tmp}/settings.before"` then `diff "${TMPDIR:-/tmp}/settings.before" ~/.claude/settings.json`); the diff must be empty.
+Expected: `gofmt` prints nothing; vet and every package pass; `make cross` succeeds; `fuzzed 24 targets for 60s each`; the release e2e passes; `No vulnerabilities found.` (or the recorded reason); `lint-ok`. The live provider tests (`go test -tags live ./internal/backend/ ./internal/council/`, which spend API money) are not run here: live provider checks are a user gate (Plan decision 34), listed in the ready-to-publish checklist.
 
 - [ ] **Step 3: Live smoke on macOS (no plugin link)**
 
@@ -7194,8 +7563,9 @@ Using only `herdr --session dots-test` and the manual-env method Phase 2 Task 16
 1. `./bin/herdr-dots --version` → `herdr-dots 1.0.0-rc.1 (source, commit ...)`.
 2. Start the engine for the test session; check `engine.log` has no `migrate:` warnings on a fresh state dir.
 3. Write `{"version":2,"cards":[]}` into the session's `queue.json` before starting the engine a second time: the engine starts, the Herdr test session shows the toast naming `queue.json`, and the file is unchanged afterwards.
-4. Create a Security dot from the template, attach it to a Claude Code pane in the test session, ask the agent for a small change with an obvious secret in it, and check a card arrives; dismiss it; repeat the same request and check the feed says `suppressed`.
-5. Open the memory screen in a popup shrunk to under 10 lines with a proposal selected, press `a`, and check it says "Too small to show the whole proposal" and `y` doesn't approve.
+4. Make one proposal without any provider: `./bin/herdr-dots memory import` (with the same env) a file holding one project entry with `status = "proposed"` (write it with `memory export`, then edit the status), open the memory screen in a popup shrunk to under 10 lines with that proposal selected, press `a`, and check it says "Too small to show the whole proposal" and `y` doesn't approve.
+
+The provider part of the old smoke (attach a Security dot to a Claude Code pane, get a card, dismiss it, see `suppressed` on a repeat) needs a live model: it is a user gate (Plan decision 34), listed in the ready-to-publish checklist with the live tests.
 
 Record each step's result (command output or a short description; screenshots are optional) for Step 4.
 
@@ -7228,12 +7598,13 @@ and "8-hour run: user gate")
 
 ## Result
 
-On macOS, every item that can be shown without publishing, a license, Codex
-or other operating systems has evidence above.
+On macOS, every item that can be shown without publishing, a license, a live
+model provider or other operating systems has evidence above.
 The product is feature complete on paper.
 Not met yet, and required before 1.0.0: the Linux and
-Windows columns, the Codex items, the license, publishing and the
-marketplace listing (see docs/release/ready-to-publish.md).
+Windows columns, the live provider checks (Claude, API backends, Codex), the
+license, publishing and the marketplace listing (see
+docs/release/ready-to-publish.md).
 ```
 
 If any macOS-testable item has no evidence or fails, stop: fix it (a new task in this wave, with a test) or record it in the Result paragraph as a failure, and do not write "feature complete on paper" in Steps 4–6.
@@ -7253,6 +7624,7 @@ needs the owner. Nothing has been pushed, tagged, listed or published.
 - [ ] **License.** Choose one (the spec suggested Apache-2.0 for its patent grant, or MIT) and add `LICENSE`. No license means no one may use the code.
 - [ ] **Name.** Keep "Herdr Dots" or rename. OpenAI announced "Dots" (DevDay 2026); a rename later is supported by `internal/migrate` but touches the plugin id, binary and docs. Check the name on GitHub and herdr.dev/plugins.
 - [ ] **Acceptance on Linux and Windows.** Run `docs/superpowers/notes/1.0-acceptance.md` on a Linux machine and on Windows with the Herdr Windows beta, and on macOS with a real `herdr plugin install`; fill the Linux and Windows columns.
+- [ ] **Live provider checks.** With Claude Code logged in, run `go test -tags live ./internal/backend/ ./internal/council/` (a small API spend; snapshot `~/.claude/settings.json` before and diff it after: it must not change) and the live smoke in a `herdr --session dots-test` session: attach a Security dot to a Claude Code pane, get a card for an obvious secret, dismiss it, and see `suppressed` in the feed when the same request repeats. Run the API backends' live tests with your keys (`docs/superpowers/notes/2026-10-08-phase-4-verification.md`).
 - [ ] **Codex.** Install Codex, log in, run `go test -tags live ./internal/backend/ ./internal/council/` and the Codex rows of the acceptance run.
 - [ ] **Soak.** (only if Task 13 recorded it as a user gate) `make soak SOAK_DURATION=8h`.
 - [ ] **govulncheck.** (only if it couldn't run) `make vulncheck`.
@@ -7288,27 +7660,28 @@ In `README.md`, replace the status line under the title and the `## Status` sect
 > **Status: release candidate 1.0.0-rc.1, not released.**
 > Feature complete on paper: every roadmap phase is built and the macOS
 > acceptance run has evidence for every item it can show. Not yet verified on
-> Linux or Windows hardware, Codex not live-verified, no license, not published.
+> Linux or Windows hardware, live providers and Codex not verified in this run,
+> no license, not published.
 ```
 
 ```markdown
 ## Status
 
 Every roadmap phase (1–10) is built, and on macOS the acceptance checklist
-has evidence for every item that doesn't need publishing, a license, Codex
-or another OS ([notes](docs/superpowers/notes/1.0-acceptance.md)). Open
-before 1.0.0: the acceptance run on Linux and Windows hardware, the Codex
-live tests, a license, and publishing
+has evidence for every item that doesn't need publishing, a license, a live
+model provider or another OS ([notes](docs/superpowers/notes/1.0-acceptance.md)).
+Open before 1.0.0: the acceptance run on Linux and Windows hardware, the live
+provider checks (Claude, API backends, Codex), a license, and publishing
 ([checklist](docs/release/ready-to-publish.md)).
 ```
 
-In the roadmap, change the Phase 10 row's increment cell to `Release hardening (1.0.0-rc.1 built; 1.0.0 waits on the user gates in docs/release/ready-to-publish.md)`; leave every checklist checkbox unchecked (the roadmap's checklist is for the three-OS run).
+In `docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md`, in the Phases table, replace the Phase 10 row's version and increment cells, `| 10 | 1.0.0 | Rename, hardening, marketplace release; **feature complete only when the checklist passes** |`, with `| 10 | 1.0.0-rc.1 (1.0.0 is a user gate) | Release hardening (1.0.0-rc.1 built; 1.0.0 waits on the user gates in docs/release/ready-to-publish.md); **feature complete only when the checklist passes** |`, keeping the row's last three cells. This is the only roadmap edit (Phases 2–9 left the roadmap alone; Phase 10's row is its own). Leave every checklist checkbox unchecked (the roadmap's checklist is for the three-OS run).
 
 Fill `## Phase 10 wrap-up` in the Task 1 notes with: the soak result, the fuzz result (targets × time, crashers fixed), govulncheck, the security review summary (counts by severity, fixed vs known), and the user gates that remain (copy the Blockers list).
 
 - [ ] **Step 7: Wording check**
 
-Run: `grep -rn -i -E '\b(released|ready|done|finished)\b' README.md CHANGELOG.md docs/guide docs/release docs/superpowers/notes/1.0-acceptance.md | grep -v -i -E 'not released|never released|ready to publish|ready-to-publish|release candidate|may .* say .released'`
+Run: `grep -rn -i -E '\b(released|ready|done|finished)\b' README.md CHANGELOG.md docs/guide docs/release docs/superpowers/notes/1.0-acceptance.md | grep -v -i -E 'not released|never released|ready to publish|ready-to-publish|release candidate|may .* say .released|Patch ready|finished run|reports .done.'`
 Expected: no output. `feature complete` appears only together with `on paper`: `grep -rn -i 'feature complete' README.md docs/superpowers/notes/1.0-acceptance.md | grep -v -i 'on paper'` prints nothing.
 
 - [ ] **Step 8: Wait for the soak, then commit (never push, never tag)**
@@ -7334,10 +7707,12 @@ Checked against the spec (with the decisions doc's amendments) after writing.
 - Criterion 5 (acceptance run on three OSes before 1.0.0): Task 13 for macOS; Linux/Windows and the `1.0.0` tag are user gates; the version is `1.0.0-rc.1`.
 - F5 (committed checksums anchoring trust): build scripts read only `release/SHA256SUMS` from the clone; the release flow commits it through a PR (Plan decision 14). F6 (cosign optional verification): release workflow and `verify-release`. F7: Plan decision 2. F8: Task 3 (spec list plus extras, decision 7). F9: Task 4. F10: README and threat model T21. F11: Task 8. F12: Tasks 11–12 (no LICENSE, ruling 16).
 - §6.3 startup migrations and read-only mode with a toast: Tasks 2 and 7. §7 UI: migration notice dropped with the rename; `--version` shows source and commit (Task 5); manage footer dropped (decision 22). §8.1 errors: checksum mismatch → fallback (Task 6), legacy dirs n/a, partial copy n/a, failed migration → untouched, read-only, reported (Task 2). §8.2 safety: Task 11. §8.3 testing: migration fixtures (Task 2), build script with httptest (Task 6), fuzz (Task 3), soak (Task 4/13), acceptance (Task 13).
-- Deferred-minor triage (dispatch requirement): Tasks 9 and 10, with the rule for later ledger lines; the four notable Phase 2 items are folded.
+- Deferred-minor triage (dispatch requirement): Tasks 9 and 10 read every ledger (v1 to Phase 9, "Parked → Phase 10" lines included) and fold, mark as already fixed, or list each line; the two known flaky tests are stabilized in Task 10.
 
 **Placeholder scan:** every code step has complete code (generated from the compiled scratch copy). The steps that ask the executor to fill text from real output (Task 1 RESULT lines, Task 9 later ledger lines, Task 11 review findings and test-name check, Task 12 moved README sections, Task 13 evidence) are evidence-capture steps with an exact format and a rule, because the content only exists at execution time.
 
 **Type consistency:** `migrate.Report` fields (`Migrated`, `Pending`, `ReadOnly`, `Failed`, `Corrupt`, `Backups`) are used the same way in Tasks 2 and 7; `fsutil.ProtectNewer`/`Protected`/`ResetProtected`/`ErrNewerVersion` in Tasks 2 and 7; `version.String()`/`Source`/`Commit` in Tasks 5 and 6; archive names `herdr-dots_<VERSION>_<os>_<arch>` in Tasks 5 and 6 (and pinned by `TestGoReleaserConfigMatchesTheInstallScripts`); `keys.RemoveBlock` returns `(out, removed, left, err)` in Task 8 only.
 
 **Review Focus:** each of the five lines has its tests in the owning task (listed in the section).
+
+**Reconcile pass (2026-10-09, against `dffabbf`, Phases 2–9 merged):** every task was replayed in wave order from this text in a scratch worktree, then replayed a second time from the final text onto a fresh `dffabbf`; the two trees matched. Plan decisions 24–41 record what changed and why; the final text was also replayed on `0205616`, where Phase 9's final fix wave landed during the pass. Code blocks were rewritten where the merged code differed (writers and kinds in Task 2, five new fuzz targets and the dotpack, credentials and Codex invariants in Task 3, the engine hunks in Task 4, the version pin and manifest in Task 5, `verify-release`'s child process in Task 6, the writing commands in Task 7, the binding count and Windows-portable tests in Task 8, the whole of Task 9, the slug rule and the flaky tests in Task 10); the spec's design, the existing tests and the decisions are kept. The docs tasks (11–13) were checked against the merged tree: every test the threat model cites exists, the README table names the real headings, and the live provider checks moved to the user gates.
