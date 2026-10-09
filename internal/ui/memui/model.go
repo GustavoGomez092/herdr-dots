@@ -22,6 +22,7 @@ type Deps struct {
 	Dot     string         // dot slug; "" opens project memory
 	DotName string
 	Notify  func() // tells the engine memory changed; may be nil
+	Notice  string // shown as the first status line (e.g. why project memory is missing)
 }
 
 // errChanged stops approve/pin when the stored text is no longer the text on screen.
@@ -135,7 +136,7 @@ func New(d Deps) Model {
 	case d.Project.ID != "":
 		views = []scopeView{viewProject, viewAll}
 	}
-	m := Model{d: d, views: views, input: textinput.New()}
+	m := Model{d: d, views: views, input: textinput.New(), status: d.Notice}
 	for i, ph := range []string{"one sentence", "convention | decision | finding | dismissed | preference | note", "globs, comma-separated (optional)"} {
 		m.fields[i] = textinput.New()
 		m.fields[i].Placeholder = ph
