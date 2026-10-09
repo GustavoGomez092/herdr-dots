@@ -239,9 +239,9 @@ func (e *Engine) askable(paneID, slug string) (dots.Dot, error) {
 }
 
 // askBlockedLocked is why the dot can't be asked now, or nil. A dot answers
-// one thing at a time (an ask, a turn review or a memory pass), and asks in
-// flight on the pane count as calls already made, so parallel asks can't
-// jointly overspend a call budget. A dollar cost is known only after a run,
+// one thing at a time (an ask, a turn review or a memory pass), and asks,
+// drafts and background runs in flight on the pane count as calls already
+// made, so they can't jointly overspend a call budget. A dollar cost is known only after a run,
 // so the dollar checks see spend so far; one ask per dot bounds the
 // overshoot as for turn reviews. Caller holds e.mu (e.mu -> stores).
 func (e *Engine) askBlockedLocked(paneID string, d dots.Dot, paused bool) error {
@@ -262,12 +262,9 @@ func (e *Engine) askBlockedLocked(paneID string, d dots.Dot, paused bool) error 
 	case paused:
 		return fmt.Errorf("%s is %w", d.Name, ErrPaused)
 	}
-	inFlight := 0 // asks of the pane's other dots (this one has none: refused above)
-	for x := range e.asking {
-		if x.pane == paneID {
-			inFlight++
-		}
-	}
+	// Asks of the pane's other dots (this one has none: refused above), live
+	// drafts and background runs (Phase 8, ruling P8-R2) in flight.
+	inFlight := e.inFlightLocked(paneID, key{})
 	cfg := e.config()
 	if e.d.Usage.Calls(paneID, d.Slug) >= d.Budget.MaxCallsPerSession || OverUSD(e.d.Usage.Cost(paneID, d.Slug), d.Budget.MaxUSDPerSession) {
 		return fmt.Errorf("%s: %w for this agent session", d.Name, ErrBudget)

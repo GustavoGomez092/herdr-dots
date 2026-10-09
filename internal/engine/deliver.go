@@ -171,6 +171,8 @@ func (e *Engine) poll() {
 		e.checkSession(a, p)
 		e.flushAuto(a.PaneID)
 	}
+	e.todayTick()
+	e.inboxTick()
 }
 
 func (e *Engine) dropPane(paneID string) {
@@ -179,19 +181,19 @@ func (e *Engine) dropPane(paneID string) {
 	e.abandonDrafts(paneID, "")
 	e.abandonCouncil(paneID) // a closed pane gets no council card
 	e.unwatch(paneID)
-	// Orphan cards first: the attachment disappearing is the visible signal that
-	// the pane is fully handled.
-	if n, err := e.d.Queue.OrphanPane(paneID); err != nil {
-		e.d.Logf("orphan cards for %s: %v", paneID, err)
-	} else if n > 0 {
-		e.d.Logf("pane %s closed: %d card(s) orphaned", paneID, n)
-	}
 	// Under e.mu (e.mu -> stores), as charge and restoreStatus check the
 	// attachment: a run ending now either lands before the reset or sees the
-	// pane gone, and a reused pane id inherits no spend or status.
+	// pane gone, and a reused pane id inherits no spend or status. The cards
+	// are orphaned in the same section, after the generation bump and before
+	// the delete: a card added under e.mu with a pane check (a scheduled
+	// result, a claimed inbox card) either lands before it and is orphaned
+	// here, or sees the pane gone. Snapshots take e.mu too, so none shows the
+	// attachment gone with its cards still pending.
+	e.hook("drop-before-lock")
 	e.mu.Lock()
 	e.abandonDraftsLocked(paneID, "") // same section as the delete (see Draft)
 	e.gens[paneID]++
+	orphaned, oerr := e.d.Queue.OrphanPane(paneID)
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)
 	for k := range e.status {
@@ -200,6 +202,11 @@ func (e *Engine) dropPane(paneID string) {
 		}
 	}
 	e.mu.Unlock()
+	if oerr != nil {
+		e.d.Logf("orphan cards for %s: %v", paneID, oerr)
+	} else if orphaned > 0 {
+		e.d.Logf("pane %s closed: %d card(s) orphaned", paneID, orphaned)
+	}
 	// After the attachment is gone: in-flight MCP asks end with ErrPaneClosed
 	// and nothing can re-mark the dead pane.
 	e.cancelAsks(paneID)

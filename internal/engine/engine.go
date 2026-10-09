@@ -45,6 +45,12 @@ type Deps struct {
 	Memory         *memory.Store                            // nil = memory off (v1 behavior)
 	ResolveProject func(cwd string) (memory.Project, error) // nil = memory.ResolveProject with git
 
+	// Proactive dots (Phase 8). A nil Daily turns research, schedules and
+	// commit triggers off; a nil Inbox drops results for unattached projects.
+	Clock func() time.Time // nil = time.Now; every proactive timer reads it
+	Daily *state.Daily     // STATE_DIR/daily.json, shared by every session
+	Inbox *queue.Inbox     // STATE_DIR/inbox.json, shared by every session
+
 	// Drafts (Phase 7). Patches nil = drafts unavailable.
 	Patches      *patchstore.Store // SessionDir/patches
 	WorktreesDir string            // SessionDir/worktrees
@@ -128,6 +134,17 @@ type Engine struct {
 	cleanupStop func(step string) bool // tests only: true = the process "dies" before that cleanup step
 	testHook    func(point string)     // tests only: called at named points of apply and discard
 
+	// Proactive state (Phase 8), guarded by mu. Daily, inbox, memory and git
+	// I/O never happen under mu.
+	bgBusy   map[key]string    // the running background job (it holds bgSem) -> its kind
+	bgQueued map[key]int       // background jobs queued or running per key, for dedupe
+	bgSem    chan struct{}     // one background run at a time per engine
+	today    state.Day         // last daily.json read (snapshot and roster hints)
+	todayAt  time.Time         // when today was read
+	dailyErr string            // the local date a run's cost could not be recorded: no more background work that day
+	inboxAt  time.Time         // last inbox sweep
+	toasted  map[string]string // once-a-day toasts: key -> date
+
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
 	wg     sync.WaitGroup
@@ -189,6 +206,10 @@ func New(d Deps) *Engine {
 		learning: map[key]bool{},
 		memStats: map[string]memory.Stats{},
 		origBody: map[string]string{},
+		bgBusy:   map[key]string{},
+		bgQueued: map[key]int{},
+		bgSem:    make(chan struct{}, 1),
+		toasted:  map[string]string{},
 		drafts:   map[string]*draftRun{},
 		applying: map[string]bool{},
 		gens:     map[string]uint64{},
@@ -327,6 +348,10 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	}
 	if pr.ID != "" {
 		e.spawn(func() { e.seeProject(pr) })
+	}
+	if a, ok := e.d.Attachments.Get(paneID); ok && a.ProjectID != "" {
+		pid := a.ProjectID
+		e.spawn(func() { e.claimInbox(paneID, pid) }) // scheduled results waiting for this project
 	}
 	e.subscribe(paneID)
 	e.spawn(func() { e.processPaneIfIdle(paneID) })
@@ -931,6 +956,10 @@ func (e *Engine) Snapshot() view.Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll, WriteEnabled: e.config().WriteEnabled}
+	now := e.now()
+	if day := e.todayLocked(now); e.d.Daily != nil {
+		s.TodayUSD, s.TodayRuns, s.DailyBudgetUSD = day.CostUSD, day.Total(), dailyBudget(e.config().DailyBudgetUSD)
+	}
 	slugs := make([]string, 0, len(e.dots))
 	for slug := range e.dots {
 		slugs = append(slugs, slug)
@@ -973,6 +1002,12 @@ func (e *Engine) Snapshot() view.Snapshot {
 				MemoryEntries: ms.Entries[da.Slug], Learning: e.learning[key{a.PaneID, da.Slug}],
 				CostUSD: e.d.Usage.Cost(a.PaneID, da.Slug), CostUnknown: !e.d.Usage.CostKnown(a.PaneID, da.Slug),
 				BudgetUSD: d.Budget.MaxUSDPerSession})
+		}
+		for i := range pv.Dots { // Phase 8: proactive hint and background run per dot
+			if d, ok := e.dots[pv.Dots[i].Slug]; ok {
+				pv.Dots[i].Next = e.nextLocked(d, a.PaneID, now)
+			}
+			pv.Dots[i].Background = e.bgBusy[key{a.PaneID, pv.Dots[i].Slug}]
 		}
 		pv.Cards = e.d.Queue.Visible(a.PaneID)
 		pv.Drafts = e.draftViews(a.PaneID)

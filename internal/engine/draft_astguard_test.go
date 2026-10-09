@@ -16,8 +16,9 @@ import (
 // writeToolViolations lists the places in f that could start a run with write
 // tools: a backend.Request literal (keyed, positional, or with its type elided
 // inside a slice, array or map literal) that sets or may set Write or Pass,
-// an assignment to a .Write field, a .Pass assignment other than PassMemory or
-// PassReview, and (outside package backend, whose adapters only read it) any
+// an assignment to a .Write field, a .Pass assignment other than PassMemory,
+// PassReview or backend.PassResearch (Phase 8's read-only research pass), and
+// (outside package backend, whose adapters only read it) any
 // use of PassWrite. Reads of r.Write and comparisons with PassWrite inside
 // package backend are fine: that is how adapters honor a draft.
 func writeToolViolations(fset *token.FileSet, f *ast.File) []string {
@@ -93,12 +94,49 @@ func writeToolViolations(fset *token.FileSet, f *ast.File) []string {
 						if r, ok := x.Rhs[i].(*ast.SelectorExpr); ok && (r.Sel.Name == "PassMemory" || r.Sel.Name == "PassReview") {
 							okRHS = true
 						}
+						okRHS = okRHS || isResearchPass(x.Rhs[i])
 					}
 					if !okRHS {
-						report(x, ".Pass assigned something other than PassMemory/PassReview")
+						report(x, ".Pass assigned something other than PassMemory/PassReview/PassResearch")
 					}
 				}
 			}
+		}
+		return true
+	})
+	return out
+}
+
+// isResearchPass: exactly backend.PassResearch (a research pass is read-only,
+// like a review; Phase 8's background runs set it by assignment).
+func isResearchPass(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "PassResearch" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "backend"
+}
+
+// researchPassSites lists the assignments of backend.PassResearch to a .Pass
+// field in f, as "<lhs>.Pass at <file>".
+func researchPassSites(fset *token.FileSet, f *ast.File) []string {
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		x, ok := n.(*ast.AssignStmt)
+		if !ok || len(x.Lhs) != len(x.Rhs) {
+			return true
+		}
+		for i, l := range x.Lhs {
+			sel, ok := l.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Pass" || !isResearchPass(x.Rhs[i]) {
+				continue
+			}
+			lhs := "?"
+			if id, ok := sel.X.(*ast.Ident); ok {
+				lhs = id.Name
+			}
+			out = append(out, lhs+".Pass at "+filepath.ToSlash(fset.Position(x.Pos()).Filename))
 		}
 		return true
 	})
@@ -118,16 +156,20 @@ func violationsIn(t *testing.T, src string) []string {
 // The detector itself: every way of building a write request is caught.
 func TestTheWriteToolGuardCatchesEveryWayToBuildAWriteRequest(t *testing.T) {
 	bad := map[string]string{
-		"keyed Write":   `package x; var _ = backend.Request{Write: true}`,
-		"keyed Pass":    `package x; var _ = backend.Request{Pass: "write"}`,
-		"elided slice":  `package x; var _ = []backend.Request{{Write: true}}`,
-		"elided map":    `package x; var _ = map[string]backend.Request{"a": {Pass: p}}`,
-		"elided ptr":    `package x; var _ = []*backend.Request{{Write: true}}`,
-		"positional":    `package x; var _ = backend.Request{"a", "b"}`,
-		"assign Write":  `package x; func f(r backend.Request) { r.Write = true }`,
-		"assign Pass":   `package x; func f(r backend.Request) { r.Pass = backend.PassWrite }`,
-		"assign Pass 2": `package x; func f(r backend.Request, s string) { r.Pass = s }`,
-		"PassWrite":     `package x; var _ = backend.PassWrite`,
+		"keyed Write":    `package x; var _ = backend.Request{Write: true}`,
+		"keyed Pass":     `package x; var _ = backend.Request{Pass: "write"}`,
+		"elided slice":   `package x; var _ = []backend.Request{{Write: true}}`,
+		"elided map":     `package x; var _ = map[string]backend.Request{"a": {Pass: p}}`,
+		"elided ptr":     `package x; var _ = []*backend.Request{{Write: true}}`,
+		"positional":     `package x; var _ = backend.Request{"a", "b"}`,
+		"assign Write":   `package x; func f(r backend.Request) { r.Write = true }`,
+		"assign Pass":    `package x; func f(r backend.Request) { r.Pass = backend.PassWrite }`,
+		"assign Pass 2":  `package x; func f(r backend.Request, s string) { r.Pass = s }`,
+		"PassWrite":      `package x; var _ = backend.PassWrite`,
+		"other research": `package x; func f(r backend.Request) { r.Pass = other.PassResearch }`,
+		"bare research":  `package x; func f(r backend.Request) { r.Pass = PassResearch }`,
+		"research lit":   `package x; var _ = backend.Request{Pass: backend.PassResearch}`,
+		"research+write": `package x; func f(r backend.Request) { r.Pass, r.Write = backend.PassResearch, true }`,
 	}
 	for name, src := range bad {
 		if len(violationsIn(t, src)) == 0 {
@@ -136,6 +178,7 @@ func TestTheWriteToolGuardCatchesEveryWayToBuildAWriteRequest(t *testing.T) {
 	}
 	good := map[string]string{
 		"memory pass":   `package x; func f(r backend.Request) { r.Pass, r.Question = backend.PassMemory, "" }`,
+		"research pass": `package x; func f(r backend.Request) { r.Pass = backend.PassResearch }`,
 		"read":          `package x; func f(r backend.Request) bool { return r.Write }`,
 		"other literal": `package x; var _ = view.LibraryDot{Write: true}`,
 		"plain request": `package x; var _ = backend.Request{Model: "m", Cwd: "/"}`,
@@ -157,6 +200,7 @@ func TestTheWriteToolGuardCatchesEveryWayToBuildAWriteRequest(t *testing.T) {
 func TestOnlyDraftsAskForWriteTools(t *testing.T) {
 	fset := token.NewFileSet()
 	checked := 0
+	var research []string
 	for _, root := range []string{"../../internal", "../../cmd"} {
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -173,6 +217,9 @@ func TestOnlyDraftsAskForWriteTools(t *testing.T) {
 				return err
 			}
 			checked++
+			if f.Name.Name != "backend" && f.Name.Name != "toolloop" {
+				research = append(research, researchPassSites(fset, f)...)
+			}
 			for _, v := range writeToolViolations(fset, f) {
 				t.Errorf("%s (only internal/engine/draft.go may start a write run)", v)
 			}
@@ -184,6 +231,10 @@ func TestOnlyDraftsAskForWriteTools(t *testing.T) {
 	}
 	if checked < 50 {
 		t.Fatalf("only %d files checked: the walk is wrong", checked)
+	}
+	// Phase 8: the one research pass is runBackground's req.Pass assignment.
+	if len(research) != 1 || research[0] != "req.Pass at ../../internal/engine/background.go" {
+		t.Errorf("backend.PassResearch assignments %v, want exactly req.Pass in internal/engine/background.go", research)
 	}
 }
 
