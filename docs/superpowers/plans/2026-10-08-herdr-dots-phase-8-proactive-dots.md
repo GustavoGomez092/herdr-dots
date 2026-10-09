@@ -11,32 +11,35 @@
 **Spec:** `docs/superpowers/specs/2026-10-08-herdr-dots-phase-8-proactive-dots-design.md`, approved with the amendments in `docs/superpowers/decisions/2026-10-08-phase-decisions.md` (ruling 3: this phase is in scope for "feature complete"; ruling 10: schedules run only while Herdr runs, with catch-up at the next start, no daemon outside Herdr, and a daily budget of $1.00 by default; ruling 4: write cross-platform code with Phase 6's helpers). This plan replaces the outline `docs/superpowers/plans/drafts/2026-10-08-herdr-dots-phase-8-proactive-dots-outline.md`.
 
 **Preconditions (check before Task 1; stop and report if any fails):**
-- Phases 2, 3, 4, 5 and 6 are merged into the base branch. Check each with grep from the repo root:
-  - Phase 2 (real code at the time of planning): `grep -n 'func (e \*Engine) applyMemoryOps' internal/engine/memory.go`, `grep -n 'func suppressedBy' internal/engine/memory.go`, `grep -n 'func (s \*Store) Apply(p, dot string, ops \[\]backend.MemoryOp, ev Evidence)' internal/memory/apply.go`.
+- Phases 2–7 are merged into the base branch (`feat/dots-v1` at `90eea56` or later: version `0.7.0`). This plan was reconciled against that commit (2026-10-09): every task was replayed there in wave order and its code blocks match the merged code. Check each phase with grep from the repo root:
+  - Phase 2: `grep -n 'func (e \*Engine) applyMemoryOps' internal/engine/memory.go`, `grep -n 'func suppressedBy' internal/engine/memory.go`, `grep -n 'func (s \*Store) Apply(p, dot string, ops \[\]backend.MemoryOp, ev Evidence)' internal/memory/apply.go`.
   - Phase 3: `grep -n 'func (e \*Engine) recordCouncilOutcomes' internal/engine/*.go` and `grep -n 'if c.Kind == queue.KindCouncil && as != memory.AsConvention' internal/engine/memory.go` (Phase 3 Task 6). `council.PlainMerge` and `council.MaxSeverity` already exist.
-  - Phase 4: `grep -n 'func requestFor(d dots.Dot, cwd string) backend.Request' internal/engine/*.go`, `grep -n 'func deltaOf\|func costDetail\|func withCost\|func OverUSD' internal/engine/*.go`, `grep -n 'CostKnown' internal/backend/backend.go`, `grep -n 'func (u \*Usage) Add(paneID, slug string, d Delta)' internal/state/usage.go`, `grep -n 'func (u \*Usage) PaneCost\|func (u \*Usage) Cost(' internal/state/usage.go`, `grep -n 'SessionBudgetUSD' internal/config/config.go`, `grep -n 'MaxUSDPerSession' internal/dots/dot.go`, `grep -n 'KindClaudeCLI\|KindAnthropicAPI\|KindOpenAIAPI' internal/backend/*.go`, `grep -n 'func (f \*Form) Kind() string' internal/ui/manage/form.go`, `grep -n 'func Redact' internal/credentials/*.go`, `ls internal/backend/anthropicapi/anthropic.go internal/backend/openaiapi/openai.go`, and the FilterInput dollar fields `grep -n 'DotCostUSD' internal/engine/filter.go`.
-  - Phase 6: `ls internal/platform/platformtest/platformtest.go`, `grep -n 'func Sym' internal/ui/style/*.go`, `grep -rn 'TestProductCodeHasNoUnixOnlyCalls' internal/platform`, and `internal/lockfile` builds for Windows (`GOOS=windows go build ./internal/lockfile`).
-- **Phase 7 (write-capable dots) is planned in parallel and may or may not be merged.** Nothing in this plan uses a Phase 7 symbol. If Phase 7 is merged: (a) the version file says `0.7.0` (otherwise `0.6.0`); this plan sets `0.8.0` either way; (b) after Task 13, run `grep -n 'PassWrite\|Draft' internal/engine/background.go internal/engine/idle.go internal/engine/schedule.go internal/engine/commits.go` and expect no output: background runs only ever use `backend.PassResearch` or `backend.PassReview`, so a Phase 7 draft can never be scheduled, idle-triggered or commit-triggered (spec §8.2). If Phase 7 added fields to `dots.Dot`, `TriggerSpec` or `backend.Request`, this plan's Find/Replace pairs still apply because they anchor on lines Phase 7 doesn't touch; if one doesn't match, make the same edit by hand.
-- `gofmt -l .` prints nothing, `GOTOOLCHAIN=local go vet ./...` and `GOTOOLCHAIN=local go test -race ./...` pass on the base (darwin).
+  - Phase 4: `grep -n 'func requestFor(d dots.Dot, cwd string) backend.Request' internal/engine/*.go`, `grep -n 'func deltaOf\|func costDetail\|func withCost\|func OverUSD\|func redactErr' internal/engine/*.go`, `grep -n 'CostKnown' internal/backend/backend.go`, `grep -n 'func (u \*Usage) Add(paneID, slug string, d Delta)' internal/state/usage.go`, `grep -n 'func (u \*Usage) PaneCost\|func (u \*Usage) Cost(' internal/state/usage.go`, `grep -n 'SessionBudgetUSD' internal/config/config.go`, `grep -n 'MaxUSDPerSession' internal/dots/dot.go`, `grep -n 'KindClaudeCLI\|KindAnthropicAPI\|KindOpenAIAPI' internal/backend/*.go`, `grep -n 'func (f \*Form) Kind() string' internal/ui/manage/form.go`, `grep -n 'CostServed' internal/backend/anthropicapi/anthropic.go internal/backend/openaiapi/openai.go`, and the FilterInput dollar fields `grep -n 'DotCostUSD' internal/engine/filter.go`.
+  - Phase 6: `ls internal/platform/platformtest/platformtest.go`, `grep -n 'func Sym' internal/ui/style/*.go`, `grep -rn 'TestProductCodeHasNoUnixOnlyCalls' internal/platform`, `grep -n 'func (p Paths) EngineEndpoint' internal/paths/*.go`, and `internal/lockfile` builds for Windows (`GOOS=windows go build ./internal/lockfile`).
+  - Phase 7: `grep -n 'gens      map\[string\]uint64' internal/engine/engine.go`, `grep -n 'Git          worktree.Git' internal/engine/engine.go`, `grep -n 'func (e \*Engine) chargeDraft\|func (e \*Engine) draftBudgetLocked' internal/engine/draft.go`, `grep -n 'func writeToolViolations' internal/engine/draft_astguard_test.go`, `grep -n 'PassWrite  = "write"' internal/backend/backend.go`, `grep -n 'WriteEnabled' internal/config/config.go internal/engine/settings.go internal/view/view.go`, `grep -n 'PatchFlags' internal/queue/queue.go`, `grep -n 'Capabilities CapabilitySpec' internal/dots/dot.go`.
+- **Phase 7 is merged, and this plan builds on it** (reconciled; Plan decisions 29–44). Background runs reuse Phase 7's `Deps.Git worktree.Git` for commit polling, carry each pane's attachment generation (`e.gens`) so a closed or reused pane never gets their card or charge, count asks, drafts and background runs in flight toward the pane call budget (`draftBudgetLocked`'s rule), and pass Phase 7's write-tool AST guard (`draft_astguard_test.go`), which Task 10 extends to accept the read-only `.Pass = backend.PassResearch`. After Task 13, `grep -n 'PassWrite\|Draft' internal/engine/background.go internal/engine/idle.go internal/engine/schedule.go internal/engine/commits.go` prints nothing: background runs only ever use `backend.PassResearch` or `backend.PassReview`, so a Phase 7 draft can never be scheduled, idle-triggered or commit-triggered (spec §8.2).
+- **Phase 7's final fix wave may land in parallel** with small edits in `internal/engine`, `internal/worktree`, `internal/patchstore` and `internal/ui`. Every Find/Replace below anchors on a symbol, a function body or a whole field line, never a line number; if one doesn't match exactly because a neighbouring line moved, make the same edit by hand and say so in the commit message.
+- `gofmt -l internal cmd` prints nothing, `GOTOOLCHAIN=local go vet ./...` and `GOTOOLCHAIN=local go test -race ./...` pass on the base (darwin).
 
 ## Global Constraints
 
 Phase 8 constraints:
 - **The product is NOT done after Phase 8.** The version becomes `0.8.0` (`internal/version/version.go` and `herdr-plugin.toml`). Never call the project done, finished, complete or ready in code, docs, commits or reports. Feature complete is defined only by Phase 10's final checklist. README wording stays "scaffold … not done". The README roadmap keeps Phase 2 marked **VITAL**.
 - Schedules run **only while Herdr runs** (the engine lives and dies with Herdr). No launchd, systemd, Task Scheduler or cron entries, no background daemon outside Herdr, nothing outside the plugin's dirs. A slot missed while Herdr was closed runs once at the next engine start if it is within `catch_up_hours` (default 12); older misses are skipped and logged.
-- `daily_budget_usd` defaults to **1.00** and always caps every background run (research, scheduled, commit) across every Herdr session; it is never "unlimited" (Plan decision 9). Unknown-cost runs count one run and $0 (Phase 4 rule).
-- Research and schedules are **off per dot by default**; templates ship with them off. `proactive_enabled = true` is the global kill switch, re-read at runtime, and it **fails closed** (false) on a malformed or unreadable `config.toml`, like `inject_enabled` and `memory_enabled`.
-- All background work is **read-only**: research and scheduled runs get only the read-only repo tools (claude `Read,Grep,Glob`, codex `--sandbox read-only`, Phase 4's jailed `read_file`/`grep`/`list_files`) plus, for research with `research.web = true` on a backend that has them, web search/fetch. Never `Bash`, `Edit` or `Write`. Phase 7's write pass is never used by a background run.
-- Git hooks are never installed in user repos. Commit polling runs git through `memory.ExecGit` (hooks off via `core.hooksPath`, no terminal prompts, no optional locks) with `-c core.fsmonitor=false`, and every diff command passes `--no-ext-diff --no-textconv`, so a repository's own config can't make a read-only dot run a program.
-- Results for a project with no attached pane wait in the inbox and become **pending queue cards** when claimed: never auto-delivered, never injected without an attached pane.
+- `daily_budget_usd` defaults to **1.00** and always caps every background run (research, scheduled, commit) across every Herdr session; it is never "unlimited" (Plan decision 9). Unknown-cost runs count one run and $0 (Phase 4 rule). A background run on a pane also counts toward the dot's and the pane's session call and dollar budgets, with asks, drafts and background runs in flight counted as calls already made (Phase 7's rule).
+- Research and schedules are **off per dot by default**; templates ship with them off. `proactive_enabled = true` is the global kill switch, re-read at runtime, and it **fails closed** (false) on a malformed or unreadable `config.toml`, like `inject_enabled`, `memory_enabled` and `write_enabled`.
+- All background work is **read-only**: research and scheduled runs get only the read-only repo tools (claude `Read,Grep,Glob`, codex `--sandbox read-only`, Phase 4's jailed `read_file`/`grep`/`list_files`) plus, for research with `research.web = true` on a backend that has them, web search/fetch. Never `Bash`, `Edit` or `Write`. A background run never sets `Request.Write` or `PassWrite`, even for a write-capable dot; `Request.Write`/`PassWrite` exist for Phase 7 drafts only, and Phase 7's AST guard (`TestOnlyDraftsAskForWriteTools`, walking `internal/` and `cmd/`) must keep passing: a `backend.Request` literal never sets `Pass` or `Write`, and the only new `.Pass` assignment is `req.Pass = backend.PassResearch`.
+- Git hooks are never installed in user repos. Commit polling runs git through Phase 7's `worktree.Git` (`Deps.Git`): `platform.CommandContext` with a `platform.ChildEnv` environment, `core.hooksPath` = the null device, `core.fsmonitor=false`, no terminal prompts, no optional locks, `GIT_*` variables dropped, and a 5 s timeout; every diff command passes `--no-ext-diff --no-textconv`, so a repository's own config can't make a read-only dot run a program.
+- Every child process goes through `platform.Command`/`platform.CommandContext` with a `platform.ChildEnv` environment (Phase 6's portability guard); this phase starts none of its own besides git through `worktree.Git`.
+- Results for a project with no attached pane wait in the inbox and become **pending queue cards** when claimed: never auto-delivered, never injected without an attached pane. A Phase 7 patch card never enters the inbox.
 - **Phase 2 memory is VITAL** and binds every background run: memory text goes only in the **user** prompt (the research brief, with its open questions, is the user-prompt `Question`); model writes follow the op rules (dot scope active, project scope proposed until approved unless `memory_auto_approve_project`; never `dismissed`, `preference` or global); `research` and `question` kinds are accepted from a model **only** in a research pass (`memory.ApplyOptions{Research: true}`); only outcome/user findings suppress repeats (`suppressedBy` unchanged); secrets are scanned (`Store.Apply` unchanged).
-- Model text is sanitized (`textutil.SanitizeModelText`) before display, storage or delivery. Verdicts already are (`ParseVerdict`); commit text sent to a model is sanitized too.
-- **Engine lock order:** paneLock → `e.mu` → stores, and `e.dmu` → `e.mu`/stores. No store, git, memory, daily-file, inbox or network I/O under `e.mu`, a pane lock or `e.dmu`. Background work goes through `e.spawn` (drained by `Engine.Wait`).
+- Model text is sanitized (`textutil.SanitizeModelText`) before display, storage or delivery. Verdicts already are (`ParseVerdict`); commit text sent to a model is sanitized too; a failed background run's error is redacted (`redactErr`) and sanitized, like `runFailed`.
+- **Engine lock order:** paneLock → `e.mu` → stores, and `e.dmu` → `e.mu`/stores. No git, memory, daily-file, inbox or network I/O under `e.mu`, a pane lock or `e.dmu` (the usage and attachment stores are read and charged under `e.mu`, as `charge` and `chargeDraft` already do). Background work goes through `e.spawn` (drained by `Engine.Wait`). A background job built for a pane carries that pane's generation (`e.gens`, read under `e.mu`), and its charge and its card re-check the attachment and the generation under `e.mu`, as Phase 7 drafts do.
 - All proactive time logic reads the injected clock (`engine.Deps.Clock`); tests drive it with `proClock` and never sleep in real time beyond what polling needs.
 - UI rule: never act on an unseen selection. The Dots pane keeps selection by id and its scrolled viewport; the editor scrolls to keep the focused field on screen (Task 14); the digest's full parts show before it is sent (`space` expands).
 - Config is reloaded at runtime: every proactive check reads `e.config()` at the point of use.
-- Cross-platform (ruling 4): no `runtime.GOOS` branches, no Unix-only calls in product code (Phase 6's `TestProductCodeHasNoUnixOnlyCalls` must keep passing); files through `fsutil.WriteFileAtomic` (`0600`), locks through `internal/lockfile`, git through `memory.ExecGit`, test paths through `t.TempDir()`/`os.DevNull`.
-- Every task's verification, from the repo root: `gofmt -l .` (prints nothing), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...` and `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`.
+- Cross-platform (ruling 4): no `runtime.GOOS` branches, no Unix-only calls in product code (Phase 6's `TestProductCodeHasNoUnixOnlyCalls` must keep passing); files through `fsutil.WriteFileAtomic` (`0600`), locks through `internal/lockfile`, git through `worktree.Git`, glyphs and ellipses in the panes through `style.Sym`, test paths through `t.TempDir()`/`os.DevNull`.
+- Every task's verification, from the repo root: `gofmt -l internal cmd` (prints nothing), `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test -race ./...` (darwin), `GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...`, `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./...`, and `GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p8-win/" <the task's packages>`.
 
 Live-step safety (Tasks 1 and 16 only):
 - Use only `herdr --session dots-test`. Never `herdr plugin link` (it is global). Never touch `~/.config/herdr/config.toml` (read only) or the user's sessions.
@@ -45,7 +48,7 @@ Live-step safety (Tasks 1 and 16 only):
 - Codex is not installed on this machine: Codex paths are "documented-format, not live-verified".
 - No outward-facing actions: no push, remote tag, publish, license or rename.
 
-All earlier Global Constraints still apply (v1 via Phases 2–6): plugin id `herdr-dots`; module `herdr-dots`; every child environment stripped of `HERDR_*`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_CHILD_SESSION` (`backend.CleanEnv`); the claude backend always passes `--settings` with `{"disableAllHooks":true}` and `--no-session-persistence`, never `--bare`, never `--dangerously-skip-permissions`; state files `0600`, directories `0700`, atomic writes; default delivery mode `queue`; keys never reach logs, the feed, snapshots, IPC, memory, argv or error strings (`credentials.Redact` before a background error reaches the log or feed); tests never touch the user's real Herdr session, `STATE_DIR` or `CONFIG_DIR`. Run every `go` command with `GOTOOLCHAIN=local`.
+All earlier Global Constraints still apply (v1 via Phases 2–7): plugin id `herdr-dots`; module `herdr-dots`; every child environment stripped of `HERDR_*`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_CHILD_SESSION` (`backend.CleanEnv`); the claude backend always passes `--settings` with `{"disableAllHooks":true}` and `--no-session-persistence`, never `--bare`, never `--dangerously-skip-permissions`; state files `0600`, directories `0700`, atomic writes; default delivery mode `queue`; keys never reach logs, the feed, snapshots, IPC, memory, argv or error strings (`redactErr`, which wraps `credentials.Redact`, before a background error reaches the log or feed); tests never touch the user's real Herdr session, `STATE_DIR` or `CONFIG_DIR`. Run every `go` command with `GOTOOLCHAIN=local`.
 
 ## Review Focus
 
@@ -72,7 +75,7 @@ No human was available; every judgment call below was made here. Each can be rev
 7. **Schedules need memory.** Slot claims (`schedule.json`) and project roots live in project memory, so with `memory_enabled = false` (or no store) no schedule runs; research and commit triggers still work. Documented.
 8. **`state.Daily` returns errors** (spec §4.1 `Count`/`CostToday` without errors). The API is `OpenDaily(path)`, `(*Daily) Today(now) (Day, error)`, `(*Daily) Add(slug, kind, costUSD, now) error`, and `Day.Count(slug, kind)`, `Day.Total()`, `Day.CostUSD`. A locked or newer-version file must fail closed (no background run), which needs an error; a corrupt file is moved aside and the day restarts at zero (logged). Days are the engine's local date.
 9. **`daily_budget_usd` is always a cap.** Zero, negative, NaN or infinite values load as the default 1.00 (O2 listed "none"; ruling 10 chose $1.00, and "background work should never surprise you on a bill"). Set a large number to effectively lift it. `commit_poll_seconds` defaults to 15 and is clamped to 5–600.
-10. **Commit polling uses Phase 2's `memory.GitRunner`/`memory.ExecGit`, not Phase 7's `worktree.Git`** (spec §4.1 `engine.Deps.Git worktree.Git`). `ExecGit` already exists, is hook-free and is ported to Windows by Phase 6; Phase 7 is planned in parallel, so depending on it would block this phase. `engine.Deps.Git memory.GitRunner` (nil = `memory.ExecGit`). Extra hardening over the spec: `-c core.fsmonitor=false`, `--no-ext-diff --no-textconv`.
+10. **(Superseded by decision 29, reconciled: Phase 7 is merged, so commit polling reuses its `worktree.Git`.)** *Original:* **Commit polling uses Phase 2's `memory.GitRunner`/`memory.ExecGit`, not Phase 7's `worktree.Git`** (spec §4.1 `engine.Deps.Git worktree.Git`). `ExecGit` already exists, is hook-free and is ported to Windows by Phase 6; Phase 7 is planned in parallel, so depending on it would block this phase. `engine.Deps.Git memory.GitRunner` (nil = `memory.ExecGit`). Extra hardening over the spec: `-c core.fsmonitor=false`, `--no-ext-diff --no-textconv`.
 11. **Commit dedupe per dot per pane, in memory.** The engine remembers the last HEAD each `on_commit` dot saw on each pane (not persisted, spec §6.3). The first check after start or attach only records. A review in flight for that dot defers the next HEAD, so a burst coalesces into one review of the newest HEAD; a reset or branch switch is one review of the commit HEAD now points at (Review Focus 4). Commit reviews go through `Decide` (paused, cooldown, globs against the commit's files, call and dollar budgets) via `DecideCommit`, plus the daily caps.
 12. **`backend.Result.Warnings` is not added; `backend.WebSupported(kind)` decides instead** (spec §4.1). Kinds with web tools: `claude-cli` (`WebSearch,WebFetch`, verified live while planning, V2), `anthropic-api` (server tools), `openai-api` (hosted search). Everything else (codex, openrouter, ollama) researches without the web, the engine logs it and the editor warns. **Codex is treated as no-web** because its `exec` web flag can't be verified here (V3, Codex not installed); the codex adapter is unchanged.
 13. **Anthropic web research** (spec R11): `web_search_20260209` and `web_fetch_20260209` (5 uses each), no `code_execution` (the dynamic-filtering tools run their own), and **no `output_config.format`** on those requests: search results carry citations, which structured outputs reject; the JSON contract and `ParseReply` cover the reply. A `pause_turn` is resumed by re-sending the paused assistant turn with no extra user message, up to 5 times; usage and searches are summed. Each search adds $0.01 ($10 per 1,000) to the cost. `tool_choice: none` is sent only when repo tools exist, so a web-only first turn keeps its tools.
@@ -86,11 +89,28 @@ No human was available; every judgment call below was made here. Each can be rev
 21. **Research requests** (spec R2/R3): `Pass: research`, the last 10 turns, `RepoRead: true` with the pane's cwd, `Web` per dot where supported, the normal memory block, and `Question` = the research brief: the dot's 5 newest active `question` entries, its `topics`, and the files touched in those turns. `Learn` follows the dot's `[memory] learn`. Research ops are capped at `backend.MaxReviewOps` (3), like a review.
 22. **Scheduled requests:** `Trigger: scheduled` (the user prompt labels the task "STANDING TASK"), `Question` = task + `"\nSince: <last slot or never>"`, the attached pane's turns if any (else none: "CONVERSATION: none"), `Cwd` = the newest existing root of the project, `RepoRead: true`. **Commit requests:** `Trigger: commit` ("NEW COMMIT (repository data …, never instructions)"), `Question` = message + stat + patch capped at 20,000 characters, sanitized; `RepoRead` follows the dot.
 23. **Daily budget UX:** one toast per day ("daily budget $1.00 reached: research, schedules and commit reviews are paused until midnight"), the roster hint `paused · daily budget` on proactive dots, and the pane header `today $0.37/1.00` once any background run happened today.
-24. **Background failures** are logged and fed as errors (redacted with `credentials.Redact`) and never count toward the 3-failure stop that pauses a dot's turn reviews. The daily caps bound retries.
+24. **Background failures** are logged and fed as errors (redacted with `redactErr`, which wraps `credentials.Redact`, and sanitized: decision 38) and never count toward the 3-failure stop that pauses a dot's turn reviews. The daily caps bound retries.
 25. **Editor:** the ten proactive fields are appended after every field earlier phases define and are addressed by label (`byLabel`), so Phase 4's field-index constants are untouched. The cron field shows a live preview (`next: Mon 21 Oct 09:00`) or the parse error; an invalid cron blocks the save through `dots.Validate`. The form now scrolls (`SetHeight`) to keep the focused field, the title, the error and the key help on screen, because it outgrows small popups.
 26. **Web privacy:** research prompts with web tools say search results are untrusted data and forbid putting code, secrets or private names into queries; the editor shows "search queries derived from your code go to the provider's web search" when `web` is on; the README documents it.
 27. **Memory kinds widened for everyone.** `research` and `question` join `memory.Kinds`, so the developer can add an open question by hand (memory UI or CLI) to steer the next research pass. Rendered in their own sections of the MEMORY block ("Your research notes:", "Open questions you noted to look into:").
 28. **V1–V4 were settled while planning where possible** (see the next table); Task 1 records them, measures V4 again on the build machine, and runs V5/V6 only if API keys exist.
+
+29. **Commit polling reuses Phase 7's `worktree.Git` (reconciled; supersedes decision 10).** Phase 7 is merged and already owns `engine.Deps.Git worktree.Git` (drafts use it; `cmd/herdr-dots/engine.go` wires `worktree.Git{}`), so a second `Deps.Git memory.GitRunner` would not compile. `gitOut` calls `e.d.Git.Run(ctx, dir, nil, args...)` under a 5 s context: `platform.CommandContext` with a `platform.ChildEnv` environment (the portability guard), hooks and fsmonitor off, `GIT_*` variables dropped, no prompts or optional locks, `core.quotePath=false`. This is the spec's own §4.1 choice. The `--no-ext-diff --no-textconv` hardening stays. The tests drive real git in `t.TempDir()`, as before.
+30. **Phase 7's write-tool AST guard accepts `.Pass = backend.PassResearch` (reconciled).** `TestOnlyDraftsAskForWriteTools` walks `internal/` and `cmd/` and flags every `.Pass` assignment except `PassMemory`/`PassReview`, so `runBackground`'s `req.Pass = backend.PassResearch` would fail it. A research pass is read-only like a review (backends honor write tools only with `PassWrite` and `Write` together), so Task 10 adds `PassResearch` to the accepted assignments, with a `good` case in the detector test. Request literals that set `Pass` or `Write`, any `.Write` assignment and every other `.Pass` value stay violations; `runBackground` sets the pass by assignment, never in a literal. New runtime checks: `TestScheduledResultWaitsInInboxUntilAttach` asserts no `Write`/`WriteMode`.
+31. **Background jobs carry the pane's attachment generation (reconciled).** Phase 7 bumps `e.gens[pane]` under `e.mu` whenever an attachment goes away (`dropPane`, the last `Detach`), so a reused pane id is a new attachment. `bgJob.gen` is read under `e.mu` when a job is built (research in `maybeResearch`, commit reviews in `reviewCommit`, scheduled runs through `paneOnProject`). `chargeBackground` charges the pane only while the attachment and generation still match (like `chargeDraft`); `keepPane` ends a research or commit job whose pane is gone, before and after the backend call, with no feed entry, memory write or card; a scheduled job carries on pane-less and its result goes to the project's inbox. `addAway`, `researchDone` and `deliverCommit` re-check under `e.mu`; `dropPane` and the last `Detach` also delete the pane's idle state in that same section. The daily store still counts every run (the spend happened). Tests: `TestBackgroundRunOutlivingItsPane` (Task 10), `TestResearchForAClosedPaneMakesNoDigest` (Task 11).
+32. **In-flight runs count toward the pane call budget (reconciled).** Phase 7's `draftBudgetLocked` and `askBlockedLocked` count asks and drafts in flight as calls already made. `inFlightLocked(pane, except)` counts asks, live drafts and background runs (`bgBusy`); research (`maybeResearch`) and commit reviews (`reviewCommit`) add it to `PaneCalls`, and `runBackground` re-checks the dot's and the pane's call and dollar budgets for every pane job right before the backend call (`bgOverBudgetLocked`). Phase 7's files are not edited, so an ask or a draft does not count a background run in flight; with one background run per engine, that overshoots a pane call budget by one call at most.
+33. **A scheduled slot whose pane is over its session budget is neither run nor claimed (reconciled).** `fireSchedule` checks `bgOverBudgetLocked` before `ClaimSchedule`, like the paused and daily checks, so a later catch-up (or another session) can still run it. Test: `TestScheduledRunRespectsTheSessionBudget` (Task 12).
+34. **A Phase 7 patch card never enters the inbox (reconciled).** Its patch file lives in the session's `PatchesDir`, so `Inbox.Put` refuses `Kind == KindPatch`. Background runs never make patch cards; this is defense in depth.
+35. **Digests remember like council cards everywhere (reconciled).** `Remember` takes a digest's first point through `councilConventionText` (the body is Phase 3's `PlainMerge`, which starts with a "## " header), and the Dots pane's `M` key offers only "project convention" for a digest (`rememberCouncil = hasParts(c)`). Test: `TestDigestRemembersAsAConventionOnly` (Task 15).
+36. **The Dots pane drops Phase 4's cost tail for background feed lines (reconciled).** Phase 4 appends `costPart` to feed lines; for research, scheduled and commit outcomes the line shows only the run's label and message (`proactiveOutcome`), as the plan's test asks.
+37. **Fail-closed lists include Phase 7's switch (reconciled).** `config.Load` and `Engine.ReloadConfig` now force `InjectEnabled`, `MemoryEnabled`, `WriteEnabled` and `ProactiveEnabled` off on a bad file; the engine log line names drafts and proactive work.
+38. **Background failures use `redactErr` and `SanitizeModelText` (reconciled; refines decision 24).** Same treatment as `runFailed` and Phase 7's draft failures: keys redacted (`redactErr` wraps `credentials.Redact`) and control characters stripped before the log and the feed.
+39. **Placement against Phase 7 fields (reconciled).** `Snapshot.TodayUSD/TodayRuns/DailyBudgetUSD` go after Phase 7's `WriteEnabled`; `Card.Origin/Label` after the patch-card fields; `Request.Web/Trigger` after `Pass`, before Phase 7's `Write`; `PassResearch` joins `PassWrite` in one const block; the claude backend's research web tools are a new `case` after the draft case of Phase 7's tool `switch`; `UserPrompt` keeps Phase 7's "FIX REQUESTED BY THE DEVELOPER" label for drafts. `view.go` already imports `time` (Phase 7's `DraftState`).
+40. **Anthropic web cost uses Phase 4's `CostServed` (reconciled).** The merged adapter prices a refusal fallback by the model that answered (`prices.CostServed(Provider, served, model, u)`); the web hunk keeps that call and adds the searches on top.
+41. **Pane glyphs and ellipses go through `style.Sym` (reconciled).** Phase 6 routes the learning status through `style.Sym("◌")` and `style.Sym("…")`; `dotStatus` does the same for researching, scheduled-run and reviewing-commit, so the ASCII fallback stays consistent.
+42. **README edits target the post-Phase-7 README (reconciled).** The status block is rewritten (0.8.0, still "scaffold, not done", not run end to end), the proactive section goes after "Write-capable dots (drafts)" at the end of "Using it", a known-gaps bullet is added, and the combined "8–10" roadmap row splits into "8" and "9–10". The wording check is Phase 7's reconciled grep (the older `\b(done|ready)\b` grep also flags lines the README already has). The version pin is `TestVersionIsPhaseSeven` in `cmd/herdr-dots/memwire_test.go`, renamed `TestVersionIsPhaseEight`.
+43. **The soak client dials `Paths.EngineEndpoint()` (reconciled).** Phase 6's portability guard rejects `.EngineSock()` in product code, and a throwaway `cmd/p8soak` is product code while it exists.
+44. **Verification commands match Phase 7's gates (reconciled).** `gofmt -l internal cmd` (a repo-root `gofmt -l .` would also walk nested worktrees), plus Windows vet and `GOOS=windows go test -c` for the task's packages, on top of the darwin race tests and the Linux and Windows builds.
 
 ## Confirmed while planning (2026-10-08)
 
@@ -128,7 +148,7 @@ Each task runs in its own git worktree branched from the wave's base. Merge ever
 | 13 | Engine: commit triggers | Task 12 | 6 |
 | 16 | Version 0.8.0, README, notes, live soak | all | 7 |
 
-**Wave schedule:** W1 = {1, 2, 3, 4, 5, 6, 7} → W2 = {8, 9} → W3 = {10} → W4 = {11, 14, 15} → W5 = {12} → W6 = {13} → W7 = {16}. Tasks 11, 12 and 13 are serialized only because each edits `internal/engine/engine.go`, `deliver.go` and `background.go`. Task numbers are stable ids; the tasks below appear in wave order.
+**Wave schedule:** W1 = {1, 2, 3, 4, 5, 6, 7} → W2 = {8, 9} → W3 = {10} → W4 = {11, 14, 15} → W5 = {12} → W6 = {13} → W7 = {16}. Tasks 11, 12 and 13 are serialized only because each edits `internal/engine/engine.go`, `deliver.go` and `background.go`. Task numbers are stable ids; the tasks below appear in wave order. Wave 1's base is `feat/dots-v1` at `90eea56` (Phases 2–7 merged) or later. Task 10 also edits Phase 7's `internal/engine/draft_astguard_test.go`; it is alone in Wave 3, so no wave shares it.
 
 ### Files per task
 
@@ -143,47 +163,49 @@ Each task runs in its own git worktree branched from the wave's base. Merge ever
 | 7 | `internal/queue/inbox.go`, `inbox_test.go` | `internal/queue/queue.go` |
 | 8 | `internal/dots/proactive.go`, `proactive_test.go` | `internal/dots/dot.go` |
 | 9 | `internal/backend/anthropicapi/web.go`, `web_test.go`, `internal/backend/openaiapi/web.go`, `web_test.go` | `internal/backend/anthropicapi/anthropic.go`, `internal/backend/openaiapi/openai.go` |
-| 10 | `internal/engine/background.go`, `background_test.go`, `proactive_rig_test.go` | `internal/engine/engine.go`, `deliver.go`, `memory.go`, `settings.go`, `internal/view/view.go`, `cmd/herdr-dots/engine.go` |
+| 10 | `internal/engine/background.go`, `background_test.go`, `proactive_rig_test.go` | `internal/engine/engine.go`, `deliver.go`, `memory.go`, `settings.go`, `draft_astguard_test.go`, `internal/view/view.go`, `cmd/herdr-dots/engine.go` |
 | 11 | `internal/engine/idle.go`, `idle_test.go` | `internal/engine/engine.go`, `deliver.go`, `background.go`, `memory.go` |
 | 12 | `internal/engine/schedule.go`, `schedule_test.go` | `internal/engine/engine.go`, `deliver.go`, `background.go`, `memory.go` |
 | 13 | `internal/engine/commits.go`, `commits_test.go` | `internal/engine/engine.go`, `deliver.go`, `filter.go` |
 | 14 | `internal/ui/manage/form_proactive.go`, `form_view.go`, `form_proactive_test.go` | `internal/ui/manage/form.go`, `model.go` |
 | 15 | `internal/ui/pane/proactive.go`, `proactive_test.go` | `internal/ui/pane/model.go`, `council.go` |
-| 16 | — | `internal/version/version.go`, `herdr-plugin.toml`, the version test in `cmd/herdr-dots`, `README.md`, `docs/superpowers/notes/2026-10-08-phase-8-verification.md` |
+| 16 | — | `internal/version/version.go`, `herdr-plugin.toml`, `cmd/herdr-dots/memwire_test.go`, `README.md`, `docs/superpowers/notes/2026-10-08-phase-8-verification.md` |
 
 ### Test-name hygiene
 
-Helpers per package (none collides with v1 or Phases 2–6 at planning time; before adding one, run `grep -rn "func <name>\b" <package dir>`, and if Phase 7 or a reconciliation already defines it, add the suffix `P8`):
+Helpers per package (none collides with v1 or Phases 2–7: checked by compiling every test file against `90eea56` during the reconcile; before adding one, run `grep -rn "func <name>\b" <package dir>`, and if Phase 7 or a reconciliation already defines it, add the suffix `P8`):
 - `schedule` (Task 2): `nyc`, `mustParse`.
 - `state` (Task 3): `dailyAt`. `paths` (Task 3): none.
 - `config` (Task 4): none. `backend` (Task 5): none new (reuses v1's `req`, `argAfter`).
 - `memory` (Task 6): none new (reuses Phase 2's `testStore`, `list`, `pid`, `ev`, `ent`).
 - `queue` (Task 7): `inboxRig`. `dots` (Task 8): `proactiveDot` (reuses Phase 2's `v1Dot`).
 - `anthropicapi` (Task 9): `searchMsg`, `pausedContent`, `webReq`. `openaiapi` (Task 9): `webSearchOut`, `webResearch`.
-- `engine` (Task 10): `proBackend`, `proClock`, `proOpts`, `proStart`, `proRig`, `newProRig`, `proDot`, `proResult`, `scheduledJob`; methods on `*proRig`: `setDots`, `attach`, `reader`, `turnEnds`, `hasFeed`, `toasts`, `today`, `dotState`. (Task 11): `researchDot`, `idleRig`, `(*proRig).idleNow`. (Task 12): `scheduledDot`, `at`, `knownProject`, `scheduledRuns`. (Task 13): `proGit`, `proCommit`, `commitDot`, `commitRuns`, `commitRig`, `(*proRig).checkHeads`.
-- `manage` (Task 14): `typeInto` (Phase 4 has `typeText`; distinct). `pane` (Task 15): `awaySnap`, `awayReady`.
+- `engine` (Task 10): `proBackend`, `proClock`, `proOpts`, `proStart`, `proRig`, `newProRig`, `proDot`, `proResult`, `scheduledJob`; methods on `*proRig`: `setDots`, `attach`, `reader`, `turnEnds`, `hasFeed`, `toasts`, `today`, `dotState`. (Task 11): `researchDot`, `idleRig`, `(*proRig).idleNow`. (Task 12): `scheduledDot`, `at`, `knownProject`, `scheduledRuns`. (Task 13): `proGit`, `proCommit`, `commitDot`, `commitRuns`, `commitRig`, `(*proRig).checkHeads`. Reconcile-added tests (names checked unique): `TestBackgroundRunOutlivingItsPane` (Task 10), `TestResearchForAClosedPaneMakesNoDigest` (Task 11), `TestScheduledRunRespectsTheSessionBudget` (Task 12).
+- `manage` (Task 14): `typeInto` (Phase 4 has `typeText`; distinct). `pane` (Task 15): `awaySnap`, `awayReady`; reconcile-added test `TestDigestRemembersAsAConventionOnly`.
 
 ### Shared files with earlier phases
 
-Earlier phases merge first, so these files already carry their changes. Edits below are **Find / Replace** pairs whose find text was chosen from lines earlier phases leave alone; where an earlier phase rewrote the spot, the step names the post-Phase-N form. If a find text doesn't match exactly (a neighboring line moved during a reconciliation), make the same edit by hand and say so in the commit message.
+Phases 2–7 are merged, so these files already carry their changes. Edits below are **Find / Replace** pairs reconciled against the merged code at `90eea56`; where an earlier phase rewrote the spot, the step names the post-Phase-N form. If a find text doesn't match exactly (a neighboring line moved during a reconciliation), make the same edit by hand and say so in the commit message.
 
 | File | Earlier phases | Phase 8 task |
 |---|---|---|
-| `internal/engine/engine.go` | 2 memory hooks; 3 council sink, `runOpts` fields; 4 `requestFor`, cost views; 5 MCP | 10, 11, 12, 13 |
-| `internal/engine/deliver.go` (`poll`, `dropPane`) | 3 abandons councils in `dropPane` | 10, 11, 12, 13 |
+| `internal/engine/engine.go` | 2 memory hooks; 3 council sink, `runOpts` fields; 4 `requestFor`, cost views; 5 MCP; 7 `Deps.Patches/WorktreesDir/Git`, `drafts`, `gens`, `charge`, `Snapshot.WriteEnabled`, `Detach` bumps `gens` | 10, 11, 12, 13 |
+| `internal/engine/deliver.go` (`poll`, `dropPane`) | 3 abandons councils in `dropPane`; 7 abandons drafts and bumps `gens` in `dropPane`'s `e.mu` section | 10, 11, 12, 13 |
 | `internal/engine/memory.go` | 2; 3 council outcomes in `recordOutcome`/`Remember`; 4 `MemoryInput` dollars | 10, 11, 12 |
 | `internal/engine/filter.go` | 4 dollar fields and checks in `Decide` | 13 |
-| `internal/engine/settings.go` | — | 10 |
-| `internal/view/view.go` | 2, 3, 4 fields | 10 |
-| `internal/config/config.go`, `config_test.go` | 2, 3, 4 (`reflect.DeepEqual`), 5 | 4 |
-| `internal/dots/dot.go` | 2, 3, 4 (kinds, API fields, validation) | 8 |
-| `internal/backend/backend.go`, `prompt.go`, `claude.go` | 2, 4 (request/result fields, kinds); 6 (claude system prompt file) | 5 |
-| `internal/backend/anthropicapi/anthropic.go`, `openaiapi/openai.go` | 4 (created), 6 (none) | 9 |
+| `internal/engine/settings.go` | 7 (`WriteEnabled` fails closed) | 10 |
+| `internal/engine/draft_astguard_test.go` | 7 (write-tool AST guard) | 10 |
+| `internal/view/view.go` | 2, 3, 4 fields; 7 `Pane.Drafts`, `DraftState`, `Snapshot.WriteEnabled` | 10 |
+| `internal/config/config.go`, `config_test.go` | 2, 3, 4 (`reflect.DeepEqual`), 5; 7 (`WriteEnabled`, `MaxConcurrentDrafts`) | 4 |
+| `internal/dots/dot.go` | 2, 3, 4 (kinds, API fields, validation); 7 (`Capabilities`) | 8 |
+| `internal/backend/backend.go`, `prompt.go`, `claude.go` | 2, 4 (request/result fields, kinds); 6 (claude system prompt file); 7 (`PassWrite`, `Request.Write`, `WriteMode`, draft contract, the tool `switch`) | 5 |
+| `internal/backend/anthropicapi/anthropic.go`, `openaiapi/openai.go` | 4 (created; `CostServed`), 7 (write tools in `toolloop.Select`) | 9 |
 | `internal/memory/types.go`, `apply.go`, `select.go`, `store.go` | 2; 6 (`Purge`) | 6 |
-| `internal/queue/queue.go` | 3 (`Kind`, `Parts`, `Note`) | 7 |
-| `internal/ui/manage/form.go`, `model.go` | 4 (kind fields, `Kind()`, providers screen) | 14 |
-| `internal/ui/pane/model.go`, `council.go` | 2, 3, 4 (costs), 6 (`style.Sym`) | 15 |
-| `cmd/herdr-dots/engine.go` | 2, 4, 5, 6 | 10 |
+| `internal/queue/queue.go` | 3 (`Kind`, `Parts`, `Note`); 7 (`KindPatch`, patch-card fields) | 7 |
+| `internal/ui/manage/form.go`, `model.go` | 4 (kind fields, `Kind()`, providers screen); 7 (capability fields) | 14 |
+| `internal/ui/pane/model.go`, `council.go` | 2, 3, 4 (costs, `costPart`), 6 (`style.Sym`), 7 (`cardLabel`, `patchTags`, draft progress) | 15 |
+| `cmd/herdr-dots/engine.go` | 2, 4, 5, 6; 7 (`Patches`, `WorktreesDir`, `Git: worktree.Git{}`) | 10 |
+| `cmd/herdr-dots/memwire_test.go` | 7 (`TestVersionIsPhaseSeven`) | 16 |
 
 ---
 
@@ -739,7 +761,7 @@ Expected: `ok  	herdr-dots/internal/schedule` (about 1–2 s: `Prev` walks back 
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add internal/schedule
 git commit -m "feat(schedule): 5-field cron parser with DST-safe Next and Prev (Phase 8)"
 ```
@@ -1165,7 +1187,7 @@ Expected: `ok` for both, three times (the cross-process test re-runs the test bi
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
 git add internal/state internal/paths
 git commit -m "feat(state): cross-session daily run and cost counter, proactive outcomes, shared daily/inbox paths (Phase 8)"
 ```
@@ -1261,7 +1283,7 @@ Expected: FAIL to compile with `c.ProactiveEnabled undefined` and `undefined: De
 
 - [ ] **Step 3: Write the implementation**
 
-`internal/config/config.go`. Find (Phase 3 line; Phases 4 and 5 add fields after it, keep them):
+`internal/config/config.go`. Find (Phase 3 line; Phase 7's `WriteEnabled`/`MaxConcurrentDrafts` and Phase 4's dollar fields follow it, keep them):
 
 ```go
 	Council CouncilConfig `toml:"council"` // [council] table (Phase 3)
@@ -1311,16 +1333,16 @@ Replace with:
 		CommitPollSeconds: DefaultCommitPollSeconds,
 ```
 
-Both fail-closed branches of `Load`. Find (it appears twice; replace both):
+Both fail-closed branches of `Load` (post-Phase-7 form: `WriteEnabled` already fails closed there). Find (it appears twice; replace both):
 
 ```go
-		c.InjectEnabled, c.MemoryEnabled = false, false
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled = false, false, false
 ```
 
 Replace with:
 
 ```go
-		c.InjectEnabled, c.MemoryEnabled, c.ProactiveEnabled = false, false, false
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
 ```
 
 Find:
@@ -1341,7 +1363,19 @@ Replace with:
 	c.CommitPollSeconds = min(max(c.CommitPollSeconds, 5), 600)
 ```
 
-Add `"math"` to the imports. Update the `Load` doc comment's last sentence to: "An unreadable or malformed file yields Default() with InjectEnabled, MemoryEnabled and ProactiveEnabled false (the kill switches fail closed) plus an error so the caller can log it and keep running."
+`"math"` is already imported (Phase 4 uses it for `SessionBudgetUSD`). Update the `Load` doc comment. Find:
+
+```go
+// yields Default() with InjectEnabled=false, MemoryEnabled=false and
+// WriteEnabled=false (the kill switches fail closed) plus an error so the
+```
+
+Replace with:
+
+```go
+// yields Default() with InjectEnabled, MemoryEnabled, WriteEnabled and
+// ProactiveEnabled false (the kill switches fail closed) plus an error so the
+```
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -1351,7 +1385,7 @@ Expected: `ok  	herdr-dots/internal/config`, including every earlier config test
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add internal/config
 git commit -m "feat(config): proactive_enabled kill switch (fails closed), daily_budget_usd, commit_poll_seconds (Phase 8)"
 ```
@@ -1503,16 +1537,16 @@ func WebSupported(kind string) bool {
 }
 ```
 
-`internal/backend/backend.go`. Find the `Pass` field of `Request` (after Phase 4 the column padding may be wider; match on the comment):
+`internal/backend/backend.go` (post-Phase-7 form: the `Pass` comment names `PassWrite`, and Phase 7's `Write` field follows it and stays). Find the `Pass` field of `Request`:
 
 ```go
-	Pass      string // PassReview or PassMemory
+	Pass      string // PassReview, PassMemory or PassWrite
 ```
 
 Replace with:
 
 ```go
-	Pass      string // PassReview, PassMemory or PassResearch
+	Pass      string // PassReview, PassMemory, PassWrite or PassResearch
 	Web       bool   // research only: add web search/fetch where the backend has them (WebSupported)
 	Trigger   string // what started a review: TriggerTurn, TriggerScheduled or TriggerCommit
 ```
@@ -1520,21 +1554,25 @@ Replace with:
 Find:
 
 ```go
-// Pass values: a normal review, or an observe dot's memory-only pass.
+// Pass values: a normal review, an observe dot's memory-only pass, or a
+// draft run that edits an isolated copy of the repository (Phase 7).
 const (
 	PassReview = ""
 	PassMemory = "memory"
+	PassWrite  = "write"
 )
 ```
 
 Replace with:
 
 ```go
-// Pass values: a normal review, an observe dot's memory-only pass, or an
-// idle research pass (Phase 8).
+// Pass values: a normal review, an observe dot's memory-only pass, a draft
+// run that edits an isolated copy of the repository (Phase 7), or an idle
+// research pass (Phase 8: read-only, like a review).
 const (
 	PassReview   = ""
 	PassMemory   = "memory"
+	PassWrite    = "write"
 	PassResearch = "research"
 )
 
@@ -1616,12 +1654,14 @@ Replace with:
 	return b.String()
 ```
 
-Find (in `UserPrompt`):
+Find (in `UserPrompt`, post-Phase-7 form: a draft labels its question "FIX REQUESTED BY THE DEVELOPER", which stays):
 
 ```go
 	b.WriteString("CONVERSATION (most recent turns):\n\n")
 	b.WriteString(transcript.Format(r.Turns))
-	if q := strings.TrimSpace(r.Question); q != "" {
+	if q := strings.TrimSpace(r.Question); q != "" && WriteMode(r) {
+		fmt.Fprintf(&b, "\n\nFIX REQUESTED BY THE DEVELOPER:\n%s", q)
+	} else if q != "" {
 		fmt.Fprintf(&b, "\n\nQUESTION FROM THE DEVELOPER:\n%s", q)
 	}
 ```
@@ -1635,7 +1675,9 @@ Replace with:
 		b.WriteString("CONVERSATION (most recent turns):\n\n")
 		b.WriteString(transcript.Format(r.Turns))
 	}
-	if q := strings.TrimSpace(r.Question); q != "" {
+	if q := strings.TrimSpace(r.Question); q != "" && WriteMode(r) {
+		fmt.Fprintf(&b, "\n\nFIX REQUESTED BY THE DEVELOPER:\n%s", q)
+	} else if q != "" {
 		fmt.Fprintf(&b, "\n\n%s\n%s", questionLabel(r), q)
 	}
 ```
@@ -1666,12 +1708,12 @@ func questionLabel(r Request) string {
 // MemoryPrompt is the memory block that opens the user prompt ("" for none).
 ```
 
-`internal/backend/claude.go` (post-Phase-6 form: Phase 6 moved the system prompt to a file when it is long; this block is unchanged by it). Find:
+`internal/backend/claude.go` (post-Phase-7 form: the tool flags are a `switch` whose first case is the draft's `WriteMode(r)` file tools; that case stays first, so a research pass can never reach it, and `Pass` holds one value, so `PassResearch` and `PassWrite` never coexist). Find:
 
 ```go
-	if r.RepoRead {
+	case r.RepoRead:
 		args = append(args, "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob")
-	} else {
+	default:
 		args = append(args, "--tools", "")
 	}
 ```
@@ -1679,22 +1721,21 @@ func questionLabel(r Request) string {
 Replace with:
 
 ```go
-	var tools []string
-	if r.RepoRead {
-		tools = append(tools, "Read", "Grep", "Glob")
-	}
-	if r.Web && r.Pass == PassResearch {
-		tools = append(tools, "WebSearch", "WebFetch") // still no Bash, Edit or Write
-	}
-	if len(tools) > 0 {
-		list := strings.Join(tools, ",")
+	case r.Web && r.Pass == PassResearch:
+		// Idle research with web tools (Phase 8): still no Bash, Edit or Write.
+		list := "WebSearch,WebFetch"
+		if r.RepoRead {
+			list = "Read,Grep,Glob," + list
+		}
 		args = append(args, "--tools", list, "--allowedTools", list)
-	} else {
+	case r.RepoRead:
+		args = append(args, "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob")
+	default:
 		args = append(args, "--tools", "")
 	}
 ```
 
-Add `"strings"` to `claude.go`'s imports if it isn't there yet.
+No import changes.
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -1704,7 +1745,7 @@ Expected: `ok` for `internal/backend` and every adapter package (the adapters ca
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add internal/backend/backend.go internal/backend/prompt.go internal/backend/claude.go internal/backend/web.go internal/backend/research_test.go
 git commit -m "feat(backend): research pass, scheduled/commit triggers, claude web tools for research, WebSupported (Phase 8)"
 ```
@@ -2209,7 +2250,7 @@ Expected: `ok` for all three (the memory UI and CLI accept the two new kinds; no
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add internal/memory
 git commit -m "feat(memory): research/question kinds for research passes, schedule slot claims, dots_seen (Phase 8, VITAL)"
 ```
@@ -2229,7 +2270,7 @@ git commit -m "feat(memory): research/question kinds for research passes, schedu
 - Consumes: Phase 3's `Card.Kind/Parts/Note`, `CardPart`; `lockfile.Acquire`; `fsutil.WriteFileAtomic`; `platformtest.AssertPrivateFile`.
 - Produces:
   - `const queue.KindDigest = "digest"`; `Card.Origin string` (JSON `origin,omitempty`; `""`, `"research"`, `"scheduled"`, `"commit"`), `Card.Label string` (JSON `label,omitempty`; header text in place of "turn N")
-  - `type queue.Inbox struct{ Timeout time.Duration; Now func() time.Time; … }`, `func queue.OpenInbox(path string) *Inbox`, `(*Inbox) Put(c Card) error` (needs `c.Project`; sets `ID "inbox-N"`, `PaneID ""`, `Status pending`, `Approved false`; keeps 50 per project and 30 days), `(*Inbox) List(projectID string) ([]Card, error)`
+  - `type queue.Inbox struct{ Timeout time.Duration; Now func() time.Time; … }`, `func queue.OpenInbox(path string) *Inbox`, `(*Inbox) Put(c Card) error` (needs `c.Project`; refuses a Phase 7 `KindPatch` card; sets `ID "inbox-N"`, `PaneID ""`, `Status pending`, `Approved false`; keeps 50 per project and 30 days), `(*Inbox) List(projectID string) ([]Card, error)`
   - `func (s *Store) Claim(in *Inbox, projectID, paneID string) (int, error)`: moves a project's inbox cards into this queue as pending, unapproved cards on `paneID` (a nil inbox claims nothing)
 
 - [ ] **Step 1: Write the failing tests**
@@ -2277,6 +2318,9 @@ func TestInboxPutListAndClaim(t *testing.T) {
 	}
 	if err := in.Put(Card{Body: "no project"}); err == nil {
 		t.Fatal("a card without a project can't wait in the inbox")
+	}
+	if err := in.Put(Card{Kind: KindPatch, PatchID: "0123456789abcdef", Body: "x", Project: "g-0123456789abcdef"}); err == nil {
+		t.Fatal("a Phase 7 patch card never leaves its session")
 	}
 	platformtest.AssertPrivateFile(t, p)
 	cs, _ := in.List("g-0123456789abcdef")
@@ -2448,6 +2492,9 @@ func (b *Inbox) Put(c Card) error {
 	if c.Project == "" {
 		return errors.New("inbox: card has no project")
 	}
+	if c.Kind == KindPatch {
+		return errors.New("inbox: a patch card stays in its session") // its patch file lives in the session's patch store
+	}
 	return b.locked(func(f *inboxFile) (bool, error) {
 		now := b.now()
 		f.Next++
@@ -2541,10 +2588,10 @@ func (s *Store) Claim(in *Inbox, projectID, paneID string) (int, error) {
 }
 ```
 
-`internal/queue/queue.go`. Find (Phase 3):
+`internal/queue/queue.go`. Find (post-Phase-7 form: Phase 7's patch-card fields close the struct):
 
 ```go
-	Note     string     `json:"note,omitempty"`     // shown under the card, never sent ("merged without chair …")
+	PatchFlags []string `json:"patch_flags,omitempty"` // binary, mode, symlink, symlink-kept, submodule-skipped, conflicts
 }
 
 // KindCouncil marks a council card: one digest merged from several dots.
@@ -2554,7 +2601,7 @@ const KindCouncil = "council"
 Replace with:
 
 ```go
-	Note     string     `json:"note,omitempty"`     // shown under the card, never sent ("merged without chair …")
+	PatchFlags []string `json:"patch_flags,omitempty"` // binary, mode, symlink, symlink-kept, submodule-skipped, conflicts
 
 	// Proactive cards (Phase 8) only.
 	Origin string `json:"origin,omitempty"` // "" = a turn review; else state.RunResearch, RunScheduled or RunCommit
@@ -2577,7 +2624,7 @@ Expected: `ok  	herdr-dots/internal/queue`.
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
 git add internal/queue
 git commit -m "feat(queue): digest cards, origin/label, shared project inbox with claim (Phase 8)"
 ```
@@ -2840,7 +2887,7 @@ func (s ScheduleSpec) validate() []error {
 }
 ```
 
-`internal/dots/dot.go`. Find (Phase 2's line; Phases 3–4 may have added fields after it, keep them):
+`internal/dots/dot.go`. Find (Phase 2's line; Phase 7's `Capabilities CapabilitySpec` follows it after a blank line, keep it):
 
 ```go
 	Memory   MemorySpec   `toml:"memory"`
@@ -2905,7 +2952,7 @@ Expected: `ok` for both (the editor's template round trip keeps the new defaults
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add internal/dots
 git commit -m "feat(dots): [research], [schedule] and on_commit, off by default, with validation (Phase 8)"
 ```
@@ -2994,7 +3041,7 @@ func TestWebResearchDeclaresServerToolsWithoutStructuredOutput(t *testing.T) {
 
 func TestOnlyWebResearchGetsWebTools(t *testing.T) {
 	for name, r := range map[string]backend.Request{
-		"review with Web set": func() backend.Request { x := req(); x.Web = true; return x }(),
+		"review with Web set":  func() backend.Request { x := req(); x.Web = true; return x }(),
 		"research without web": func() backend.Request { x := req(); x.Pass = backend.PassResearch; return x }(),
 	} {
 		f := &fake{replies: []func(http.ResponseWriter){msg("claude-opus-5-5", "end_turn", text(verdictPass), 10, 5, 0, 0)}}
@@ -3188,7 +3235,7 @@ Replace with:
 	}
 ```
 
-Find (inside `turn`):
+Find (inside `turn`; post-Phase-4-fix form: cost comes from `prices.CostServed`, which prices a refusal fallback by the model that answered):
 
 ```go
 		if final && len(params.Tools) > 0 {
@@ -3209,7 +3256,7 @@ Find (inside `turn`):
 		if served == "" {
 			served = model
 		}
-		usd, known := prices.Cost(Provider, served, u)
+		usd, known := prices.CostServed(Provider, served, model, u)
 ```
 
 Replace with:
@@ -3230,7 +3277,7 @@ Replace with:
 		if served == "" {
 			served = model
 		}
-		usd, known := prices.Cost(Provider, served, u)
+		usd, known := prices.CostServed(Provider, served, model, u)
 		if known {
 			usd += float64(searches) * WebSearchUSD
 		}
@@ -3320,7 +3367,7 @@ Expected: `ok` for every backend package, including all Phase 4 adapter tests.
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add internal/backend/anthropicapi internal/backend/openaiapi
 git commit -m "feat(backend): web search/fetch for research passes in the Anthropic and OpenAI adapters (Phase 8)"
 ```
@@ -3333,18 +3380,18 @@ git commit -m "feat(backend): web search/fetch for research passes in the Anthro
 
 **Files:**
 - Create: `internal/engine/background.go`
-- Modify: `internal/engine/engine.go`, `internal/engine/deliver.go`, `internal/engine/memory.go`, `internal/engine/settings.go`, `internal/view/view.go`, `cmd/herdr-dots/engine.go`
+- Modify: `internal/engine/engine.go`, `internal/engine/deliver.go`, `internal/engine/memory.go`, `internal/engine/settings.go`, `internal/engine/draft_astguard_test.go`, `internal/view/view.go`, `cmd/herdr-dots/engine.go`
 - Test: `internal/engine/proactive_rig_test.go` (shared by Tasks 10–13), `internal/engine/background_test.go`
 
 **Interfaces:**
-- Consumes: Task 3 `state.Daily`, `state.Day`, `state.Run*`, `state.Outcome*`, `paths.DailyFile/InboxFile`; Task 4 `Config.ProactiveEnabled`, `DailyBudgetUSD`; Task 5 `backend.PassResearch`, `TriggerScheduled`, `TriggerCommit`, `WebSupported`, `Request.Web/Trigger`; Task 6 `memory.ApplyOptions`; Task 7 `queue.Inbox`, `OpenInbox`, `(*Store) Claim`, `Card.Origin/Label`; Task 8 `dots.Dot.Research`, `Dot.Proactive()`; Phase 4 `requestFor`, `deltaOf`, `costDetail`, `withCost`, `OverUSD`, `(*Usage) Add`, `Result.CostKnown/CostUSD`, `credentials.Redact`; Phase 2 `loadMemory`, `touchMemory`, `applyMemoryOps`, `suppressedBy`, `firstLine`, `feed`, `notify`, `reportPending`; v1/Phase 2 test helpers `dot`, `pane`, `eventually`, `fakeReader`, `testProject`.
+- Consumes: Task 3 `state.Daily`, `state.Day`, `state.Run*`, `state.Outcome*`, `paths.DailyFile/InboxFile`; Task 4 `Config.ProactiveEnabled`, `DailyBudgetUSD`; Task 5 `backend.PassResearch`, `TriggerScheduled`, `TriggerCommit`, `WebSupported`, `Request.Web/Trigger`; Task 6 `memory.ApplyOptions`; Task 7 `queue.Inbox`, `OpenInbox`, `(*Store) Claim`, `Card.Origin/Label`; Task 8 `dots.Dot.Research`, `Dot.Proactive()`; Phase 4 `requestFor`, `deltaOf`, `costDetail`, `withCost`, `OverUSD`, `(*Usage) Add`, `Result.CostKnown/CostUSD`, `redactErr`; Phase 2 `loadMemory`, `touchMemory`, `applyMemoryOps`, `suppressedBy`, `firstLine`, `feed`, `notify`, `reportPending`; Phase 7 (merged) `e.gens` (per-pane attachment generations, bumped under `e.mu` by `dropPane` and `Detach`), `e.drafts`/`draftRun.abandoned`, `e.asking`, `draftBudgetLocked`'s in-flight rule, `ErrBudget`, and the write-tool AST guard `writeToolViolations` (`draft_astguard_test.go`); v1/Phase 2 test helpers `dot`, `pane`, `eventually`, `fakeReader`, `testProject`.
 - Produces (later engine tasks rely on these exact names):
   - `engine.Deps.Clock func() time.Time`, `Deps.Daily *state.Daily`, `Deps.Inbox *queue.Inbox`
   - `type BackgroundInput struct{ Proactive, PausedAll, Paused bool; DailyCount, MaxPerDay int; CostToday, DailyBudget float64 }`, `func DecideBackground(in BackgroundInput) Reason`; reasons `ReasonProactiveOff`, `ReasonDailyRuns`, `ReasonDailyBudget`, `ReasonDailyUnavailable`
-  - unexported: `type bgJob struct{ kind, paneID, session, project, projectName, cwd string; dot dots.Dot; turns []transcript.Turn; question, label string; maxPerDay int; paused bool; turn, period int; since time.Time; deliver func(bgJob, backend.Verdict); done func() }`; `(e *Engine) now() time.Time`, `proactiveOn() bool`, `todayLocked(now) state.Day`, `setToday(state.Day)`, `refreshToday()`, `todayTick()`, `backgroundGate(slug, kind string, maxPerDay int, paused bool) Reason`, `dailyBudgetHit()`, `onceToday(key string) bool`, `runBackground(j bgJob)`, `bgFailed(j, err)`, `deliverScheduled(j bgJob, v backend.Verdict)`, `claimInbox(paneID, projectID string)`, `inboxTick()`, `nextLocked(d dots.Dot, paneID string, now time.Time) string`; func `dayOf(time.Time) string`, `outcomeFor(kind string) string`; Engine fields `bgBusy map[key]string`, `bgSem chan struct{}`, `today state.Day`, `todayAt`, `inboxAt time.Time`, `toasted map[string]string`
+  - unexported: `type bgJob struct{ kind, paneID, session, project, projectName, cwd string; dot dots.Dot; turns []transcript.Turn; question, label string; maxPerDay int; paused bool; gen uint64; turn, period int; since time.Time; deliver func(bgJob, backend.Verdict); done func() }` (`gen` = `e.gens[paneID]`, read under `e.mu` when the job is built); `(e *Engine) now() time.Time`, `proactiveOn() bool`, `todayLocked(now) state.Day`, `setToday(state.Day)`, `refreshToday()`, `todayTick()`, `backgroundGate(slug, kind string, maxPerDay int, paused bool) Reason`, `dailyBudgetHit()`, `onceToday(key string) bool`, `runBackground(j bgJob)`, `bgPaneGoneLocked(j bgJob) bool`, `bgPaneGone(j bgJob) bool`, `keepPane(j *bgJob, when string) bool`, `chargeBackground(j bgJob, d state.Delta)`, `inFlightLocked(paneID string, except key) int` (asks, live drafts and background runs in flight on the pane), `bgOverBudgetLocked(j bgJob) bool`, `bgFailed(j, err)`, `deliverScheduled(j bgJob, v backend.Verdict)`, `claimInbox(paneID, projectID string)`, `inboxTick()`, `nextLocked(d dots.Dot, paneID string, now time.Time) string`; func `dayOf(time.Time) string`, `outcomeFor(kind string) string`; Engine fields `bgBusy map[key]string`, `bgSem chan struct{}`, `today state.Day`, `todayAt`, `inboxAt time.Time`, `toasted map[string]string`
   - `(*Engine) applyMemoryOps(…, memoryPass bool, opts ...memory.ApplyOptions) int`
   - `view.DotState.Next string`, `DotState.Background string`; `view.Pane.Away *view.AwayState`; `type view.AwayState struct{ Since time.Time; Pending int }`; `view.Snapshot.TodayUSD float64`, `TodayRuns int`, `DailyBudgetUSD float64`
-  - Behavior: `Attach` claims inbox cards for the pane's project; `poll` refreshes the cached day every 30 s and sweeps the inbox every 30 s; a malformed config forces `ProactiveEnabled` off; the engine binary wires `STATE_DIR/daily.json` and `STATE_DIR/inbox.json`
+  - Behavior: `Attach` claims inbox cards for the pane's project; `poll` refreshes the cached day every 30 s and sweeps the inbox every 30 s; a malformed config forces `ProactiveEnabled` off; the engine binary wires `STATE_DIR/daily.json` and `STATE_DIR/inbox.json`; a background run never sets `Write` or `PassWrite` (research is `PassResearch`, everything else `PassReview`), and the AST guard accepts `.Pass = backend.PassResearch` as read-only; a run whose pane closed or was reused (generation changed) charges, feeds and cards nothing there, except a scheduled run, which falls back to the project's inbox; a run on a pane counts toward the dot's and the pane's session call and dollar budgets, with asks, drafts and background runs in flight counted as calls already made
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3723,6 +3770,9 @@ func TestScheduledResultWaitsInInboxUntilAttach(t *testing.T) {
 	if req.Trigger != backend.TriggerScheduled || req.Question != "Review commits since the last run." || !req.RepoRead || req.Cwd != r.dir || req.Web || req.Pass != backend.PassReview {
 		t.Fatalf("request %+v", req)
 	}
+	if req.Write || backend.WriteMode(req) {
+		t.Fatal("a background run never asks for write tools")
+	}
 	r.attach(t, "security")
 	eventually(t, "the inbox card is claimed", func() bool { return len(r.q.Pending(pane)) == 1 })
 	c := r.q.Pending(pane)[0]
@@ -3818,6 +3868,53 @@ func TestBackgroundRunAccountsUsageAndFeed(t *testing.T) {
 	}
 }
 
+// A pane that closes while a background run is out (its id then reused by a
+// new attachment, Phase 7's generations): a commit review charges and cards
+// nothing on the new attachment; a scheduled result goes to the inbox.
+func TestBackgroundRunOutlivingItsPane(t *testing.T) {
+	d := dot("Security", dots.ModeQueue)
+	r := newProRig(t, proOpts{}, d)
+	r.attach(t, "security")
+	r.be.set(proResult("warn", "The new endpoint has no rate limit."))
+	gate := r.be.hold("", true)
+	done := make(chan struct{})
+	j := scheduledJob(r, d)
+	j.kind, j.label, j.paneID, j.session = state.RunCommit, "commit a1b2c3d", pane, "s1"
+	j.deliver = func(bgJob, backend.Verdict) { t.Error("a review for a closed pane was delivered") }
+	j.done = func() { close(done) }
+	r.e.spawn(func() { r.e.runBackground(j) })
+	eventually(t, "the commit review is out", func() bool { return r.be.n() == 1 })
+	r.e.dropPane(pane)
+	r.attach(t, "security") // the same pane id: a new attachment
+	close(gate)
+	<-done
+	if n := r.usage.Calls(pane, "security"); n != 0 {
+		t.Fatalf("the new attachment was charged %d calls", n)
+	}
+	if day := r.today(t); day.Count("security", state.RunCommit) != 1 {
+		t.Fatalf("the daily store still counts the run: %+v", day.Runs)
+	}
+
+	gate = r.be.hold("", true)
+	done = make(chan struct{})
+	s := scheduledJob(r, d)
+	r.e.mu.Lock()
+	s.paneID, s.session, s.gen = pane, "s1", r.e.gens[pane]
+	r.e.mu.Unlock()
+	s.done = func() { close(done) }
+	r.e.spawn(func() { r.e.runBackground(s) })
+	eventually(t, "the scheduled run is out", func() bool { return r.be.n() == 2 })
+	r.e.dropPane(pane)
+	close(gate)
+	<-done
+	if cs, _ := r.inbox.List(testProject); len(cs) != 1 || cs[0].PaneID != "" {
+		t.Fatalf("a scheduled result whose pane closed waits in the inbox: %+v", cs)
+	}
+	if len(r.q.Pending(pane)) != 0 {
+		t.Fatal("no card on the closed pane")
+	}
+}
+
 // One background run at a time per engine: research, schedules and commit
 // reviews never crowd out turn reviews.
 func TestOneBackgroundRunAtATime(t *testing.T) {
@@ -3854,11 +3951,11 @@ import (
 	"time"
 
 	"herdr-dots/internal/backend"
-	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
+	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/transcript"
 )
 
@@ -3925,6 +4022,7 @@ type bgJob struct {
 	label       string    // feed and card header: "research", "scheduled Mon 09:00", "commit a1b2c3d"
 	maxPerDay   int       // per-dot daily cap for this kind; 0 = none
 	paused      bool      // the dot is paused on paneID
+	gen         uint64    // paneID's attachment generation (e.gens) when the job was built
 	turn        int       // the pane's last turn index, for memory evidence (0 without a pane)
 	period      int       // research: the pane's idle period when the run was reserved
 	since       time.Time // research: when that idle period began
@@ -4045,8 +4143,10 @@ func outcomeFor(kind string) string {
 }
 
 // runBackground runs one job: one background run at a time (bgSem), then a
-// run slot (sem), a fresh daily check, the backend, usage and daily
-// accounting, memory ops, anti-repeat, then j.deliver for a relevant verdict.
+// run slot (sem), a fresh daily check, the pane checks (still attached, same
+// generation, session budgets), the backend, usage and daily accounting,
+// memory ops, anti-repeat, then j.deliver for a relevant verdict. It never
+// asks for write tools: the request is a review or a research pass.
 func (e *Engine) runBackground(j bgJob) {
 	k := key{j.paneID, j.dot.Slug}
 	e.mu.Lock()
@@ -4080,19 +4180,29 @@ func (e *Engine) runBackground(j bgJob) {
 		e.d.Logf("dot %s: %s skipped (%s)", j.dot.Slug, j.label, r)
 		return
 	}
+	if !e.keepPane(&j, "started") {
+		return
+	}
+	e.mu.Lock()
+	over := e.bgOverBudgetLocked(j)
+	e.mu.Unlock()
+	if over {
+		e.d.Logf("dot %s: %s skipped (%s on %s)", j.dot.Slug, j.label, ReasonSessionBudget, j.paneID)
+		return
+	}
 	be, err := e.d.Backend(j.dot.Backend.Kind)
 	if err != nil {
 		e.bgFailed(j, err)
 		return
 	}
 	att := state.Attachment{PaneID: j.paneID, Cwd: j.cwd, ProjectID: j.project, ProjectName: j.projectName, SessionValue: j.session}
-	mem := e.loadMemory(&att, j.dot, j.turns)
+	mem := e.loadMemory(&att, j.dot, j.turns) // memory goes in the user prompt only
 	req := requestFor(j.dot, j.cwd)
 	req.Turns, req.Question, req.Memory, req.Learn = j.turns, j.question, mem.block, mem.learn
 	req.RepoRead = j.cwd != "" && (j.kind != state.RunCommit || j.dot.Context.RepoRead)
 	switch j.kind {
 	case state.RunResearch:
-		req.Pass = backend.PassResearch
+		req.Pass = backend.PassResearch // read-only, like a review (draft_astguard_test.go allows it)
 		req.Web = j.dot.Research.Web && backend.WebSupported(j.dot.Backend.Kind)
 		if j.dot.Research.Web && !req.Web {
 			e.d.Logf("dot %s: %s has no web tools; researching without the web", j.dot.Slug, j.dot.Backend.Kind)
@@ -4105,10 +4215,8 @@ func (e *Engine) runBackground(j bgJob) {
 	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
-	if j.paneID != "" {
-		_ = e.d.Usage.Add(j.paneID, j.dot.Slug, deltaOf(res))
-	}
-	cost := 0.0 // unknown-cost runs count one run and $0 (Phase 4 rule)
+	e.chargeBackground(j, deltaOf(res)) // not to a pane that closed (or whose id was reused) meanwhile
+	cost := 0.0                         // unknown-cost runs count one run and $0 (Phase 4 rule)
 	if res.CostKnown {
 		cost = res.CostUSD
 	}
@@ -4116,6 +4224,9 @@ func (e *Engine) runBackground(j bgJob) {
 		e.d.Logf("daily budget: %v", derr)
 	}
 	e.refreshToday()
+	if !e.keepPane(&j, "ended") {
+		return
+	}
 	if err != nil {
 		e.bgFailed(j, err)
 		return
@@ -4137,8 +4248,96 @@ func (e *Engine) runBackground(j bgJob) {
 	}
 }
 
+// bgPaneGoneLocked reports whether a job's pane closed, or its id now names
+// a new attachment (the generation changed, as for Phase 7 drafts), since the
+// job was built. Caller holds e.mu (e.mu -> stores).
+func (e *Engine) bgPaneGoneLocked(j bgJob) bool {
+	if j.paneID == "" {
+		return false
+	}
+	_, ok := e.d.Attachments.Get(j.paneID)
+	return !ok || e.gens[j.paneID] != j.gen
+}
+
+func (e *Engine) bgPaneGone(j bgJob) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.bgPaneGoneLocked(j)
+}
+
+// keepPane decides what a job does when its pane is gone: a scheduled run
+// belongs to its project, so it carries on without the pane (its result goes
+// to the project's inbox); research and commit reviews end, with no card,
+// no feed entry and no charge. It reports whether the job continues.
+func (e *Engine) keepPane(j *bgJob, when string) bool {
+	if !e.bgPaneGone(*j) {
+		return true
+	}
+	if j.kind == state.RunScheduled {
+		j.paneID, j.session, j.turn, j.paused = "", "", 0, false
+		return true
+	}
+	e.d.Logf("dot %s: %s %s after pane %s closed; dropped", j.dot.Slug, j.label, when, j.paneID)
+	return false
+}
+
+// chargeBackground adds a run's usage to its pane's session usage, unless
+// the pane is gone (dropPane reset its usage; a reused id must not inherit
+// the spend). The check and the add share e.mu, as in charge and in Phase 7's
+// charge for a draft.
+func (e *Engine) chargeBackground(j bgJob, d state.Delta) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if j.paneID == "" || e.bgPaneGoneLocked(j) {
+		return
+	}
+	_ = e.d.Usage.Add(j.paneID, j.dot.Slug, d)
+}
+
+// inFlightLocked counts the pane's runs that may still charge it: MCP asks,
+// live drafts and background runs, except the one keyed except. Caller holds
+// e.mu.
+func (e *Engine) inFlightLocked(paneID string, except key) int {
+	n := 0
+	for k := range e.asking {
+		if k.pane == paneID {
+			n++
+		}
+	}
+	for _, dr := range e.drafts {
+		if dr.pane == paneID && !dr.abandoned {
+			n++
+		}
+	}
+	for k := range e.bgBusy {
+		if k.pane == paneID && k != except {
+			n++
+		}
+	}
+	return n
+}
+
+// bgOverBudgetLocked: a background run on a pane counts as one call (and its
+// cost) toward the dot's and the pane's session budgets, like a draft
+// (draftBudgetLocked): asks, drafts and other background runs in flight count
+// as calls already made. A pane-less scheduled run has no session budget.
+// Caller holds e.mu.
+func (e *Engine) bgOverBudgetLocked(j bgJob) bool {
+	if j.paneID == "" {
+		return false
+	}
+	cfg := e.config()
+	inFlight := e.inFlightLocked(j.paneID, key{j.paneID, j.dot.Slug})
+	return e.d.Usage.Calls(j.paneID, j.dot.Slug) >= j.dot.Budget.MaxCallsPerSession ||
+		OverUSD(e.d.Usage.Cost(j.paneID, j.dot.Slug), j.dot.Budget.MaxUSDPerSession) ||
+		e.d.Usage.PaneCalls(j.paneID)+inFlight >= cfg.SessionBudgetCalls ||
+		OverUSD(e.d.Usage.PaneCost(j.paneID), cfg.SessionBudgetUSD)
+}
+
+// bgFailed logs and feeds a failed run (redacted and sanitized, like
+// runFailed). Background failures never count toward the 3-failure stop.
 func (e *Engine) bgFailed(j bgJob, err error) {
-	msg := credentials.Redact(err.Error())
+	msg := textutil.SanitizeModelText(redactErr(err).Error())
 	e.d.Logf("dot %s: %s failed: %s", j.dot.Slug, j.label, msg)
 	e.feed(j.paneID, j.dot.Slug, j.turn, state.OutcomeError, j.label+": "+msg)
 }
@@ -4153,7 +4352,7 @@ func (e *Engine) deliverScheduled(j bgJob, v backend.Verdict) {
 	}
 	c := queue.Card{Dot: j.dot.Slug, DotName: j.dot.Name, Glyph: j.dot.Glyph, Turn: j.turn, Severity: v.Severity,
 		Body: v.Message, Mode: string(mode), Project: j.project, Origin: j.kind, Label: j.label}
-	if j.paneID != "" {
+	if j.paneID != "" && !e.bgPaneGone(j) {
 		c.PaneID = j.paneID
 		if _, err := e.d.Queue.Add(c); err != nil {
 			e.d.Logf("queue add: %v", err)
@@ -4311,16 +4510,16 @@ Replace with:
 	e.subscribe(paneID)
 ```
 
-Find (in `Snapshot`):
+Find (in `Snapshot`; post-Phase-7 form with `WriteEnabled`):
 
 ```go
-	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll}
+	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll, WriteEnabled: e.config().WriteEnabled}
 ```
 
 Replace with:
 
 ```go
-	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll}
+	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll, WriteEnabled: e.config().WriteEnabled}
 	now := e.now()
 	if day := e.todayLocked(now); e.d.Daily != nil {
 		s.TodayUSD, s.TodayRuns, s.DailyBudgetUSD = day.CostUSD, day.Total(), e.config().DailyBudgetUSD
@@ -4379,23 +4578,88 @@ func (e *Engine) applyMemoryOps(paneID string, d dots.Dot, turn int, mr memRun, 
 
 Find `		res, err = e.d.Memory.Apply(mr.project, d.Slug, ops, ev)` and replace it with `		res, err = e.d.Memory.Apply(mr.project, d.Slug, ops, ev, opts...)`.
 
-`internal/engine/settings.go`. Find:
+`internal/engine/settings.go` (post-Phase-7 form: `WriteEnabled` already fails closed here). Find:
 
 ```go
-		c.InjectEnabled, c.MemoryEnabled = false, false
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled = false, false, false
 		e.d.Logf("config: %v (keeping the last good settings; inject and memory disabled until it is fixed)", err)
 ```
 
 Replace with:
 
 ```go
-		c.InjectEnabled, c.MemoryEnabled, c.ProactiveEnabled = false, false, false
-		e.d.Logf("config: %v (keeping the last good settings; inject, memory and proactive work disabled until it is fixed)", err)
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
+		e.d.Logf("config: %v (keeping the last good settings; inject, memory, drafts and proactive work disabled until it is fixed)", err)
 ```
 
-Update the `ReloadConfig` doc comment to say it forces "InjectEnabled, MemoryEnabled and ProactiveEnabled off".
+Find (the `ReloadConfig` doc comment):
 
-`internal/view/view.go`. Add `"time"` to the imports. Find (Phase 2's last `DotState` field; Phase 4 added cost fields after it, keep them):
+```go
+// keeps the last good settings but forces InjectEnabled and MemoryEnabled off
+// (the kill switches fail closed) and logs the error.
+```
+
+Replace with:
+
+```go
+// keeps the last good settings but forces InjectEnabled, MemoryEnabled,
+// WriteEnabled and ProactiveEnabled off (the kill switches fail closed) and
+// logs the error.
+```
+
+`internal/engine/draft_astguard_test.go` (Phase 7's write-tool guard). A research pass is read-only like a review, so `.Pass = backend.PassResearch` joins the accepted assignments; a `backend.Request` literal that sets `Pass` or `Write`, any `.Write` assignment and any other `.Pass` value stay violations, and `runBackground` sets the pass by assignment, never in a literal. Find:
+
+```go
+// an assignment to a .Write field, a .Pass assignment other than PassMemory or
+// PassReview, and (outside package backend
+```
+
+Replace with:
+
+```go
+// an assignment to a .Write field, a .Pass assignment other than PassMemory,
+// PassReview or PassResearch (Phase 8's read-only research pass), and
+// (outside package backend
+```
+
+Find:
+
+```go
+						if r, ok := x.Rhs[i].(*ast.SelectorExpr); ok && (r.Sel.Name == "PassMemory" || r.Sel.Name == "PassReview") {
+```
+
+Replace with:
+
+```go
+						if r, ok := x.Rhs[i].(*ast.SelectorExpr); ok && (r.Sel.Name == "PassMemory" || r.Sel.Name == "PassReview" || r.Sel.Name == "PassResearch") {
+```
+
+Find:
+
+```go
+						report(x, ".Pass assigned something other than PassMemory/PassReview")
+```
+
+Replace with:
+
+```go
+						report(x, ".Pass assigned something other than PassMemory/PassReview/PassResearch")
+```
+
+Find (in `TestTheWriteToolGuardCatchesEveryWayToBuildAWriteRequest`'s `good` map):
+
+```go
+		"memory pass":   `package x; func f(r backend.Request) { r.Pass, r.Question = backend.PassMemory, "" }`,
+```
+
+Replace with:
+
+```go
+		"memory pass":   `package x; func f(r backend.Request) { r.Pass, r.Question = backend.PassMemory, "" }`,
+		"research pass": `package x; func f(r backend.Request) { r.Pass = backend.PassResearch }`,
+```
+
+`internal/view/view.go` (`"time"` is already imported for Phase 7's `DraftState`). Find (Phase 2's last `DotState` field; Phase 4 added cost fields after it, keep them):
 
 ```go
 	Learning      bool `json:"learning"`       // a memory pass is running
@@ -4443,22 +4707,24 @@ type AwayState struct {
 // Council phases (CouncilState.Phase).
 ```
 
-Find:
+Find (the end of `Snapshot`; Phase 7's `WriteEnabled` is its last field):
 
 ```go
-	PausedAll     bool         `json:"paused_all"`
+	WriteEnabled  bool         `json:"write_enabled"` // config write_enabled (Phase 7)
+}
 ```
 
 Replace with:
 
 ```go
-	PausedAll     bool         `json:"paused_all"`
+	WriteEnabled  bool         `json:"write_enabled"` // config write_enabled (Phase 7)
 
 	// Background work today, every session (Phase 8; the pane header shows it
 	// once TodayRuns > 0).
 	TodayUSD       float64 `json:"today_usd"`
 	TodayRuns      int     `json:"today_runs"`
 	DailyBudgetUSD float64 `json:"daily_budget_usd"`
+}
 ```
 
 `cmd/herdr-dots/engine.go` (post-Phase-6 form; `buildEngine`). Find:
@@ -4514,12 +4780,12 @@ Replace with:
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `gofmt -w internal/engine internal/view cmd/herdr-dots && GOTOOLCHAIN=local go test -race -count=3 ./internal/engine/ ./internal/view/ ./cmd/herdr-dots/`
-Expected: `ok` three times for each package, including every earlier engine test (v1, Phases 2–5).
+Expected: `ok` three times for each package, including every earlier engine test (v1, Phases 2–7; `TestOnlyDraftsAskForWriteTools` stays green because `runBackground` assigns only `backend.PassResearch`, which the guard now accepts).
 
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
 git add internal/engine internal/view cmd/herdr-dots/engine.go
 git commit -m "feat(engine): background runs with daily caps, shared inbox delivery and claim, proactive view fields (Phase 8)"
 ```
@@ -4539,8 +4805,8 @@ git commit -m "feat(engine): background runs with daily caps, shared inbox deliv
 - Consumes: Task 10's `bgJob`, `runBackground`, `todayLocked`, `proactiveOn`, `now`, `bgBusy`, `nextLocked`, rig (`newProRig`, `proOpts`, `proRig.*`, `proResult`, `proBackend.setFor/set/hold/runs`); Phase 3's `council.Part`, `council.PlainMerge`, `council.MaxSeverity`, `recordCouncilOutcomes` and the council branches of `recordOutcome`/`Remember`; Phase 2's `memory.Store.List`, `memory.Filter`, `touchedPaths`, `projectOf`, `memOn`, `reader`, `tail`; Phase 4's `Usage.Cost/PaneCost`, `Config.SessionBudgetUSD`, `BudgetSpec.MaxUSDPerSession`.
 - Produces:
   - `type ResearchInput struct{ Dot dots.Dot; Att state.DotAttachment; AgentIdle bool; IdleFor time.Duration; RanThisPeriod, Busy bool; DotCalls, PaneCalls, PaneBudget int; DotCostUSD, PaneCostUSD, DotBudgetUSD, PaneBudgetUSD float64; Background BackgroundInput }`, `func DecideResearch(in ResearchInput) bool`
-  - unexported: `type idleState`, `type awayPart`, Engine field `idle map[string]*idleState`; `(e *Engine) observePane(a state.Attachment, p herdr.PaneInfo)`, `maybeResearch`, `runResearch`, `researchBrief`, `openQuestions`, `addAway`, `researchDone`, `flushAway`, `awayLocked(paneID) *view.AwayState`, `researchNextLocked(d, paneID, now) string`; consts `digestSlug = "away"`, `digestName = "Away"`, `digestGlyph = "☾"`
-  - Behavior: poll observes each attached pane (activity = new turn, new session, agent working, focus gained); each research-enabled dot runs at most one research pass per idle period after `idle_minutes`; relevant results become one `queue.KindDigest` card on the developer's return (immediately for `critical`); a return during research waits for the runs in flight; digest outcomes are recorded per part; a digest can only be remembered as a project convention; roster hint `research in Nm`; `Pane.Away` in the snapshot
+  - unexported: `type idleState`, `type awayPart`, Engine field `idle map[string]*idleState`; `(e *Engine) observePane(a state.Attachment, p herdr.PaneInfo)`, `maybeResearch`, `runResearch`, `researchBrief`, `openQuestions`, `addAway`, `researchDone(j bgJob)`, `flushAway`, `awayLocked(paneID) *view.AwayState`, `researchNextLocked(d, paneID, now) string`; consts `digestSlug = "away"`, `digestName = "Away"`, `digestGlyph = "☾"`
+  - Behavior: poll observes each attached pane (activity = new turn, new session, agent working, focus gained); each research-enabled dot runs at most one research pass per idle period after `idle_minutes`; relevant results become one `queue.KindDigest` card on the developer's return (immediately for `critical`); a return during research waits for the runs in flight; digest outcomes are recorded per part; a digest can only be remembered as a project convention; roster hint `research in Nm`; `Pane.Away` in the snapshot; research jobs carry the pane's generation and count asks, drafts and background runs in flight toward the pane call budget; `dropPane` and the last `Detach` clear the pane's idle state in the section that bumps its generation, so a reused pane id never inherits collected research
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4758,6 +5024,28 @@ func TestReturnMidResearchFoldsIntoOneDigest(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("%d digests, want 1", n)
+	}
+}
+
+// A pane that closes while its research runs, its id then reused by a new
+// attachment (Phase 7's generations): the late result, even a critical one,
+// makes no digest there and charges the new attachment nothing.
+func TestResearchForAClosedPaneMakesNoDigest(t *testing.T) {
+	r := idleRig(t, researchDot("Security"))
+	r.be.set(proResult("critical", "The session secret is committed in config/dev.env."))
+	gate := r.be.hold(backend.PassResearch, false)
+	r.clock.Add(11 * time.Minute)
+	eventually(t, "a research pass in flight", func() bool { return len(r.be.runs(backend.PassResearch)) == 1 })
+	r.e.dropPane(pane)
+	r.attach(t, "security") // the same pane id: a new attachment
+	close(gate)
+	eventually(t, "the run ended", func() bool { return r.dotState("security").Background == "" })
+	time.Sleep(100 * time.Millisecond)
+	if len(r.q.Pending(pane)) != 0 {
+		t.Fatalf("a closed pane's research reached the new attachment: %+v", r.q.Pending(pane))
+	}
+	if n := r.usage.Calls(pane, "security"); n != 0 {
+		t.Fatalf("the new attachment was charged %d calls", n)
 	}
 }
 
@@ -5018,7 +5306,11 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 		return
 	}
 	day := e.todayLocked(now)
-	paneCalls, paneCost := e.d.Usage.PaneCalls(a.PaneID), e.d.Usage.PaneCost(a.PaneID)
+	// Asks, drafts and background runs in flight count as calls already made
+	// (Phase 7's draftBudgetLocked rule).
+	paneCalls := e.d.Usage.PaneCalls(a.PaneID) + e.inFlightLocked(a.PaneID, key{})
+	paneCost := e.d.Usage.PaneCost(a.PaneID)
+	gen := e.gens[a.PaneID] // the attachment these runs are for
 	for _, da := range a.Dots {
 		d, ok := e.dots[da.Slug]
 		if !ok || !d.Research.Enabled {
@@ -5041,7 +5333,7 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 		paneCalls++
 		jobs = append(jobs, bgJob{kind: state.RunResearch, paneID: a.PaneID, session: a.SessionValue,
 			project: a.ProjectID, projectName: a.ProjectName, cwd: a.Cwd, dot: d, label: "research",
-			maxPerDay: d.Research.MaxRunsPerDay, period: st.period, since: st.activeAt})
+			maxPerDay: d.Research.MaxRunsPerDay, period: st.period, since: st.activeAt, gen: gen})
 	}
 	e.mu.Unlock()
 	if len(jobs) > 0 {
@@ -5056,7 +5348,7 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 // runs the pass. Results go to the pane's away collector (addAway).
 func (e *Engine) runResearch(j bgJob) {
 	j.deliver = e.addAway
-	j.done = func() { e.researchDone(j.paneID) }
+	j.done = func() { e.researchDone(j) }
 	att, ok := e.d.Attachments.Get(j.paneID)
 	if !ok {
 		e.mu.Lock()
@@ -5137,7 +5429,7 @@ func (e *Engine) addAway(j bgJob, v backend.Verdict) {
 	}
 	e.mu.Lock()
 	st := e.idle[j.paneID]
-	if st == nil {
+	if st == nil || e.bgPaneGoneLocked(j) { // a closed or reused pane gets no digest part
 		e.mu.Unlock()
 		return
 	}
@@ -5161,11 +5453,13 @@ func (e *Engine) addAway(j bgJob, v backend.Verdict) {
 }
 
 // researchDone ends one reserved research run; the last one flushes a digest
-// the developer is waiting for.
-func (e *Engine) researchDone(paneID string) {
+// the developer is waiting for. A run whose pane closed (or whose id now
+// names a new attachment) reserved nothing in the current idle state.
+func (e *Engine) researchDone(j bgJob) {
+	paneID := j.paneID
 	e.mu.Lock()
 	st := e.idle[paneID]
-	if st == nil {
+	if st == nil || e.gens[paneID] != j.gen {
 		e.mu.Unlock()
 		return
 	}
@@ -5312,21 +5606,36 @@ Replace with:
 		e.flushAuto(a.PaneID)
 ```
 
-Find:
+Find (in `dropPane`, post-Phase-7 form: the `e.mu` section that bumps the pane's generation):
 
 ```go
-func (e *Engine) dropPane(paneID string) {
-	e.unwatch(paneID)
+	e.abandonDraftsLocked(paneID, "") // same section as the delete (see Draft)
+	e.gens[paneID]++
 ```
 
 Replace with:
 
 ```go
-func (e *Engine) dropPane(paneID string) {
-	e.unwatch(paneID)
-	e.mu.Lock()
-	delete(e.idle, paneID) // collected research for a closed pane is dropped
-	e.mu.Unlock()
+	e.abandonDraftsLocked(paneID, "") // same section as the delete (see Draft)
+	e.gens[paneID]++
+	delete(e.idle, paneID) // collected research for a closed pane is dropped (idle.go)
+```
+
+`internal/engine/engine.go` (in `Detach`, the `empty` branch that bumps the generation). Find:
+
+```go
+		e.abandonDraftsLocked(paneID, "")
+		e.gens[paneID]++
+		_ = e.d.Attachments.Delete(paneID)
+```
+
+Replace with:
+
+```go
+		e.abandonDraftsLocked(paneID, "")
+		e.gens[paneID]++
+		delete(e.idle, paneID) // a later attach starts a fresh idle period (idle.go)
+		_ = e.d.Attachments.Delete(paneID)
 ```
 
 `internal/engine/memory.go` (Phase 3's council branches). Find (in `recordOutcome`):
@@ -5361,6 +5670,30 @@ Replace with:
 
 (For a council card the message is unchanged, so Phase 3's test keeps passing.)
 
+Find (in `Remember`, the convention text):
+
+```go
+	if c.Kind == queue.KindCouncil {
+		text = councilConventionText(c) // the digest starts with a "## " header
+		if text == council.NoPoint {
+			return fmt.Errorf("card %s: the council digest has no point to remember", cardID)
+		}
+	}
+```
+
+Replace with:
+
+```go
+	if c.Kind == queue.KindCouncil || c.Kind == queue.KindDigest {
+		text = councilConventionText(c) // the digest starts with a "## " header
+		if text == council.NoPoint {
+			return fmt.Errorf("card %s: the %s digest has no point to remember", cardID, c.Kind)
+		}
+	}
+```
+
+(A digest body is Phase 3's `PlainMerge` too, so its first point, not its "## " header, is what gets remembered.)
+
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `gofmt -w internal/engine && GOTOOLCHAIN=local go test -race -count=5 -run 'Research|Digest|Focusing|ReturnMid|Idle' ./internal/engine/ && GOTOOLCHAIN=local go test -race -count=1 ./internal/engine/`
@@ -5369,7 +5702,7 @@ Expected: `ok` both times. The idle tests wait on engine state (`idleNow`) rathe
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
 git add internal/engine
 git commit -m "feat(engine): idle research once per idle period and the while-you-were-away digest (Phase 8)"
 ```
@@ -5386,8 +5719,8 @@ git commit -m "feat(engine): idle research once per idle period and the while-yo
 - Test: `internal/engine/schedule_test.go`
 
 **Interfaces:**
-- Consumes: Task 2 `schedule.Parse`, `Spec.Next`, `Spec.Prev`; Task 6 `(*memory.Store) LastSchedule`, `ClaimSchedule`, `SeeDots`, `RecentDotProjects`, `ProjectMeta.Roots`; Task 8 `dots.ScheduleSpec`, `Targets()`, `ScheduleAttached`; Task 10 `bgJob`, `runBackground`, `backgroundGate`, `deliverScheduled`, `onceToday`, `now`, `proactiveOn`, rig; Task 11 `researchNextLocked`; Phase 2 `memEnabled`, `resolve`, `retryLocked`, `reader`, `tail`, `notify`, `maintainMemory`.
-- Produces: Engine field `plan map[string]time.Time`; `(e *Engine) scheduleTick()`, `fireSchedule(x dueSlot)`, `scheduleTargets(d dots.Dot) []schedTarget`, `rootMissing`, `paneOnProject(pid, slug string) (string, state.Attachment, bool)`, `seeDots(pid string, slugs []string)`, `scheduleNextLocked(d dots.Dot, now time.Time) string`; funcs `scheduledTask`, `catchUpWindow`, `isDir`, `slugsOf`; consts `attachedWindow = 14 * 24 * time.Hour`, `lateGrace = 2 * time.Minute`. Behavior: one run per slot per project across sessions; one catch-up of the latest missed slot within `catch_up_hours` at start or after a gap; no retroactive run for a schedule that never ran; results to an attached pane on the project or the inbox with a toast; missing roots skipped with one toast a day; `ReloadDots` re-plans; `Attach` and the daily memory maintenance record `dots_seen`; roster hint `scheduled Mon 09:00`.
+- Consumes: Task 2 `schedule.Parse`, `Spec.Next`, `Spec.Prev`; Task 6 `(*memory.Store) LastSchedule`, `ClaimSchedule`, `SeeDots`, `RecentDotProjects`, `ProjectMeta.Roots`; Task 8 `dots.ScheduleSpec`, `Targets()`, `ScheduleAttached`; Task 10 `bgJob` (with `gen`), `runBackground`, `backgroundGate`, `bgOverBudgetLocked`, `deliverScheduled`, `onceToday`, `now`, `proactiveOn`, rig; Task 11 `researchNextLocked`; Phase 2 `memEnabled`, `resolve`, `retryLocked`, `reader`, `tail`, `notify`, `maintainMemory`.
+- Produces: Engine field `plan map[string]time.Time`; `(e *Engine) scheduleTick()`, `fireSchedule(x dueSlot)`, `scheduleTargets(d dots.Dot) []schedTarget`, `rootMissing`, `paneOnProject(pid, slug string) (string, state.Attachment, bool, uint64)` (pane id, attachment, paused, generation; read under `e.mu`), `seeDots(pid string, slugs []string)`, `scheduleNextLocked(d dots.Dot, now time.Time) string`; funcs `scheduledTask`, `catchUpWindow`, `isDir`, `slugsOf`; consts `attachedWindow = 14 * 24 * time.Hour`, `lateGrace = 2 * time.Minute`. Behavior: one run per slot per project across sessions; one catch-up of the latest missed slot within `catch_up_hours` at start or after a gap; no retroactive run for a schedule that never ran; results to an attached pane on the project or the inbox with a toast; missing roots skipped with one toast a day; `ReloadDots` re-plans; `Attach` and the daily memory maintenance record `dots_seen`; roster hint `scheduled Mon 09:00`; a scheduled job on a pane carries that attachment's generation, and a slot whose pane's session budget is spent is neither run nor claimed.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5574,6 +5907,26 @@ func TestExplicitProjectsInboxAndMissingRoot(t *testing.T) {
 	}
 }
 
+// A scheduled run on an attached pane counts toward that pane's session
+// budgets: with the dot's call budget spent the slot neither runs nor is
+// claimed (a later catch-up may still run it).
+func TestScheduledRunRespectsTheSessionBudget(t *testing.T) {
+	d := scheduledDot("Security", "0 11 * * *")
+	d.Budget.MaxCallsPerSession = 1
+	r := newProRig(t, proOpts{cwd: t.TempDir()}, d)
+	r.attach(t, "security")
+	eventually(t, "planned", func() bool { return r.dotState("security").Next == "scheduled Wed 11:00" })
+	_ = r.usage.Add(pane, "security", state.Delta{Calls: 1})
+	r.clock.Add(time.Hour + 20*time.Second)
+	time.Sleep(150 * time.Millisecond)
+	if n := len(scheduledRuns(r)); n != 0 {
+		t.Fatalf("%d scheduled runs over the session budget", n)
+	}
+	if last, _ := r.mem.LastSchedule(testProject, "security"); !last.IsZero() {
+		t.Fatalf("slot claimed (%v) although it did not run", last)
+	}
+}
+
 func TestReloadDotsReplansTheNextSlot(t *testing.T) {
 	r := newProRig(t, proOpts{cwd: t.TempDir()}, scheduledDot("Security", "0 11 * * *"))
 	r.attach(t, "security")
@@ -5708,11 +6061,22 @@ func (e *Engine) fireSchedule(x dueSlot) {
 			}
 			continue
 		}
-		paneID, att, paused := e.paneOnProject(t.id, d.Slug)
+		paneID, att, paused, gen := e.paneOnProject(t.id, d.Slug)
 		label := "scheduled " + x.slot.Format("Mon 15:04")
 		if r := e.backgroundGate(d.Slug, state.RunScheduled, 0, paused); r != ReasonRun {
 			e.d.Logf("dot %s: %s on %s skipped (%s)", d.Slug, label, t.name, r)
 			continue // not claimed: a later catch-up may still run it
+		}
+		if paneID != "" {
+			// A run on a pane counts toward its session budgets (runBackground
+			// checks again after the wait).
+			e.mu.Lock()
+			over := e.bgOverBudgetLocked(bgJob{paneID: paneID, dot: d, gen: gen})
+			e.mu.Unlock()
+			if over {
+				e.d.Logf("dot %s: %s on %s skipped (%s on %s)", d.Slug, label, t.name, ReasonSessionBudget, paneID)
+				continue
+			}
 		}
 		ok, err := e.d.Memory.ClaimSchedule(t.id, d.Slug, x.slot)
 		if err != nil {
@@ -5722,7 +6086,7 @@ func (e *Engine) fireSchedule(x dueSlot) {
 			continue
 		}
 		j := bgJob{kind: state.RunScheduled, paneID: paneID, session: att.SessionValue, project: t.id, projectName: t.name,
-			cwd: t.cwd, dot: d, question: scheduledTask(d, last), label: label, paused: paused, deliver: e.deliverScheduled}
+			cwd: t.cwd, dot: d, question: scheduledTask(d, last), label: label, paused: paused, gen: gen, deliver: e.deliverScheduled}
 		if paneID != "" {
 			turns, err := e.reader(att).Turns(e.ctx)
 			if err != nil {
@@ -5804,8 +6168,13 @@ func (e *Engine) rootMissing(d dots.Dot, name string) {
 }
 
 // paneOnProject picks the pane a scheduled result goes to: one where the dot
-// is attached, else any pane on the project, else none (the inbox).
-func (e *Engine) paneOnProject(pid, slug string) (string, state.Attachment, bool) {
+// is attached, else any pane on the project, else none (the inbox). It also
+// returns that attachment's generation: the list and the generation are read
+// in one e.mu section (e.mu -> stores), so the job is tied to this attachment
+// and a pane closed (or reused) while the run is out never gets its card.
+func (e *Engine) paneOnProject(pid, slug string) (string, state.Attachment, bool, uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	var other state.Attachment
 	found := false
 	for _, a := range e.d.Attachments.List() {
@@ -5813,16 +6182,16 @@ func (e *Engine) paneOnProject(pid, slug string) (string, state.Attachment, bool
 			continue
 		}
 		if da := a.Find(slug); da != nil {
-			return a.PaneID, a, da.Paused
+			return a.PaneID, a, da.Paused, e.gens[a.PaneID]
 		}
 		if !found {
 			other, found = a, true
 		}
 	}
 	if found {
-		return other.PaneID, other, false
+		return other.PaneID, other, false, e.gens[other.PaneID]
 	}
-	return "", state.Attachment{}, false
+	return "", state.Attachment{}, false, 0
 }
 
 // seeDots records which dots are attached on a project (for "attached").
@@ -5971,7 +6340,7 @@ Expected: `ok` both times.
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./...
 git add internal/engine
 git commit -m "feat(engine): scheduled dots while Herdr runs, cross-session slot claims, one catch-up (Phase 8)"
 ```
@@ -5988,13 +6357,13 @@ git commit -m "feat(engine): scheduled dots while Herdr runs, cross-session slot
 - Test: `internal/engine/commits_test.go`
 
 **Interfaces:**
-- Consumes: `memory.GitRunner`, `memory.ExecGit` (hook-free; Phase 6 port); `textutil.SanitizeModelText`; Task 8 `TriggerSpec.OnCommit`; Task 4 `Config.CommitPollSeconds`; Task 10 `bgJob`, `runBackground`, `bgBusy`, `proactiveOn`, `now`, rig; v1 `Decide`, `FilterInput` (with Phase 4's dollar fields), `route`, `tail`, `reader`.
+- Consumes: Phase 7's `engine.Deps.Git worktree.Git` (already wired by `cmd/herdr-dots/engine.go` as `worktree.Git{}`; its `Run(ctx, dir string, env []string, args ...string) (string, error)` runs git through `platform.CommandContext` with a `platform.ChildEnv` environment, hooks and fsmonitor off, `GIT_*` variables dropped, no prompts or optional locks, and returns trimmed stdout); `textutil.SanitizeModelText`; Task 8 `TriggerSpec.OnCommit`; Task 4 `Config.CommitPollSeconds`; Task 10 `bgJob` (with `gen`), `runBackground`, `bgBusy`, `bgPaneGone`, `inFlightLocked`, `proactiveOn`, `now`, rig; Phase 7 `e.gens`; v1 `Decide`, `FilterInput` (with Phase 4's dollar fields), `route`, `tail`, `reader`.
 - Produces:
-  - `engine.Deps.Git memory.GitRunner` (nil = `memory.ExecGit`)
+  - no new `Deps` field: the spec's `engine.Deps.Git worktree.Git` is Phase 7's, reused as is
   - `const ReasonCommitOff Reason = "on_commit_off"`; `func DecideCommit(in FilterInput, files []string) Decision`
   - `runOpts.origin`, `runOpts.label` (route copies them onto the card's `Origin`/`Label`)
   - unexported: `pathsMatchGlobs(globs, paths []string) bool` (filter.go; `globsMatch` now uses it), Engine fields `heads map[key]string`, `commitAt time.Time`, `commitBusy bool`; `(e *Engine) commitTick()`, `checkCommits()`, `reviewCommit(a state.Attachment, head string, ds []dots.Dot)`, `deliverCommit(j bgJob, v backend.Verdict)`, `commitContext(cwd, head string) string`, `commitFiles(cwd, head string) []string`, `gitOut(dir string, args ...string) (string, error)`; consts `commitPatchChars = 20000`, `commitGitTimeout = 5 * time.Second`
-  - Behavior: every `commit_poll_seconds`, one HEAD check over attached panes with `on_commit` dots; first sight only records; each new HEAD is reviewed once per dot (bursts and resets coalesce to the current HEAD); the card is labeled `commit <short sha>` and routed by the dot's mode
+  - Behavior: every `commit_poll_seconds`, one HEAD check over attached panes with `on_commit` dots; first sight only records; each new HEAD is reviewed once per dot (bursts and resets coalesce to the current HEAD); the card is labeled `commit <short sha>` and routed by the dot's mode; asks, drafts and background runs in flight count toward the pane call budget; a pane closed or reused during the review gets no card
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -6226,7 +6595,6 @@ import (
 
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/dots"
-	"herdr-dots/internal/memory"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/transcript"
@@ -6352,7 +6720,11 @@ func (e *Engine) reviewCommit(a state.Attachment, head string, ds []dots.Dot) {
 	cfg := e.config()
 	var jobs []bgJob
 	e.mu.Lock()
-	paneCalls := e.d.Usage.PaneCalls(a.PaneID)
+	// Asks, drafts and background runs in flight count as calls already made
+	// (Phase 7's draftBudgetLocked rule); the jobs carry this attachment's
+	// generation, so a pane closed or reused meanwhile gets no card.
+	paneCalls := e.d.Usage.PaneCalls(a.PaneID) + e.inFlightLocked(a.PaneID, key{})
+	gen := e.gens[a.PaneID]
 	for _, d := range ds {
 		k := key{a.PaneID, d.Slug}
 		e.heads[k] = head // reviewed or skipped, this HEAD is done
@@ -6371,7 +6743,7 @@ func (e *Engine) reviewCommit(a state.Attachment, head string, ds []dots.Dot) {
 		e.bgBusy[k] = state.RunCommit
 		paneCalls++
 		j := bgJob{kind: state.RunCommit, paneID: a.PaneID, session: a.SessionValue, project: a.ProjectID, projectName: a.ProjectName,
-			cwd: a.Cwd, dot: d, turns: tail(turns, d.Context.Turns), question: question, label: label, deliver: e.deliverCommit}
+			cwd: a.Cwd, dot: d, turns: tail(turns, d.Context.Turns), question: question, label: label, gen: gen, deliver: e.deliverCommit}
 		if len(j.turns) > 0 {
 			j.turn = j.turns[len(j.turns)-1].Index
 		}
@@ -6386,6 +6758,9 @@ func (e *Engine) reviewCommit(a state.Attachment, head string, ds []dots.Dot) {
 // deliverCommit routes a commit review like a turn review: the dot's mode,
 // inject allowed for inject dots (the commit was not started by a dot).
 func (e *Engine) deliverCommit(j bgJob, v backend.Verdict) {
+	if e.bgPaneGone(j) {
+		return // the pane closed (or its id was reused) after the run
+	}
 	e.route(j.paneID, j.dot, j.turn, v, runOpts{origin: state.RunCommit, label: j.label})
 }
 
@@ -6416,33 +6791,18 @@ func (e *Engine) commitFiles(cwd, head string) []string {
 	return files
 }
 
-// gitOut runs git hook-free (memory.ExecGit, or Deps.Git in tests) with a
-// timeout and fsmonitor off. Never call it under an engine lock.
+// gitOut runs git through Phase 7's runner (Deps.Git, worktree.Git): hooks
+// and fsmonitor off, no terminal prompts or optional locks, GIT_* variables
+// dropped, platform.CommandContext and a ChildEnv environment, and here a
+// 5 s timeout. It returns trimmed stdout. Never call it under an engine lock.
 func (e *Engine) gitOut(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(e.ctx, commitGitTimeout)
 	defer cancel()
-	git := e.d.Git
-	if git == nil {
-		git = memory.ExecGit
-	}
-	return git(ctx, dir, append([]string{"-c", "core.fsmonitor=false"}, args...)...)
+	return e.d.Git.Run(ctx, dir, nil, args...)
 }
 ```
 
-`internal/engine/engine.go`. Find:
-
-```go
-	Inbox *queue.Inbox     // STATE_DIR/inbox.json, shared by every session
-```
-
-Replace with:
-
-```go
-	Inbox *queue.Inbox     // STATE_DIR/inbox.json, shared by every session
-	Git   memory.GitRunner // nil = memory.ExecGit (hook-free); commit triggers
-```
-
-Find:
+`internal/engine/engine.go` (no `Deps` change: `Deps.Git worktree.Git` exists since Phase 7, and the rig's zero `worktree.Git{}` runs the `git` on PATH). Find:
 
 ```go
 type runOpts struct {
@@ -6566,7 +6926,7 @@ Expected: `ok` both times (the commit tests use a real git repo in `t.TempDir()`
 
 ```bash
 grep -n 'PassWrite\|Draft' internal/engine/background.go internal/engine/idle.go internal/engine/schedule.go internal/engine/commits.go; echo "exit $?"
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./...
 git add internal/engine
 git commit -m "feat(engine): commit triggers by hook-free HEAD polling, one review per new HEAD (Phase 8)"
 ```
@@ -7033,7 +7393,7 @@ Expected: `ok  	herdr-dots/internal/ui/manage`, including v1's `TestFormRoundTri
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add internal/ui/manage
 git commit -m "feat(manage): research, schedule and on_commit fields with a cron preview; the editor scrolls (Phase 8)"
 ```
@@ -7051,7 +7411,7 @@ git commit -m "feat(manage): research, schedule and on_commit fields with a cron
 
 **Interfaces:**
 - Consumes: `view.DotState.Next/Background`, `view.Pane.Away`, `view.AwayState`, `view.Snapshot.TodayUSD/TodayRuns/DailyBudgetUSD`; `queue.KindDigest`, `Card.Origin/Label/Parts/Note`; `state.Run*`, `state.Outcome*`; Phase 6's `style.Sym`; Phase 3's council card helpers; test helpers `snap`, `press`, `fakeCaller` (`model_test.go`).
-- Produces: `hasParts(c queue.Card) bool`, `dotStatus(d view.DotState) string`, `cardWhere(c queue.Card) string`, `todayPart(s view.Snapshot) string`, `awayLine(p view.Pane) string`, `proactiveFeed(e state.FeedEntry) (string, bool)`. Behavior: roster `idle · research in 6m`, `◌ researching…` / `◌ scheduled run…` / `◌ reviewing commit…`; header `  today $0.37/1.00` once anything ran today; a dim line `☾ 2 research results waiting (since 10:12)…`; card headers show `commit a1b2c3d` / `scheduled Wed 09:00` / `2 dots · 42 min` in place of `turn N`; `space` expands a digest like a council card; feed lines show a background run's label and message without the cost tail.
+- Produces: `hasParts(c queue.Card) bool`, `dotStatus(d view.DotState) string`, `cardWhere(c queue.Card) string`, `todayPart(s view.Snapshot) string`, `awayLine(p view.Pane) string`, `proactiveFeed(e state.FeedEntry) (string, bool)`, `proactiveOutcome(outcome string) bool`. Behavior: roster `idle · research in 6m`, `◌ researching…` / `◌ scheduled run…` / `◌ reviewing commit…`; header `  today $0.37/1.00` once anything ran today; a dim line `☾ 2 research results waiting (since 10:12)…`; card headers show `commit a1b2c3d` / `scheduled Wed 09:00` / `2 dots · 42 min` in place of `turn N`; `space` expands a digest like a council card; feed lines show a background run's label and message without Phase 4's cost tail; `M` on a digest offers only "project convention", like a council card; every ellipsis and glyph goes through Phase 6's `style.Sym`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -7135,6 +7495,15 @@ func TestDigestAndBackgroundCardHeaders(t *testing.T) {
 	}
 }
 
+// Like a council card, a digest is remembered as a project convention only
+// (the engine refuses the other kinds).
+func TestDigestRemembersAsAConventionOnly(t *testing.T) {
+	v := press(awayReady(&fakeCaller{}), "M").View()
+	if !strings.Contains(v, "c project convention · esc cancel") || strings.Contains(v, "f accepted finding") {
+		t.Fatalf("remember prompt for a digest:\n%s", v)
+	}
+}
+
 func TestDigestSendsLikeAnyCard(t *testing.T) {
 	fc := &fakeCaller{}
 	press(awayReady(fc), "enter")
@@ -7199,13 +7568,13 @@ func dotStatus(d view.DotState) string {
 	status := d.Status
 	switch {
 	case d.Background == state.RunResearch:
-		status = style.Sym("◌") + " researching…"
+		status = style.Sym("◌") + " researching" + style.Sym("…")
 	case d.Background == state.RunScheduled:
-		status = style.Sym("◌") + " scheduled run…"
+		status = style.Sym("◌") + " scheduled run" + style.Sym("…")
 	case d.Background == state.RunCommit:
-		status = style.Sym("◌") + " reviewing commit…"
+		status = style.Sym("◌") + " reviewing commit" + style.Sym("…")
 	case d.Learning:
-		status = style.Sym("◌") + " learning…"
+		status = style.Sym("◌") + " learning" + style.Sym("…")
 	}
 	if d.Next != "" {
 		status += " · " + d.Next
@@ -7243,6 +7612,16 @@ func awayLine(p view.Pane) string {
 		style.Sym("☾"), p.Away.Pending, noun, p.Away.Since.Local().Format("15:04"))
 }
 
+// proactiveOutcome reports a background run's feed outcome: its line shows
+// the run's label and message, never Phase 4's cost tail (costPart).
+func proactiveOutcome(outcome string) bool {
+	switch outcome {
+	case state.OutcomeResearch, state.OutcomeScheduled, state.OutcomeCommit:
+		return true
+	}
+	return false
+}
+
 // proactiveFeed shows a background run's detail ("research: nothing new").
 func proactiveFeed(e state.FeedEntry) (string, bool) {
 	switch e.Outcome {
@@ -7256,12 +7635,12 @@ func proactiveFeed(e state.FeedEntry) (string, bool) {
 }
 ```
 
-`internal/ui/pane/model.go` (post-Phase-6 form: the learning glyph may already go through `style.Sym`). Find the roster status block:
+`internal/ui/pane/model.go` (post-Phase-7 form: Phase 6 routes the learning glyph and ellipsis through `style.Sym`, Phase 4 builds the header from `lead`, `project` and `tail`, and Phase 7 labels cards with `cardLabel` and appends Phase 4's `costPart` to feed lines). Find the roster status block:
 
 ```go
 		status := d.Status
 		if d.Learning {
-			status = "◌ learning…"
+			status = style.Sym("◌") + " learning" + style.Sym("…")
 		}
 ```
 
@@ -7271,21 +7650,21 @@ Replace with:
 		status := dotStatus(d) // background runs, learning, proactive hints (proactive.go)
 ```
 
-(If Phase 6 wrote `status = style.Sym("◌") + " learning…"`, replace that whole three-line block the same way.)
-
-Find:
+Find (the header tail):
 
 ```go
 	if m.snap.PausedAll {
-		title += "  ⏸ all paused"
+		tail += "  ⏸ all paused"
+	}
 ```
 
 Replace with:
 
 ```go
-	title += todayPart(m.snap)
+	tail += todayPart(m.snap)
 	if m.snap.PausedAll {
-		title += "  ⏸ all paused"
+		tail += "  ⏸ all paused"
+	}
 ```
 
 Find:
@@ -7303,16 +7682,16 @@ Replace with:
 	if m.seen && !m.connected {
 ```
 
-Find (the card header; Phase 3 added `tags`):
+Find (the card header's "who" part; Phase 3 added `tags`, Phase 7 `patchTags` and the `room` cut):
 
 ```go
-		b.WriteString(fmt.Sprintf("%s%s %s  %s · turn %d%s\n", marker, c.Glyph, style.Severity(c.Severity).Render(strings.ToUpper(c.Severity)), c.DotName, c.Turn, tags))
+		who := trunc(fmt.Sprintf("%s · turn %d%s", c.DotName, c.Turn, tags), max(1, room))
 ```
 
 Replace with:
 
 ```go
-		b.WriteString(fmt.Sprintf("%s%s %s  %s · %s%s\n", marker, c.Glyph, style.Severity(c.Severity).Render(strings.ToUpper(c.Severity)), c.DotName, cardWhere(c), tags))
+		who := trunc(fmt.Sprintf("%s · %s%s", c.DotName, cardWhere(c), tags), max(1, room))
 ```
 
 Find:
@@ -7330,6 +7709,30 @@ func feedOutcome(e state.FeedEntry) string {
 		return d
 	}
 	switch e.Outcome {
+```
+
+Find (the feed line's cost tail, Phase 4):
+
+```go
+			} else if c := costPart(e.Detail); c != "" && e.Outcome != state.OutcomeAsked {
+```
+
+Replace with:
+
+```go
+			} else if c := costPart(e.Detail); c != "" && e.Outcome != state.OutcomeAsked && !proactiveOutcome(e.Outcome) {
+```
+
+Find (the `M` key: a council card offers only "project convention"):
+
+```go
+			m.rememberCouncil = c.Kind == queue.KindCouncil
+```
+
+Replace with:
+
+```go
+			m.rememberCouncil = hasParts(c) // a council or away digest: project convention only
 ```
 
 `internal/ui/pane/council.go`. Find:
@@ -7394,7 +7797,7 @@ Expected: `ok  	herdr-dots/internal/ui/pane`, including Phase 3's council card t
 - [ ] **Step 5: Full check and commit**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
 git add internal/ui/pane
 git commit -m "feat(pane): proactive roster hints, away digest card, background card labels, today's spend (Phase 8)"
 ```
@@ -7406,26 +7809,60 @@ git commit -m "feat(pane): proactive roster hints, away digest card, background 
 **Depends on:** every other task. Wave 7.
 
 **Files:**
-- Modify: `internal/version/version.go`, `herdr-plugin.toml`, the version test in `cmd/herdr-dots` (whichever test pins `version.Version`), `README.md`, `docs/superpowers/notes/2026-10-08-phase-8-verification.md`
+- Modify: `internal/version/version.go`, `herdr-plugin.toml`, `cmd/herdr-dots/memwire_test.go` (the version pin), `README.md`, `docs/superpowers/notes/2026-10-08-phase-8-verification.md`
 - Temporary, never committed: `cmd/p8soak/main.go` (deleted at the end of Step 5)
 
 **Interfaces:**
-- Consumes: everything above; `ipc.Client{Path}`, `ipc.CmdAttach`, `ipc.AttachArgs`, `(ipc.Client) Watch`, `paths.New(...).EngineSock()`.
+- Consumes: everything above; `ipc.Client{Path}`, `ipc.CmdAttach`, `ipc.AttachArgs`, `(ipc.Client) Watch`, `paths.New(...).EngineEndpoint()` (Phase 6: a socket path on Unix, a named pipe on Windows; the portability guard rejects `.EngineSock()` in product code).
 - Produces: version `0.8.0`; user documentation for proactive dots (opt-in steps, budgets, schedules only while Herdr runs, catch-up, the inbox, commit triggers without hooks, web privacy); the live soak record. Phase 2 stays **VITAL**; the product stays "scaffold … not done".
 
-- [ ] **Step 1: Version 0.8.0**
+- [ ] **Step 1: Version 0.8.0 (test first)**
 
-`internal/version/version.go`: replace the version constant's value (`"0.7.0"` with Phase 7 merged, else `"0.6.0"`) with `"0.8.0"`. `herdr-plugin.toml`: replace `version = "0.7.0"` (or `"0.6.0"`) with `version = "0.8.0"`. Then update the test that pins the version:
+`cmd/herdr-dots/memwire_test.go`. Find:
 
-```bash
-grep -rln 'version.Version' cmd/herdr-dots/*_test.go
+```go
+func TestVersionIsPhaseSeven(t *testing.T) {
+	if version.Version != "0.7.0" {
+		t.Fatalf("version %s, want 0.7.0", version.Version)
+	}
+}
 ```
 
-In each file it prints, change the expected version string in that test to `"0.8.0"` (and its name, if it names a phase, to `TestVersionIsPhaseEight`). Phase 6's manifest test (`m.Version != version.Version`) needs no change.
+Replace with:
+
+```go
+func TestVersionIsPhaseEight(t *testing.T) {
+	if version.Version != "0.8.0" {
+		t.Fatalf("version %s, want 0.8.0", version.Version)
+	}
+}
+```
+
+Run: `GOTOOLCHAIN=local go test -run 'TestVersionIsPhaseEight' ./cmd/herdr-dots/`
+Expected: FAIL with `version 0.7.0, want 0.8.0`.
+
+`internal/version/version.go`: replace `const Version = "0.7.0"` with `const Version = "0.8.0"`. `herdr-plugin.toml`: replace `version = "0.7.0"` with `version = "0.8.0"` (`min_herdr_version = "0.8.0"` is Herdr's version and stays). Phase 6's manifest test (`m.Version != version.Version`) needs no change.
+
+Run: `GOTOOLCHAIN=local go test ./cmd/herdr-dots/`
+Expected: `ok  	herdr-dots/cmd/herdr-dots`.
 
 - [ ] **Step 2: README**
 
-Keep the status block's wording ("scaffold", "not done and not ready for general use"); change only its version to `0.8.0` and add "proactive dots (Phase 8)" to the list of phases that are in. Then add this section after the "Dot memory" section (before `## Files`):
+Five edits against the post-Phase-7 README. Each anchors on a heading or a whole line, not a line number.
+
+(a) The status block. Replace the whole quoted block that starts with `> **Status: 0.7.0, in development (scaffold, not done).**` (it ends at the first blank line) with:
+
+```markdown
+> **Status: 0.8.0, in development (scaffold, not done).** It is not finished and not ready for
+> general use. New in 0.8.0: proactive dots (opt-in, read-only) can research while you are away,
+> run on a schedule while Herdr runs and review new commits, under a daily dollar budget; this is
+> built and unit-tested but has **not been run end to end inside Herdr** by the developer yet.
+> Write-capable dots (0.7.0) have not been run end to end inside Herdr yet either, and Windows
+> support (0.6.0) has not been run on Windows yet. Phase 2 (dot memory) stays the VITAL part. See
+> the [Roadmap](#roadmap) for what's missing.
+```
+
+(b) Add this section at the end of "Using it": after the `### Write-capable dots (drafts)` section and immediately before `## Files`:
 
 ````markdown
 ### Proactive dots (0.8.0)
@@ -7493,7 +7930,7 @@ what is running (`◌ researching…`). The pane header shows `today $0.37/1.00`
 today. When the budget is reached, background work stops until local midnight and you get one toast.
 ````
 
-Under `## Files`, add:
+(c) Under `## Files`, insert these lines right after the line that starts `- Memory: the plugin state dir, under`:
 
 ```markdown
 - `STATE_DIR/daily.json`: today's background runs and cost, shared by every session (proactive dots).
@@ -7501,35 +7938,60 @@ Under `## Files`, add:
 - `STATE_DIR/memory/<project>/schedule.json`: the last slot each scheduled dot ran on that project.
 ```
 
-Under `## Privacy and safety`, add:
+(d) At the end of `## Privacy and safety` (after its last bullet, "Memory text is stripped of control characters …", and before `## Known gaps in this scaffold`), add:
 
 ```markdown
-- Proactive dots are opt-in per dot and read-only. With `[research] web = true`, search queries
+- Proactive dots are opt-in per dot and read-only, even when the dot is write-capable: research,
+  scheduled runs and commit reviews never draft. With `[research] web = true`, search queries
   derived from your code are sent to the backend's web search provider. Background spend is capped by
   `daily_budget_usd` (default $1.00) across every Herdr session.
 - Commit reviews never install git hooks; they only read `HEAD` and `git show` output.
 ```
 
-In the roadmap table, change the row that covers Phase 8 to say: "**8** | Proactive dots: idle research with a while-you-were-away digest, cron schedules while Herdr runs (with catch-up), commit reviews, daily dollar budget (in this scaffold since 0.8.0)". Keep row 2 exactly as it is (**Dot memory — VITAL.**) and the sentence that the project is feature complete only after Phase 10.
+(e) At the end of `## Known gaps in this scaffold` (after its last bullet, "Drafts can't run tests or builds …", and before `## Roadmap`), add:
+
+```markdown
+- Proactive dots (0.8.0) are unit-tested on macOS only, with a fake clock and real git; idle
+  research, schedules and commit reviews have not been run end to end inside Herdr (soak checklist
+  in `docs/superpowers/notes/2026-10-08-phase-8-verification.md`). Codex and OpenAI web search are
+  not live-verified. Schedules run only while Herdr runs.
+```
+
+In the roadmap table, the post-Phase-7 README has one combined row for Phases 8–10. Find:
+
+```markdown
+| 8–10 | Proactive dots, profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
+```
+
+Replace with:
+
+```markdown
+| 8 | Proactive dots (0.8.0): idle research with a while-you-were-away digest, cron schedules while Herdr runs (with catch-up), commit reviews, a daily dollar budget. Built and unit-tested; **not run end to end in Herdr yet** |
+| 9–10 | Profiles and sharing, then hardening and release. The project is feature complete only after Phase 10. |
+```
+
+Keep row 2 exactly as it is (**Dot memory — VITAL.**). If Step 5's soak passes, change "has **not been run end to end inside Herdr** by the developer yet" in (a), "have not been run end to end inside Herdr" in (e) and "**not run end to end in Herdr yet**" in the roadmap row 8 to say it was soak-tested once in an isolated Herdr session on macOS; otherwise leave them.
 
 - [ ] **Step 3: Check the wording**
 
 ```bash
 grep -n 'VITAL' README.md
-grep -niE '\b(done|finished|complete|ready)\b' README.md | grep -viE 'not (done|finished|complete|ready)|feature complete only after|idle or done|ready to publish' || true
+grep -n 'not been run end to end\|not run end to end' README.md
+grep -nE 'is (done|finished|complete|ready)|feature complete|production[- ]ready' README.md docs/superpowers/specs/2026-10-08-herdr-dots-roadmap.md | grep -v 'only when\|until\|not \|only after\|Phase 10\|"feature complete"'
 ```
 
-Expected: at least one `VITAL` line; the second command prints nothing.
+Expected: at least one `VITAL` line (Phase 2); at least three "not … run end to end" lines (unless the soak passed); the third command prints nothing. (This is Phase 7's reconciled wording check: the older `\b(done|ready)\b` grep also flags lines the README already has, such as "Herdr reports `done`" and "Patch ready".)
 
 - [ ] **Step 4: Full verification**
 
 ```bash
-test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... \
+test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./... \
   && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go build ./... && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go vet ./... \
-  && GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./... && GOTOOLCHAIN=local go build -o bin/herdr-dots ./cmd/herdr-dots && ./bin/herdr-dots version
+  && mkdir -p "${TMPDIR:-/tmp}/p8-win" && GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 go test -c -o "${TMPDIR:-/tmp}/p8-win/" ./... \
+  && GOTOOLCHAIN=local GOOS=linux GOARCH=amd64 go build ./... && sh scripts/build.sh && ./bin/herdr-dots version
 ```
 
-Expected: every command succeeds; the last prints `herdr-dots 0.8.0` (plus the scaffold suffix earlier phases print).
+Expected: every command succeeds; the last prints `herdr-dots 0.8.0 (scaffold)`.
 
 - [ ] **Step 5: Live soak (about 40 minutes; isolated session; never `plugin link`)**
 
@@ -7616,7 +8078,7 @@ func main() {
 	}
 	p := paths.New(os.Args[1], os.Args[2], os.Args[3])
 	pane := os.Args[4]
-	c := ipc.Client{Path: p.EngineSock()}
+	c := ipc.Client{Path: p.EngineEndpoint()}
 	ctx := context.Background()
 	if err := c.Call(ctx, ipc.CmdAttach, ipc.AttachArgs{PaneID: pane, Slugs: []string{"scout", "nightly", "tests"}}); err != nil {
 		log.Fatal(err)
@@ -7666,8 +8128,8 @@ Replace the `<filled by Task 16>` line under "## Live soak (Task 16)" in `docs/s
 - [ ] **Step 7: Final check and commit**
 
 ```bash
-test ! -e cmd/p8soak && test -z "$(gofmt -l .)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
-git add internal/version/version.go herdr-plugin.toml cmd/herdr-dots README.md docs/superpowers/notes/2026-10-08-phase-8-verification.md
+test ! -e cmd/p8soak && test -z "$(gofmt -l internal cmd)" && GOTOOLCHAIN=local go vet ./... && GOTOOLCHAIN=local go test -race ./...
+git add internal/version/version.go herdr-plugin.toml cmd/herdr-dots/memwire_test.go README.md docs/superpowers/notes/2026-10-08-phase-8-verification.md
 git commit -m "docs: proactive dots in the README, live soak notes; version 0.8.0 (product not done)"
 ```
 
@@ -7704,13 +8166,13 @@ Run against the spec (`docs/superpowers/specs/2026-10-08-herdr-dots-phase-8-proa
 | §6.1–§6.3 data flow | 11, 12, 13 |
 | §7 UI: roster hints, digest card with expand, editor sections with cron preview, header spend | 14, 15 |
 | §8.1 errors: invalid cron, missing root (toast once a day), daily budget (one toast, roster), web unsupported, engine down (catch-up) | 8, 12, 10, 14, 12 |
-| §8.2 safety: read-only, Phase 7 drafts never scheduled, web privacy documented, caps, inbox never injected | 5, 9, 10, 13 (grep), 16 |
+| §8.2 safety: read-only, Phase 7 drafts never scheduled, web privacy documented, caps, inbox never injected | 5, 9, 10 (AST guard, `TestScheduledResultWaitsInInboxUntilAttach`), 13 (grep), 16; closed or reused panes: 10, 11 (decision 31) |
 | §8.3 testing table | 2, 3, 6, 9, 10–15 |
 | §9 V1–V4 | 1 (settled while planning where possible) |
 | §10 out of scope (OS schedulers, write-capable background work, outside notifications) | not built; README says schedules run only while Herdr runs |
 
 **2. Placeholder scan.** Every code step has complete code; the only `<…>` markers are values an executor reads from a live command's output (Task 1's findings, Task 16's pane id and soak results), each with the command that produces it.
 
-**3. Type consistency.** Names cross-checked between tasks: `state.Daily.Today/Add`, `state.Day.Count/Total/CostUSD`, `state.Run*`, `state.Outcome*`; `memory.ApplyOptions{Research}`, `ClaimSchedule`, `LastSchedule`, `SeeDots`, `RecentDotProjects`, `ProjectMeta.DotsSeen`; `queue.KindDigest`, `Card.Origin/Label`, `Inbox.Put/List`, `Store.Claim(in, projectID, paneID)`; `backend.PassResearch`, `Trigger*`, `Request.Web/Trigger`, `WebSupported`; `dots.ResearchSpec`, `ScheduleSpec.Targets`, `ScheduleAttached`, `Dot.Proactive`; `engine.Deps.Clock/Daily/Inbox/Git`, `BackgroundInput`, `DecideBackground`, `ResearchInput`, `DecideResearch`, `DecideCommit`, `ReasonCommitOff`; `bgJob` fields used by Tasks 11–13 are all declared in Task 10; `nextLocked` is extended by Find/Replace in Tasks 11 and 12 only. The engine code and tests of Tasks 10–13, and Tasks 2–8, 14 and 15, were compiled and run (`go test -race`, three runs for the engine) in a scratch worktree of HEAD with small stand-ins for the unbuilt Phase 3/4/6 symbols; Task 9 and the Phase 3 `recordOutcome` edit were checked against the SDK sources and the Phase 3/4 plans only.
+**3. Type consistency.** Names cross-checked between tasks: `state.Daily.Today/Add`, `state.Day.Count/Total/CostUSD`, `state.Run*`, `state.Outcome*`; `memory.ApplyOptions{Research}`, `ClaimSchedule`, `LastSchedule`, `SeeDots`, `RecentDotProjects`, `ProjectMeta.DotsSeen`; `queue.KindDigest`, `Card.Origin/Label`, `Inbox.Put/List`, `Store.Claim(in, projectID, paneID)`; `backend.PassResearch`, `Trigger*`, `Request.Web/Trigger`, `WebSupported`; `dots.ResearchSpec`, `ScheduleSpec.Targets`, `ScheduleAttached`, `Dot.Proactive`; `engine.Deps.Clock/Daily/Inbox` (and Phase 7's `Deps.Git worktree.Git`, reused), `BackgroundInput`, `DecideBackground`, `ResearchInput`, `DecideResearch`, `DecideCommit`, `ReasonCommitOff`; `bgJob` fields used by Tasks 11–13 (including `gen`) are all declared in Task 10, as are `bgPaneGone(Locked)`, `keepPane`, `chargeBackground`, `inFlightLocked` and `bgOverBudgetLocked`; `nextLocked` is extended by Find/Replace in Tasks 11 and 12 only. **Reconciled 2026-10-09 against `feat/dots-v1` at `90eea56` (Phases 2–7 merged, 0.7.0):** every task was replayed in wave order in a scratch worktree by applying this plan's code blocks and Find/Replace pairs; after each wave `gofmt -l internal cmd`, `go vet ./...`, darwin `go test -race ./...`, `GOOS=linux go build ./...`, `GOOS=windows go build ./... && GOOS=windows go vet ./...` and `GOOS=windows go test -c` for the wave's packages all passed, the proactive engine tests also passed with `-race -count=5`, and the Task 13 isolation grep printed nothing. Task 9 is still checked against the SDK sources and fakes only (no live keys).
 
 **4. Review Focus.** Each of the five lines has its tests in the owning task (Tasks 2, 3, 6, 10, 11, 12, 13), listed in the Review Focus section.
