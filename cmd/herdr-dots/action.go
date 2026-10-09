@@ -33,10 +33,7 @@ func runAction(args []string) error {
 	if err != nil {
 		return err
 	}
-	target := resolveTarget()
-	if target == "" {
-		target = os.Getenv("HERDR_PANE_ID")
-	}
+	target := resolveTarget(p.DotsPanesFile()) // "" = no agent pane focused: library only
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	env := map[string]string{envTarget: target}

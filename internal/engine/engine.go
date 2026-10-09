@@ -177,6 +177,9 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 	if err != nil {
 		return fmt.Errorf("pane %s: %w", paneID, err)
 	}
+	if p.Agent == "" {
+		return fmt.Errorf("pane %s has no coding agent: dots attach to agent panes only", paneID)
+	}
 	pl := e.paneLock(paneID)
 	pl.Lock()
 	defer pl.Unlock()

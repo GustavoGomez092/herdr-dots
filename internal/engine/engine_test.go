@@ -418,6 +418,19 @@ func TestAttachUnknownDotFails(t *testing.T) {
 	}
 }
 
+// Dots attach only to agent panes (not a shell, not the Dots pane itself).
+func TestAttachToPaneWithoutAgentFails(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue))
+	r.srv.SetPane(herdr.PaneInfo{PaneID: "w1:p7", AgentStatus: herdr.StatusUnknown, Cwd: "/repo"})
+	err := r.e.Attach(context.Background(), "w1:p7", []string{"security"})
+	if err == nil || !strings.Contains(err.Error(), "agent") {
+		t.Fatalf("attach to a pane with no agent: %v", err)
+	}
+	if _, ok := r.atts.Get("w1:p7"); ok {
+		t.Fatal("no attachment may be stored")
+	}
+}
+
 // A session change racing a processPane that already read the old session must
 // not make the engine skip the new session's turns or re-review the old ones.
 func TestSessionChangeDuringInFlightProcessPane(t *testing.T) {

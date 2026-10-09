@@ -22,12 +22,40 @@ import (
 // envTarget carries the main agent pane id into the panes our actions open.
 const envTarget = "HERDR_DOTS_TARGET"
 
-func resolveTarget() string {
+// resolveTarget returns the main agent pane to act on: the target an action
+// passed down, else the focused pane mapped through targetFor. dotsPanesFile
+// is the main-pane -> Dots-pane map.
+func resolveTarget(dotsPanesFile string) string {
 	if t := os.Getenv(envTarget); t != "" {
 		return t
 	}
 	ic, _ := herdr.ParseInvocationContext(os.Getenv("HERDR_PLUGIN_CONTEXT_JSON"))
-	return ic.FocusedPaneID
+	focused, agent := ic.FocusedPaneID, ic.FocusedPaneAgent
+	if focused == "" {
+		// No invocation context: the agent is unknown, so only a Dots-pane
+		// mapping can turn this pane into a target.
+		focused = os.Getenv("HERDR_PANE_ID")
+	}
+	m, _ := loadDotsPanes(dotsPanesFile)
+	return targetFor(focused, agent, m)
+}
+
+// targetFor maps the focused pane to the main pane dots act on. A focused Dots
+// pane maps back to its main pane; a pane without an agent (a shell, a plugin
+// pane) maps to "", which opens the library only.
+func targetFor(focused, agent string, dotsPanes map[string]string) string {
+	if focused == "" {
+		return ""
+	}
+	for main, id := range dotsPanes {
+		if id == focused {
+			return main
+		}
+	}
+	if agent == "" {
+		return ""
+	}
+	return focused
 }
 
 // uiSetup resolves paths, makes sure the engine runs, and returns its client.
@@ -73,7 +101,7 @@ func runPane([]string) error {
 	if err != nil {
 		return err
 	}
-	prog := tea.NewProgram(pane.New(resolveTarget(), cl), tea.WithAltScreen())
+	prog := tea.NewProgram(pane.New(resolveTarget(p.DotsPanesFile()), cl), tea.WithAltScreen())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return pane.SnapshotMsg(s) }, pane.DisconnectedMsg{})
@@ -101,7 +129,7 @@ func runManage([]string) error {
 	}
 	cfg, _ := config.Load(p.ConfigFile()) // malformed config -> defaults; the engine logs the error
 	newDot := func() dots.Dot { return newDotFromConfig(cfg) }
-	prog := tea.NewProgram(manage.New(resolveTarget(), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot}), tea.WithAltScreen())
+	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot}), tea.WithAltScreen())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return manage.SnapshotMsg(s) }, nil)
@@ -114,7 +142,7 @@ func runSummonUI([]string) error {
 	if err != nil {
 		return err
 	}
-	prog := tea.NewProgram(summon.New(resolveTarget(), cl))
+	prog := tea.NewProgram(summon.New(resolveTarget(p.DotsPanesFile()), cl))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return summon.SnapshotMsg(s) }, nil)
