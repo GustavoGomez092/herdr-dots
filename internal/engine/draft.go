@@ -402,11 +402,13 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		e.notify(d, "patch rejected: "+reason)
 		return
 	}
-	// Meta.Summary and the card are redacted; SummaryRaw keeps the text as
-	// written (only the memory outcome paths read it, so ScanSecrets still
-	// sees a key).
+	// Meta.Summary and the card are redacted, and the text as written is
+	// never stored: the record only says whether it held a secret, which is
+	// what memory's outcome paths need (a redacted ledger line, no entry).
 	raw := strings.TrimSpace(textutil.SanitizeModelText(res.Verdict.Message))
 	summary := strings.TrimSpace(credentials.Redact(raw))
+	found, _ := memory.ScanSecrets(raw)
+	hadSecret := summary != raw || found
 	if summary == "" {
 		summary = "Drafted a fix."
 	}
@@ -422,9 +424,7 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 		p.Flags = append([]string{toolloop.FlagAgentConfig}, p.Flags...)
 	}
 	meta.Summary, meta.Stat, meta.Files, meta.Paths, meta.Flags, meta.Status = summary, p.Stat, p.Files, p.Paths(), p.Flags, patchstore.StatusReady
-	if raw != summary {
-		meta.SummaryRaw = raw
-	}
+	meta.SummaryHadSecret = hadSecret
 	// Only what passed Validate is stored, and the engine applies exactly
 	// those bytes (hash-verified by patchstore.Diff).
 	if err := e.d.Patches.PutPatch(meta, p.Diff); err != nil {
@@ -553,11 +553,11 @@ func (e *Engine) ApplyPatch(cardID, wantSHA256 string) error {
 	if len(conflicts) > 0 {
 		e.notify(dots.Dot{Name: c.DotName, Glyph: c.Glyph}, note)
 	}
-	oc := c // memory gets the summary as written, so its secret scan still sees a key
-	if s := memorySummary(m); s != "" {
-		oc.Body = s
+	oc := c
+	if m.Summary != "" {
+		oc.Body = m.Summary
 	}
-	e.spawnOutcome(oc, memory.OutcomeApplied)
+	e.spawnOutcomeOf(oc, memory.OutcomeApplied, m.SummaryHadSecret)
 	e.reportPending(c.PaneID)
 	e.broadcast()
 	return nil
@@ -598,8 +598,8 @@ func (e *Engine) DiscardPatch(cardID string) error {
 	oc := c
 	stuck := false
 	if merr == nil {
-		if s := memorySummary(m); s != "" {
-			oc.Body = s
+		if m.Summary != "" {
+			oc.Body = m.Summary
 		}
 		if m.Repo != "" {
 			if err := worktree.DropSnapshot(e.ctx, e.d.Git, m.Repo, c.PatchID); err != nil {
@@ -615,19 +615,10 @@ func (e *Engine) DiscardPatch(cardID string) error {
 	} else if err := e.d.Patches.Delete(c.PatchID); err != nil {
 		e.d.Logf("patch %s: %v", c.PatchID, err)
 	}
-	e.spawnOutcome(oc, memory.OutcomeDiscarded)
+	e.spawnOutcomeOf(oc, memory.OutcomeDiscarded, merr == nil && m.SummaryHadSecret)
 	e.reportPending(c.PaneID)
 	e.broadcast()
 	return nil
-}
-
-// memorySummary is the summary memory's outcome paths record: as written when
-// the record has it, else the stored (redacted) one.
-func memorySummary(m patchstore.Meta) string {
-	if m.SummaryRaw != "" {
-		return m.SummaryRaw
-	}
-	return m.Summary
 }
 
 // cardReserved reports whether a patch card is being applied or discarded.
@@ -681,7 +672,8 @@ func (e *Engine) forDelivery(cards []queue.Card) []queue.Card {
 
 // patchSent marks a delivered patch card's patch as sent (kept 7 days) and
 // records the usual "sent" outcome. It runs in the background: no patch I/O
-// under dmu. Memory gets the summary as written (see runDraft).
+// under dmu. Memory gets the redacted summary and whether it held a secret
+// (see runDraft).
 func (e *Engine) patchSent(c queue.Card) {
 	if c.Kind != queue.KindPatch || e.d.Patches == nil {
 		return
@@ -691,11 +683,11 @@ func (e *Engine) patchSent(c queue.Card) {
 		m, err := e.d.Patches.Update(c.PatchID, func(m *patchstore.Meta) { m.Status = patchstore.StatusSent })
 		if err != nil {
 			e.d.Logf("patch %s: %v", c.PatchID, err)
-		} else if s := memorySummary(m); s != "" {
-			oc.Body = s
+		} else if m.Summary != "" {
+			oc.Body = m.Summary
 		}
 		if e.memEnabled() {
-			e.recordOutcome(oc, memory.OutcomeSent, "", false)
+			e.recordOutcome(oc, memory.OutcomeSent, "", false, err == nil && m.SummaryHadSecret)
 		}
 	})
 }

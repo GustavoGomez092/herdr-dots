@@ -85,7 +85,7 @@ func TestRecordOutcomeSanitizesLedgerText(t *testing.T) {
 	}
 	led, _ := s.Ledger(pid)
 	if len(led) != 1 || strings.ContainsRune(led[0].Body, 0x1b) || strings.ContainsRune(led[0].Edited, 0x1b) {
-		t.Fatalf("escape sequences stored: %q", led)
+		t.Fatalf("escape sequences stored: %#v", led)
 	}
 }
 

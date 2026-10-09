@@ -1292,6 +1292,10 @@ type Outcome struct {
 	Turn     int       `json:"turn,omitempty"`
 	Pane     string    `json:"pane,omitempty"`
 	Session  string    `json:"session,omitempty"`
+	// Secret: the caller knows the text held a secret that was redacted
+	// before it got here (a patch summary). RecordOutcome then treats it as
+	// it treats a body ScanSecrets flags. Never stored.
+	Secret bool `json:"-"`
 }
 
 func (s *Store) ledgerPath(p string) string { return filepath.Join(s.Dir, p, "ledger.jsonl") }
