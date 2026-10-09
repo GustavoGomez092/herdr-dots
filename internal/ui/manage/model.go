@@ -286,12 +286,19 @@ func (m Model) openMemory(dot, name string) tea.Cmd {
 			}
 			return memOpenMsg{err: err}
 		}
+		notice := ""
+		switch {
+		case err != nil:
+			notice = "project memory unavailable: " + err.Error()
+		case pr.ID == "":
+			notice = "no project found; showing this dot's global memory"
+		}
 		notify := func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil)
 		}
-		return memOpenMsg{deps: memui.Deps{Store: st, Project: pr, Dot: dot, DotName: name, Notify: notify}}
+		return memOpenMsg{deps: memui.Deps{Store: st, Project: pr, Dot: dot, DotName: name, Notify: notify, Notice: notice}}
 	}
 }
 

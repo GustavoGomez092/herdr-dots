@@ -2,6 +2,7 @@ package manage
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,52 @@ func TestDeleteDotWithMemoryRemovesItEverywhere(t *testing.T) {
 	}
 	if last := fc.calls[len(fc.calls)-1]; !strings.HasPrefix(last, ipc.CmdMemoryChanged) {
 		t.Fatalf("calls %v", fc.calls)
+	}
+}
+
+func memSetupWith(t *testing.T, project func(string) (memory.Project, error)) (tea.Model, *memory.Store, string) {
+	t.Helper()
+	root := t.TempDir()
+	st := memory.Open(filepath.Join(root, "memory"), memory.DefaultLimits())
+	m, _ := New("w1:p1", Deps{Caller: &fakeCaller{}, DotsDir: t.TempDir(), Check: func(context.Context, string) error { return nil },
+		Memory: st, Project: project}).Update(SnapshotMsg(lib()))
+	return m, st, root
+}
+
+func TestMemoryOpensDegradedWhenProjectLookupFails(t *testing.T) {
+	m, st, _ := memSetupWith(t, func(string) (memory.Project, error) {
+		return memory.Project{}, errors.New("herdr pane.get failed")
+	})
+	addMem(t, st, "", memory.Entry{Scope: memory.ScopeGlobal, Dot: "backend", Kind: memory.KindPreference, Text: "Prefer Go."})
+	v := press(m, "M").View()
+	if !strings.Contains(v, "MEMORY → Backend") || !strings.Contains(v, "Prefer Go.") {
+		t.Fatalf("degraded browser:\n%s", v)
+	}
+	if !strings.Contains(v, "project memory unavailable: herdr pane.get failed") {
+		t.Fatalf("error not surfaced:\n%s", v)
+	}
+}
+
+func TestMemoryWithoutAProjectIsGlobalOnlyAndRefusesProjectScope(t *testing.T) {
+	m, st, root := memSetupWith(t, func(string) (memory.Project, error) { return memory.Project{}, nil })
+	addMem(t, st, "", memory.Entry{Scope: memory.ScopeGlobal, Dot: "backend", Kind: memory.KindPreference, Text: "Prefer Go."})
+	opened := press(m, "M")
+	if v := opened.View(); !strings.Contains(v, "no project found; showing this dot's global memory") {
+		t.Fatalf("status:\n%s", v)
+	}
+	// Only the global view exists: tab must not reach a project scope.
+	if after := press(opened, "tab").View(); !strings.Contains(after, "scope: global") {
+		t.Fatalf("tab must not reach a project scope:\n%s", after)
+	}
+	// P (project memory) is refused with a clear message.
+	if pv := press(m, "P").View(); !strings.Contains(pv, "DOTS LIBRARY") || !strings.Contains(pv, "no project") {
+		t.Fatalf("P without a project:\n%s", pv)
+	}
+	// Nothing was written under a project path.
+	entries, _ := os.ReadDir(filepath.Join(root, "memory"))
+	for _, e := range entries {
+		if e.IsDir() && e.Name() != "_global" {
+			t.Fatalf("unexpected directory written: %s", e.Name())
+		}
 	}
 }
