@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/platform"
 )
 
 // Statuses (Meta.Status). A discarded patch is deleted, not kept.
@@ -99,7 +100,7 @@ func (s *Store) write(m *Meta) error {
 	if !ValidID(m.ID) {
 		return fmt.Errorf("%w: %q", ErrInvalidID, m.ID)
 	}
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := s.ensureDir(); err != nil {
 		return err
 	}
 	now := s.now()
@@ -112,6 +113,17 @@ func (s *Store) write(m *Meta) error {
 		return err
 	}
 	return fsutil.WriteFileAtomic(s.metaPath(m.ID), append(data, '\n'), 0o600)
+}
+
+// ensureDir creates the patches directory and makes it private (0700 on
+// Unix, an owner-only ACL on Windows) even if it already existed: it names
+// files and holds diffs of the user's code. Files are written private by
+// fsutil.WriteFileAtomic.
+func (s *Store) ensureDir() error {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return err
+	}
+	return platform.SecureDir(s.Dir)
 }
 
 // Put writes m's metadata.
@@ -128,7 +140,7 @@ func (s *Store) PutPatch(m Meta, diff []byte) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := s.ensureDir(); err != nil {
 		return err
 	}
 	if err := fsutil.WriteFileAtomic(s.PatchPath(m.ID), diff, 0o600); err != nil {
