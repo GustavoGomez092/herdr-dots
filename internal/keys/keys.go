@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"herdr-dots/internal/fsutil"
 )
 
 type Binding struct {
@@ -127,21 +129,30 @@ func Block(bs []Binding) string {
 	return b.String()
 }
 
-// Append backs up the config next to itself, then appends the block.
+// Append backs up the config next to itself, then appends the block. The new
+// content is built in memory and written (atomically, keeping the file's mode
+// and following a symlink) only if it still parses as TOML; otherwise the file
+// is left untouched and an error is returned.
 func Append(path string, bs []Binding, now time.Time) (string, error) {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real // write through a dotfiles symlink instead of replacing it
+	}
 	orig, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return "", err
+	}
+	mode := os.FileMode(0o644)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	next := string(orig) + Block(bs)
+	var check map[string]any
+	if _, err := toml.Decode(next, &check); err != nil {
+		return "", fmt.Errorf("adding the keybindings would make %s invalid TOML (%v); nothing changed: add them by hand", path, err)
 	}
 	backup := path + ".bak-" + now.Format("20060102-150405")
 	if err := os.WriteFile(backup, orig, 0o600); err != nil {
 		return "", err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return backup, err
-	}
-	defer f.Close()
-	_, err = f.WriteString(Block(bs))
-	return backup, err
+	return backup, fsutil.WriteFileAtomic(path, []byte(next), mode)
 }

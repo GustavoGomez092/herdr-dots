@@ -76,6 +76,51 @@ func TestPlanTreatsHerdrBuiltinsAsTaken(t *testing.T) {
 	}
 }
 
+// An inline `keys.command = [...]` array can't be extended by [[keys.command]]
+// tables: appending would break the user's Herdr config.
+func TestAppendRefusesWhenResultWouldNotParse(t *testing.T) {
+	const inline = "[keys]\nprefix = \"ctrl+a\"\ncommand = [{ key = \"prefix+up\", type = \"plugin_action\", command = \"x.y\" }]\n"
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.toml")
+	os.WriteFile(p, []byte(inline), 0o640)
+	if _, err := Existing([]byte(inline)); err != nil {
+		t.Fatalf("the inline form is valid TOML on its own: %v", err)
+	}
+	if _, err := Append(p, Defaults()[2:], time.Now()); err == nil {
+		t.Fatal("Append must refuse when the result is not valid TOML")
+	}
+	now, _ := os.ReadFile(p)
+	if string(now) != inline {
+		t.Fatalf("file must be untouched, got:\n%s", now)
+	}
+	if st, _ := os.Stat(p); st.Mode().Perm() != 0o640 {
+		t.Fatalf("mode changed: %v", st.Mode().Perm())
+	}
+}
+
+func TestAppendPreservesFileModeAndSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "dotfiles-config.toml")
+	os.WriteFile(real, []byte(userConfig), 0o640)
+	link := filepath.Join(dir, "config.toml")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Append(link, Defaults()[2:], time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Lstat(link); fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("a symlinked config must stay a symlink")
+	}
+	st, _ := os.Stat(real)
+	if st.Mode().Perm() != 0o640 {
+		t.Fatalf("mode %v, want 0640", st.Mode().Perm())
+	}
+	if data, _ := os.ReadFile(real); !strings.Contains(string(data), "prefix+shift+s") {
+		t.Fatalf("not appended:\n%s", data)
+	}
+}
+
 func TestBlockIsValidTOMLAndAppendBacksUp(t *testing.T) {
 	block := Block(Defaults())
 	var parsed struct {
