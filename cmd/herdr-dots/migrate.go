@@ -62,15 +62,16 @@ func notifyReadOnly(ctx context.Context, n notifier, msg string, timeout time.Du
 // command is in exactly one of writingCommands and gateExempt
 // (TestEveryCommandIsClassifiedForTheGate).
 var gateExempt = map[string]string{
-	"version":    "writes nothing",
-	"--version":  "writes nothing",
-	"engine":     "runs the full migration itself at start, under engine.lock (serveEngine)",
-	"migrate":    "is the migration",
-	"pane":       "UI: writes through the engine (IPC)",
-	"summon-ui":  "UI: writes through the engine (IPC)",
-	"diff-ui":    "UI: reads one patch; apply and discard go through the engine (IPC)",
-	"action":     "writes only dotspanes.json, an unversioned runtime cache",
-	"setup-keys": "writes only Herdr's own config.toml, not a herdr-dots file",
+	"version":        "writes nothing",
+	"--version":      "writes nothing",
+	"engine":         "runs the full migration itself at start, under engine.lock (serveEngine)",
+	"migrate":        "is the migration",
+	"pane":           "UI: writes through the engine (IPC)",
+	"summon-ui":      "UI: writes through the engine (IPC)",
+	"diff-ui":        "UI: reads one patch; apply and discard go through the engine (IPC)",
+	"action":         "writes only dotspanes.json, an unversioned runtime cache",
+	"setup-keys":     "writes only Herdr's own config.toml, not a herdr-dots file",
+	"verify-release": "reads bin/INSTALL_SOURCE and the kept release archive; writes nothing",
 	"mcp": "writes memory proposals directly through memory.Store, which is safe only because the memory " +
 		"kinds are self-guarded (memory.ErrVersion under memory.lock); everything else goes through the engine",
 }
