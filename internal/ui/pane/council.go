@@ -13,7 +13,7 @@ import (
 )
 
 // councilHelp is appended to the help text.
-const councilHelp = `C council (ask every dot)   space expand council card`
+const councilHelp = `C council (ask every dot)   space expand council/away card`
 
 // WithOpener sets how the pane opens the council popup (key C). The command
 // wiring passes a function that opens the plugin's "council" popup for the
@@ -45,7 +45,7 @@ func (m Model) councilKeys(k tea.KeyMsg) (Model, tea.Cmd, bool) {
 		}, true
 	case " ":
 		c, ok := m.selectedCard()
-		if !ok || c.Kind != queue.KindCouncil || m.area != areaQueue {
+		if !ok || !hasParts(c) || m.area != areaQueue {
 			return m, nil, false
 		}
 		if m.expandID == c.ID {
@@ -71,7 +71,7 @@ func councilProgress(c view.CouncilState) string {
 
 // councilTags is the card header suffix for a council card.
 func councilTags(c queue.Card) string {
-	if c.Kind != queue.KindCouncil {
+	if !hasParts(c) {
 		return ""
 	}
 	return fmt.Sprintf(" · %d dots", len(c.Parts))
@@ -79,7 +79,7 @@ func councilTags(c queue.Card) string {
 
 // councilHint extends the selected card's key hint.
 func councilHint(c queue.Card) string {
-	if c.Kind != queue.KindCouncil {
+	if !hasParts(c) {
 		return ""
 	}
 	return "  space expand"
@@ -89,7 +89,7 @@ func councilHint(c queue.Card) string {
 // question and every member's own answer. Every line is wrapped to the body
 // width so the viewport's line count matches what the terminal shows.
 func councilDetail(c queue.Card, expanded bool, body lipgloss.Style) string {
-	if c.Kind != queue.KindCouncil {
+	if !hasParts(c) {
 		return ""
 	}
 	var b strings.Builder

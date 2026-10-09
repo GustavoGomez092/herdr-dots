@@ -377,7 +377,7 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "M":
 		if c, ok := m.selectedCard(); ok {
 			m.remembering, m.reasoning, m.rememberID = true, false, c.ID
-			m.rememberCouncil = c.Kind == queue.KindCouncil
+			m.rememberCouncil = hasParts(c) // a council or away digest: project convention only
 		}
 	case "e":
 		if c, ok := m.selectedCard(); ok && sendable(c) {
@@ -436,6 +436,9 @@ r reset dot+budget    f feed   ? help   q close`
 // "suppressed (d:m17)", and agent asks as "◆ asked by agent · <severity>"
 // (the cost tail of an ask is never shown).
 func feedOutcome(e state.FeedEntry) string {
+	if d, ok := proactiveFeed(e); ok {
+		return d
+	}
 	switch e.Outcome {
 	case state.OutcomeLearned:
 		if e.Detail != "" {
@@ -472,6 +475,7 @@ func (m Model) View() string {
 	if ok {
 		tail = fmt.Sprintf("  budget %d/%d", p.Calls, p.Budget) + paneCost(p.CostUSD, p.BudgetUSD, p.CostUnknown)
 	}
+	tail += todayPart(m.snap)
 	if m.snap.PausedAll {
 		tail += "  ⏸ all paused"
 	}
@@ -488,6 +492,9 @@ func (m Model) View() string {
 	if p.Source == "scrollback" {
 		b.WriteString(style.Dim.Render("(reading scrollback: transcript unavailable)") + "\n")
 	}
+	if l := awayLine(p); l != "" {
+		b.WriteString(style.Dim.Render(trunc(l, max(10, w))) + "\n")
+	}
 	if m.seen && !m.connected {
 		b.WriteString(style.Err.Render(engineDownMsg) + "\n")
 	}
@@ -497,10 +504,7 @@ func (m Model) View() string {
 	top := b.String() // title and banners: always on screen
 	roster := make([]string, 0, len(p.Dots))
 	for i, d := range p.Dots {
-		status := d.Status
-		if d.Learning {
-			status = style.Sym("◌") + " learning" + style.Sym("…")
-		}
+		status := dotStatus(d) // background runs, learning, proactive hints (proactive.go)
 		rest := fmt.Sprintf("%-12s %-8s %s", trunc(d.Name, 12), d.Mode, status) + dotCost(d)
 		line := style.Glyph(d.Glyph, d.Color) + " " + trunc(rest, max(10, w-2))
 		if m.area == areaRoster && i == m.roster {
@@ -543,7 +547,7 @@ func (m Model) View() string {
 		}
 		label := cardLabel(c)
 		room := max(10, w) - lipgloss.Width(marker+c.Glyph+" "+label+"  ")
-		who := trunc(fmt.Sprintf("%s · turn %d%s", c.DotName, c.Turn, tags), max(1, room))
+		who := trunc(fmt.Sprintf("%s · %s%s", c.DotName, cardWhere(c), tags), max(1, room))
 		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", marker, c.Glyph, style.Severity(c.Severity).Render(label), who))
 		text := patchText(c)
 		if !sel {
@@ -575,7 +579,7 @@ func (m Model) View() string {
 			line := fmt.Sprintf("%3d  %-10s %s", e.Turn, trunc(e.Dot, 10), feedOutcome(e))
 			if e.Detail != "" && e.Outcome == "error" {
 				line += "  " + trunc(e.Detail, max(10, w-24))
-			} else if c := costPart(e.Detail); c != "" && e.Outcome != state.OutcomeAsked {
+			} else if c := costPart(e.Detail); c != "" && e.Outcome != state.OutcomeAsked && !proactiveOutcome(e.Outcome) {
 				line += "  " + c
 			}
 			b.WriteString(trunc(line, max(10, w)) + "\n")
