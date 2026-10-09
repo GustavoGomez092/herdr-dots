@@ -540,6 +540,47 @@ func TestReaderReplacedWithFewerTurnsStillReviewsNewTurns(t *testing.T) {
 	})
 }
 
+// Dismiss and Edit serialize with deliveries (e.dmu), so a card can't be
+// dismissed or rewritten while a flush is sending it.
+func TestDismissAndEditWaitForInFlightDelivery(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue))
+	r.readers["s1"].add(transcript.Turn{User: "x"})
+	r.be.set(critical)
+	r.attach(t, "security")
+	eventually(t, "card", func() bool { return len(r.q.Pending(pane)) == 1 })
+	id := r.q.Pending(pane)[0].ID
+	for _, step := range []struct {
+		name string
+		op   func() error
+	}{
+		{"edit", func() error { return r.e.Edit(id, "rewritten") }},
+		{"dismiss", func() error { return r.e.Dismiss(id) }}, // last: a dismissed card can't be edited
+	} {
+		name, op := step.name, step.op
+		r.e.dmu.Lock() // a delivery is in flight
+		done := make(chan error, 1)
+		go func() { done <- op() }()
+		select {
+		case err := <-done:
+			r.e.dmu.Unlock()
+			t.Fatalf("%s ran during an in-flight delivery (err %v)", name, err)
+		case <-time.After(50 * time.Millisecond):
+		}
+		if c, _ := r.q.Get(id); c.Status != queue.StatusPending || (name == "edit" && c.Body != critical.Message) {
+			t.Fatalf("%s changed the card mid-delivery: %+v", name, c)
+		}
+		r.e.dmu.Unlock()
+		if err := <-done; err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if name == "edit" {
+			if c, _ := r.q.Get(id); c.Body != "rewritten" {
+				t.Fatalf("edit after delivery: %+v", c)
+			}
+		}
+	}
+}
+
 // budgetRig runs one dot with a 1-call budget until it is out of budget.
 func budgetRig(t *testing.T) *rig {
 	t.Helper()

@@ -86,7 +86,11 @@ func (e *Engine) SendCards(ids []string) error {
 	return nil
 }
 
+// Dismiss and Edit hold e.dmu so they never interleave with a delivery: a card
+// is either sent as it was, or dismissed/edited before any flush reads it.
 func (e *Engine) Dismiss(id string) error {
+	e.dmu.Lock()
+	defer e.dmu.Unlock()
 	c, ok := e.d.Queue.Get(id)
 	if !ok {
 		return queue.ErrNotFound
@@ -100,6 +104,8 @@ func (e *Engine) Dismiss(id string) error {
 }
 
 func (e *Engine) Edit(id, body string) error {
+	e.dmu.Lock()
+	defer e.dmu.Unlock()
 	if err := e.d.Queue.Edit(id, body); err != nil {
 		return err
 	}
