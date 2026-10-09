@@ -8,6 +8,7 @@ import (
 	"herdr-dots/internal/delivery"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
+	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
@@ -48,10 +49,14 @@ func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
 		case gate == delivery.Now:
 			// Only cards the developer approved are accepted findings; inject
 			// deliveries were never approved.
-			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil && c.Approved {
-				if c.Kind == queue.KindPatch {
+			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil {
+				switch {
+				case !c.Approved:
+					e.spawnResolve(c, history.ResInjected) // Phase 9: delivered by inject mode, never approved
+				case c.Kind == queue.KindPatch:
 					e.patchSent(c) // marks the patch sent and records the outcome
-				} else {
+					e.spawnResolve(c, history.ResSent)
+				default:
 					e.spawnOutcome(c, memory.OutcomeSent)
 				}
 			}
@@ -209,7 +214,8 @@ func (e *Engine) dropPane(paneID string) {
 	e.mu.Lock()
 	e.abandonDraftsLocked(paneID, "") // same section as the delete (see Draft)
 	e.gens[paneID]++
-	delete(e.idle, paneID) // collected research for a closed pane is dropped (idle.go)
+	delete(e.idle, paneID)               // collected research for a closed pane is dropped (idle.go)
+	waiting := e.d.Queue.Pending(paneID) // Phase 9: OrphanPane orphans exactly these
 	orphaned, oerr := e.d.Queue.OrphanPane(paneID)
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)
@@ -223,6 +229,9 @@ func (e *Engine) dropPane(paneID string) {
 		e.d.Logf("orphan cards for %s: %v", paneID, oerr)
 	} else if orphaned > 0 {
 		e.d.Logf("pane %s closed: %d card(s) orphaned", paneID, orphaned)
+		for _, c := range waiting {
+			e.spawnResolve(c, history.ResOrphaned)
+		}
 	}
 	// After the attachment is gone: in-flight MCP asks end with ErrPaneClosed
 	// and nothing can re-mark the dead pane.

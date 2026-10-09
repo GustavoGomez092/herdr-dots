@@ -241,6 +241,9 @@ func suppressedBy(mr memRun, msg string, turn int, session string) (string, bool
 		if en.Kind != memory.KindFinding && en.Kind != memory.KindDismissed {
 			continue // research and question entries never suppress
 		}
+		if en.Source == memory.SourceImport {
+			continue // a shared pack's entries guide the prompt but never silence a dot, approved or not, in any scope (Phase 9, P9-R8)
+		}
 		if en.Kind == memory.KindFinding {
 			if en.Source != memory.SourceOutcome && en.Source != memory.SourceUser {
 				continue
@@ -327,6 +330,7 @@ func (e *Engine) spawnOutcomeOf(c queue.Card, kind string, secret bool) {
 	orig, edited := e.origBody[c.ID]
 	delete(e.origBody, c.ID)
 	e.mu.Unlock()
+	e.spawnResolve(c, resolutionFor(kind, edited)) // history is kept with memory on or off
 	if !e.memEnabled() {
 		return
 	}

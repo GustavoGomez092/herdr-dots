@@ -9,6 +9,7 @@ import (
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
@@ -304,8 +305,16 @@ func (e *Engine) runBackground(j bgJob) {
 	if j.claim != nil && !j.claim() {
 		return
 	}
+	// Phase 9: j.kind is research, scheduled or commit. The record names the
+	// pane the run ended on: "" for a scheduled run whose pane went away.
+	tr := e.trace(j.paneID, j.dot, j.kind, j.project)
+	defer func() {
+		tr.rec.Pane = j.paneID
+		tr.done()
+	}()
 	be, err := e.d.Backend(j.dot.Backend.Kind)
 	if err != nil {
+		tr.mark(j.turn, state.OutcomeError, j.label+": "+redactErr(err).Error())
 		e.bgFailed(j, err)
 		return
 	}
@@ -331,7 +340,9 @@ func (e *Engine) runBackground(j bgJob) {
 	}
 	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
 	defer cancel()
+	started := time.Now()
 	res, err := be.Run(ctx, req)
+	tr.usage(res, time.Since(started))  // a job dropped from here on (pane closed, dot detached) is recorded "dropped" with its cost
 	e.chargeBackground(j, deltaOf(res)) // not to a pane that closed (or whose id was reused) meanwhile
 	cost := 0.0                         // unknown-cost runs count one run and $0 (Phase 4 rule)
 	if res.CostKnown {
@@ -357,6 +368,7 @@ func (e *Engine) runBackground(j bgJob) {
 		return
 	}
 	if err != nil {
+		tr.mark(j.turn, state.OutcomeError, j.label+": "+redactErr(err).Error())
 		e.bgFailed(j, err)
 		return
 	}
@@ -365,17 +377,24 @@ func (e *Engine) runBackground(j bgJob) {
 	e.hook("bg-before-feed")
 	// The memory I/O took time: the feed line re-checks the pane (bgFeed).
 	v, detail := res.Verdict, costDetail(j.dot, res)
+	// A record only where the feed line was written: bgFeed drops the job
+	// when its pane is gone (then the record stays "dropped").
 	if !v.Relevant {
-		e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": nothing new", detail))
+		if e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": nothing new", detail)) {
+			tr.mark(j.turn, state.OutcomePass, j.label+": nothing new")
+		}
 		return
 	}
 	if ref, ok := suppressedBy(mem, v.Message, j.turn, j.session); ok {
-		e.bgFeed(&j, state.OutcomeSuppressed, "similar to "+ref)
+		if e.bgFeed(&j, state.OutcomeSuppressed, "similar to "+ref) {
+			tr.markVerdict(j.turn, state.OutcomeSuppressed, v)
+		}
 		return
 	}
 	if !e.bgFeed(&j, outcomeFor(j.kind), withCost(j.label+": "+firstLine(v.Message), detail)) {
 		return
 	}
+	tr.markVerdict(j.turn, state.OutcomeFlagged, v)
 	if j.deliver != nil {
 		j.deliver(j, v)
 	}
@@ -659,20 +678,23 @@ func (e *Engine) claimInbox(paneID, projectID string) {
 	if n == 0 {
 		return
 	}
-	stale := 0
+	var stale []queue.Card
 	e.mu.Lock()
 	if cur, ok := e.d.Attachments.Get(paneID); !ok || cur.ProjectID != projectID || e.gens[paneID] != gen {
 		for _, c := range e.d.Queue.All() {
 			if c.PaneID == paneID && c.SourceID != "" && !before[c.ID] && c.Status == queue.StatusPending {
 				if e.d.Queue.SetStatus(c.ID, queue.StatusOrphaned) == nil {
-					stale++
+					stale = append(stale, c)
 				}
 			}
 		}
 	}
 	e.mu.Unlock()
-	if stale > 0 {
-		e.d.Logf("pane %s closed during an inbox claim: %d card(s) orphaned", paneID, stale)
+	if len(stale) > 0 {
+		e.d.Logf("pane %s closed during an inbox claim: %d card(s) orphaned", paneID, len(stale))
+		for _, c := range stale {
+			e.spawnResolve(c, history.ResOrphaned) // Phase 9
+		}
 		e.broadcast()
 		return
 	}
