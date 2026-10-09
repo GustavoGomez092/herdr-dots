@@ -282,7 +282,7 @@ func TestQuotedPathsCaptureValidateAndApply(t *testing.T) {
 }
 
 func TestDiffHeadersUnquotesGitCQuoting(t *testing.T) {
-	diff := "diff --git \"a/x\\ty\\\\z\\\"\\303\\251\" \"b/x\\ty\\\\z\\\"\\303\\251\"\nindex 1..2 100644\n--- \"a/x\"\n+++ \"b/x\"\n@@ -1 +1 @@\n-a\n+b\n"
+	diff := "diff --git \"a/x\\ty\\\\z\\\"\\303\\251\" \"b/x\\ty\\\\z\\\"\\303\\251\"\nindex 1111111..2222222 100644\n--- \"a/x\"\n+++ \"b/x\"\n@@ -1 +1 @@\n-a\n+b\n"
 	modes, renames, err := diffHeaders([]byte(diff))
 	if err != nil || renames {
 		t.Fatalf("err %v renames %v", err, renames)
@@ -291,10 +291,10 @@ func TestDiffHeadersUnquotesGitCQuoting(t *testing.T) {
 		t.Fatalf("modes %q", modes)
 	}
 	for _, bad := range []string{
-		"diff --git \"a/x\\q\" \"b/x\\q\"\nindex 1..2 100644\n",       // unknown escape
-		"diff --git \"a/x\\4000\" \"b/x\\4000\"\nindex 1..2 100644\n", // octal over \377
-		"diff --git \"a/x \"b/x\"\nindex 1..2 100644\n",               // unterminated
-		"diff --git \"a/x\" b/x\nindex 1..2 100644\n",                 // mixed quoting
+		"diff --git \"a/x\\q\" \"b/x\\q\"\nindex 1111111..2222222 100644\n",       // unknown escape
+		"diff --git \"a/x\\4000\" \"b/x\\4000\"\nindex 1111111..2222222 100644\n", // octal over \377
+		"diff --git \"a/x \"b/x\"\nindex 1111111..2222222 100644\n",               // unterminated
+		"diff --git \"a/x\" b/x\nindex 1111111..2222222 100644\n",                 // mixed quoting
 	} {
 		if _, _, err := diffHeaders([]byte(bad)); !errors.Is(err, ErrEscape) {
 			t.Errorf("%q: err %v, want ErrEscape", bad, err)
@@ -305,9 +305,9 @@ func TestDiffHeadersUnquotesGitCQuoting(t *testing.T) {
 func TestDiffHeadersReadsModesTheWayGitApplyDoes(t *testing.T) {
 	const hunk = "@@ -1 +1 @@\n-a\n+b\n"
 	ok := map[string]fileModes{
-		"diff --git a/l b/l\ndeleted file mode 120000\nindex 1..0\n--- a/l\n+++ /dev/null\n@@ -1 +0,0 @@\n-a.txt\n": {"120000", "000000"},
-		"diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n" + hunk:                                          {"100644", "100644"},
-		"diff --git a/x b/x\nold mode 100644\nnew mode 100755\n":                                                    {"100644", "100755"},
+		"diff --git a/l b/l\ndeleted file mode 120000\nindex 1111111..0000000\n--- a/l\n+++ /dev/null\n@@ -1 +0,0 @@\n-a.txt\n": {"120000", "000000"},
+		"diff --git a/x b/x\nindex 1111111..2222222 100644\n--- a/x\n+++ b/x\n" + hunk:                                          {"100644", "100644"},
+		"diff --git a/x b/x\nold mode 100644\nnew mode 100755\n":                                                                {"100644", "100755"},
 	}
 	for diff, want := range ok {
 		modes, _, err := diffHeaders([]byte(diff))
@@ -322,12 +322,12 @@ func TestDiffHeadersReadsModesTheWayGitApplyDoes(t *testing.T) {
 		}
 	}
 	for name, diff := range map[string]string{
-		"a mode line in the content":   "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n" + hunk + "new file mode 120000\n",
-		"a header line before a block": "new mode 120000\ndiff --git a/x b/x\nindex 1..2 100644\n",
+		"a mode line in the content":   "diff --git a/x b/x\nindex 1111111..2222222 100644\n--- a/x\n+++ b/x\n" + hunk + "new file mode 120000\n",
+		"a header line before a block": "new mode 120000\ndiff --git a/x b/x\nindex 1111111..2222222 100644\n",
 		"half a mode change":           "diff --git a/x b/x\nold mode 100644\n--- a/x\n+++ b/x\n" + hunk,
-		"index mode plus mode lines":   "diff --git a/x b/x\nold mode 100644\nnew mode 100755\nindex 1..2 100644\n",
-		"index line with junk":         "diff --git a/x b/x\nindex 1..2 100644 junk\n",
-		"symlink via the index line":   "diff --git a/x b/x\nindex 1..2 120000\n--- a/x\n+++ b/x\n" + hunk,
+		"index mode plus mode lines":   "diff --git a/x b/x\nold mode 100644\nnew mode 100755\nindex 1111111..2222222 100644\n",
+		"index line with junk":         "diff --git a/x b/x\nindex 1111111..2222222 100644 junk\n",
+		"symlink via the index line":   "diff --git a/x b/x\nindex 1111111..2222222 120000\n--- a/x\n+++ b/x\n" + hunk,
 		"symlink via new mode":         "diff --git a/x b/x\nold mode 100644\nnew mode 120000\n",
 		"a CR after the mode":          "diff --git a/x b/x\nnew file mode 120000\r\n",
 		"a gitlink spelled oddly":      "diff --git a/x b/x\nnew file mode 777\n",

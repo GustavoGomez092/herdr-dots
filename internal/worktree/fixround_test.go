@@ -224,7 +224,9 @@ func TestApplyRefusesASubdirectoryAndRunsUserFilters(t *testing.T) {
 	}
 }
 
-func TestValidateReadsASymlinkTargetFromThePatchNotTheWorktree(t *testing.T) {
+// The captured patch creates a symlink; swapping the worktree link for a
+// harmless one afterwards changes nothing.
+func TestValidateRefusesACapturedSymlinkWhateverTheWorktreeHoldsLater(t *testing.T) {
 	g := isoGit(t)
 	var evil string
 	_, co, p, _ := draftT(t, g, newRepo(t), func(dir string) {
@@ -237,6 +239,6 @@ func TestValidateReadsASymlinkTargetFromThePatchNotTheWorktree(t *testing.T) {
 	}
 	symlinkOrSkip(t, "a.txt", evil)
 	if err := Validate(context.Background(), g, co, p, Caps{Deny: noDeny}); !errors.Is(err, ErrEscape) {
-		t.Fatalf("err %v, want ErrEscape from the patch's own blob", err)
+		t.Fatalf("err %v, want ErrEscape refusing the captured symlink", err)
 	}
 }

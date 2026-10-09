@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -30,8 +32,12 @@ var gitModes = map[string]bool{"100644": true, "100755": true, symlinkMode: true
 
 // strayOps are header lines that never appear outside a header in a diff git
 // wrote. One in a block's content (after a hunk, say) is refused.
-var strayOps = []string{"old mode ", "new mode ", "deleted file mode ", "new file mode ", "index ",
+var strayOps = []string{"old mode ", "new mode ", "deleted file mode ", "new file mode ", "index",
 	"rename ", "copy ", "similarity index", "dissimilarity index"}
+
+// indexRe is the only index line accepted: two hashes, single spaces, and an
+// optional mode git prints.
+var indexRe = regexp.MustCompile(`^index [0-9a-f]{7,64}\.\.[0-9a-f]{7,64}(?: (100644|100755|120000|160000))?$`)
 
 // diffHeaders reads the extended headers of a `git diff` and returns each
 // path's modes as the diff itself states them, plus whether any block is a
@@ -143,16 +149,15 @@ func diffHeaders(diff []byte) (modes map[string]fileModes, renames bool, err err
 				return nil, false, err
 			}
 			new, haveNew = m, true
-		case strings.HasPrefix(line, "index "):
-			switch f := strings.Fields(line); len(f) {
-			case 2:
-			case 3:
-				if idx, err = readMode(f[2], ""); err != nil {
-					return nil, false, err
-				}
-			default:
+		case strings.HasPrefix(line, "index"):
+			// git splits this line on single spaces and ignores it whole
+			// (taking the modes from the file on disk) when it doesn't
+			// parse; we refuse anything but the exact shape.
+			f := indexRe.FindStringSubmatch(line)
+			if f == nil {
 				return nil, false, fmt.Errorf("%w: unreadable index line %q", ErrEscape, line)
 			}
+			idx = f[1]
 		case strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "):
 			// Still header for git apply: mode lines may follow.
 		default:
@@ -257,29 +262,82 @@ func unquoteC(s string) (name, rest string, ok bool) {
 // modes to equal Changes exactly, and refuses renames and copies (whose
 // hidden source path would escape the path and deny checks) and any symlink
 // creation or change (diffHeaders). A gitlink the diff carries but Changes
-// doesn't mention fails the comparison.
-func checkDiffAgainstChanges(diff []byte, changes []Change) error {
-	got, renames, err := diffHeaders(diff)
-	if errors.Is(err, ErrEscape) {
-		return err
-	}
+// doesn't mention fails the comparison. It returns the diff's modes.
+func checkDiffAgainstChanges(diff []byte, changes []Change) (map[string]fileModes, error) {
+	got, err := diffModes(diff)
 	if err != nil {
-		return fmt.Errorf("invalid patch: %w", err)
-	}
-	if renames {
-		return fmt.Errorf("%w: the diff holds a rename or copy", ErrEscape)
+		return nil, err
 	}
 	want := map[string]fileModes{}
 	for _, c := range changes {
 		want[c.Path] = fileModes{c.OldMode, c.NewMode}
 	}
 	if len(got) != len(want) {
-		return fmt.Errorf("%w: the diff changes %d paths, the patch lists %d", ErrEscape, len(got), len(want))
+		return nil, fmt.Errorf("%w: the diff changes %d paths, the patch lists %d", ErrEscape, len(got), len(want))
 	}
 	for path, m := range got {
 		if w, ok := want[path]; !ok || w != m {
-			return fmt.Errorf("%w: %s is %s→%s in the diff, %s→%s in the patch", ErrEscape, path, m.old, m.new, w.old, w.new)
+			return nil, fmt.Errorf("%w: %s is %s→%s in the diff, %s→%s in the patch", ErrEscape, path, m.old, m.new, w.old, w.new)
 		}
+	}
+	return got, nil
+}
+
+// diffModes is diffHeaders for Validate and Apply: a rename or copy is
+// refused, and an ErrEscape comes back as it is.
+func diffModes(diff []byte) (map[string]fileModes, error) {
+	modes, renames, err := diffHeaders(diff)
+	if errors.Is(err, ErrEscape) {
+		return nil, err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("invalid patch: %w", err)
+	}
+	if renames {
+		return nil, fmt.Errorf("%w: the diff holds a rename or copy", ErrEscape)
+	}
+	return modes, nil
+}
+
+// checkBlocks requires one `git apply --numstat` record per "diff --git "
+// block. git also applies old-style blocks ("--- a/x" "+++ b/x" "@@") that
+// have no "diff --git " line and so no header diffHeaders reads; such a
+// block adds a record and is refused. (A "--- " line itself is not refused:
+// honest hunks remove lines starting with "-- ".)
+func checkBlocks(diff []byte, records int) error {
+	blocks := 0
+	for _, line := range strings.Split(string(diff), "\n") {
+		if strings.HasPrefix(line, "diff --git ") {
+			blocks++
+		}
+	}
+	if records != blocks {
+		return fmt.Errorf("%w: git reads %d patches in the diff, %d of them with a git header", ErrEscape, records, blocks)
+	}
+	return nil
+}
+
+// checkOnDisk is the parser-independent symlink guard: every path git would
+// touch is looked up under root (the draft for Validate, the repository for
+// Apply) with Lstat, never through the diff's own modes. A path that is a
+// symlink now may only be deleted ("deleted file mode 120000", alone or
+// followed by a new regular file) or turned into a regular file ("old mode
+// 120000" + "new mode 100644|100755"); anything else would make git keep the
+// symlink's type and write a new target.
+func checkOnDisk(root string, paths []string, modes map[string]fileModes) error {
+	if root == "" {
+		return errors.New("worktree: no directory to check the patch's paths against (pass the draft's Checkout)")
+	}
+	for _, p := range paths {
+		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			continue // nothing there, or not a symlink (git refuses writing beyond one)
+		}
+		m, ok := modes[p]
+		if ok && m.old == symlinkMode && (m.new == "000000" || m.new == "100644" || m.new == "100755") {
+			continue
+		}
+		return errSymlink(p)
 	}
 	return nil
 }

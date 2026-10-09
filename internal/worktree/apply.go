@@ -35,28 +35,30 @@ func tempPatch(diff []byte) (dir, file string, err error) {
 // patchPaths asks git itself which paths the diff in file would touch
 // (`git apply --numstat -z`, -p1 as `git apply` will use it): the header
 // paths, not the ones a Patch claims. It runs in dir, outside any repository.
-func patchPaths(ctx context.Context, g Git, dir, file string) ([]string, error) {
+// records counts git's patches before the paths are deduplicated (a type
+// change is two patches for one path).
+func patchPaths(ctx context.Context, g Git, dir, file string) (paths []string, records int, err error) {
 	out, err := g.Output(ctx, dir, ceiling(dir), "apply", "--numstat", "-z", file)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	var paths []string
 	for _, rec := range bytes.Split(out, []byte{0}) {
 		if len(rec) == 0 {
 			continue
 		}
 		parts := strings.SplitN(string(rec), "\t", 3)
 		if len(parts) != 3 || parts[2] == "" {
-			return nil, fmt.Errorf("%w: unexpected git apply --numstat record %q", ErrEscape, rec)
+			return nil, 0, fmt.Errorf("%w: unexpected git apply --numstat record %q", ErrEscape, rec)
 		}
+		records++
 		if !slices.Contains(paths, parts[2]) {
 			paths = append(paths, parts[2])
 		}
 	}
 	if len(paths) == 0 {
-		return nil, ErrEmptyPatch
+		return nil, 0, ErrEmptyPatch
 	}
-	return paths, nil
+	return paths, records, nil
 }
 
 // privateIndex copies repo's index into a private temp file and makes the
@@ -112,7 +114,9 @@ func unmergedAmong(ctx context.Context, g Git, repo string, env, want []string) 
 // re-read from the patch store. The paths Apply works on come from
 // `git apply --numstat -z` on those same bytes, never from a separate list.
 // From those bytes alone it refuses (ErrEscape) a rename or copy, a gitlink,
-// and any block that would create or change a symlink.
+// any block that would create or change a symlink, and a patch git reads
+// that has no "diff --git " header. A path that is a symlink in repo now may
+// only be deleted or replaced by a regular file (checked with Lstat).
 //
 // g must be the plain Git (Apply writes into the user's repository with the
 // user's own filters; an LFS smudge filter is not skipped) and repo must be
@@ -144,27 +148,31 @@ func Apply(ctx context.Context, g Git, repo string, diff []byte) (conflicts []st
 	defer os.RemoveAll(dir)
 	// From the bytes alone: no rename or copy, no gitlink, and no symlink
 	// created or changed (diffHeaders refuses those itself).
-	if modes, renames, err := diffHeaders(diff); errors.Is(err, ErrEscape) {
+	modes, err := diffModes(diff)
+	if err != nil {
 		return nil, err
-	} else if err != nil {
-		return nil, fmt.Errorf("invalid patch: %w", err)
-	} else if renames {
-		return nil, fmt.Errorf("%w: the diff holds a rename or copy", ErrEscape)
-	} else {
-		for path, m := range modes {
-			if m.old == "160000" || m.new == "160000" {
-				return nil, fmt.Errorf("%w: %s is a submodule", ErrEscape, path)
-			}
+	}
+	for path, m := range modes {
+		if m.old == "160000" || m.new == "160000" {
+			return nil, fmt.Errorf("%w: %s is a submodule", ErrEscape, path)
 		}
 	}
-	paths, err := patchPaths(ctx, g, dir, patchPath)
+	paths, records, err := patchPaths(ctx, g, dir, patchPath)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkBlocks(diff, records); err != nil {
 		return nil, err
 	}
 	for _, p := range paths {
 		if err := CheckPath(p); err != nil {
 			return nil, err
 		}
+	}
+	// Whatever the headers say: a path that is a symlink in the user's
+	// tree right now may only be deleted or replaced by a regular file.
+	if err := checkOnDisk(repo, paths, modes); err != nil {
+		return nil, err
 	}
 	env, err := privateIndex(ctx, g, dir, repo, paths)
 	if err != nil {

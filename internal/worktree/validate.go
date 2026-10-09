@@ -33,14 +33,16 @@ var shaRe = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
 // submodule change (ErrEscape), any symlink creation or change, in Changes
 // or in the diff bytes (ErrEscape: a new symlink, a file turned into one, a
 // retarget; deleting a symlink or replacing it with a regular file passes),
-// or a diff whose header paths (as `git apply --numstat -z` reads them) are
-// not exactly the paths in p.Changes (ErrEscape). Binary files, new
-// executables and mode changes pass; Capture flags them for the card.
+// a path that is a symlink in the draft (Lstat in co.Dir) and isn't being
+// deleted or replaced by a regular file (ErrEscape), a patch git reads
+// without a "diff --git " header (ErrEscape), or a diff whose header paths
+// (as `git apply --numstat -z` reads them) are not exactly the paths in
+// p.Changes (ErrEscape). Binary files, new executables and mode changes
+// pass; Capture flags them for the card.
 //
 // g runs only `git apply` (--numstat, --summary) on a private copy of
-// p.Diff. The Checkout (the draft the patch came from) is unused since
-// symlink targets are no longer read, and kept so callers need not change.
-func Validate(ctx context.Context, g Git, _ Checkout, p Patch, caps Caps) error {
+// p.Diff; co is the draft the patch came from and is required.
+func Validate(ctx context.Context, g Git, co Checkout, p Patch, caps Caps) error {
 	if len(p.Changes) == 0 || len(p.Diff) == 0 {
 		return ErrEmptyPatch
 	}
@@ -69,7 +71,8 @@ func Validate(ctx context.Context, g Git, _ Checkout, p Patch, caps Caps) error 
 	}
 	// What the diff bytes themselves say (modes, renames, symlinks) must be
 	// what Changes say: Apply sees only the bytes.
-	if err := checkDiffAgainstChanges(p.Diff, p.Changes); err != nil {
+	modes, err := checkDiffAgainstChanges(p.Diff, p.Changes)
+	if err != nil {
 		return err
 	}
 	dir, file, err := tempPatch(p.Diff)
@@ -77,9 +80,17 @@ func Validate(ctx context.Context, g Git, _ Checkout, p Patch, caps Caps) error 
 		return err
 	}
 	defer os.RemoveAll(dir)
-	got, err := patchPaths(ctx, g, dir, file)
+	got, records, err := patchPaths(ctx, g, dir, file)
 	if err != nil {
 		return fmt.Errorf("invalid patch: %w", err)
+	}
+	if err := checkBlocks(p.Diff, records); err != nil {
+		return err
+	}
+	// Parser-independent: a path that is a symlink in the draft may only be
+	// deleted or replaced by a regular file.
+	if err := checkOnDisk(co.Dir, got, modes); err != nil {
+		return err
 	}
 	if err := checkSummary(ctx, g, dir, file, p.Changes); err != nil {
 		return err
