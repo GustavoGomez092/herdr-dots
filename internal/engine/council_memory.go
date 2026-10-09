@@ -60,10 +60,10 @@ func (e *Engine) recordCouncilOutcomes(c queue.Card, kind string, edited bool) {
 		}
 	}
 	e.mu.Unlock()
-	names := councilMemberNames(c)
+	members := councilMembers(c)
 	for _, p := range c.Parts {
-		body := council.StripStanceMarkers(p.Body) // no "↳ ADD: " in memory
-		if p.Failed || body == "" {
+		body := council.OwnText(p.Body) // no "↳ ADD: " and no "## " header in memory
+		if p.Failed || body == council.NoPoint {
 			continue
 		}
 		if d, ok := known[p.Dot]; ok && !d.Memory.Enabled {
@@ -76,7 +76,7 @@ func (e *Engine) recordCouncilOutcomes(c queue.Card, kind string, edited bool) {
 		if kind == memory.OutcomeSent && edited {
 			// The member's own bullet of the edited digest; a member no bullet
 			// names keeps its own answer and records a plain send.
-			if text, ok := council.MemberPoint(c.Body, names, []string{p.DotName, p.Dot}, body); ok {
+			if text, ok := council.MemberPoint(c.Body, members, council.Member{Name: p.DotName, Slug: p.Dot}, p.Body); ok {
 				o.Kind, o.Edited = memory.OutcomeEdited, text
 			}
 		}
@@ -89,19 +89,19 @@ func (e *Engine) recordCouncilOutcomes(c queue.Card, kind string, edited bool) {
 	e.broadcast()
 }
 
-// councilMemberNames is every name a digest attribution may use for the
-// card's members: display names and slugs.
-func councilMemberNames(c queue.Card) []string {
-	names := make([]string, 0, 2*len(c.Parts))
+// councilMembers is the card's members as a digest attribution may name
+// them: display names and slugs.
+func councilMembers(c queue.Card) []council.Member {
+	out := make([]council.Member, 0, len(c.Parts))
 	for _, p := range c.Parts {
-		names = append(names, p.DotName, p.Dot)
+		out = append(out, council.Member{Name: p.DotName, Slug: p.Dot})
 	}
-	return names
+	return out
 }
 
 // councilConventionText is the text to remember from a council digest: its
 // first bullet point, without the list marker and the member attribution
 // (council.FirstPoint). Headers ("## Must fix") are never returned.
 func councilConventionText(c queue.Card) string {
-	return council.FirstPoint(c.Body, councilMemberNames(c))
+	return council.FirstPoint(c.Body, councilMembers(c))
 }

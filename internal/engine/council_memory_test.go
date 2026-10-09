@@ -195,6 +195,53 @@ func TestEditedCouncilDigestGivesEachMemberItsOwnPoint(t *testing.T) {
 	}
 }
 
+// Re-review follow-up 2: a digest edited down to "##" gives each member its
+// own answer as a plain send, and remembers no convention.
+func TestCouncilDigestOfOnlyAHeaderMarkerRemembersNoHeader(t *testing.T) {
+	r := newMemRig(t, memOpts{}, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue))
+	r.attach(t, "security", "frontend")
+	c := councilCardFor(t, r)
+	if err := r.e.Edit(c.ID, "## "); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(ipc.RememberArgs{CardID: c.ID, As: "convention"})
+	if err := r.e.Handle(context.Background(), ipc.CmdRemember, raw); err == nil {
+		t.Fatal("a digest with no point must not be remembered")
+	}
+	if p := r.entries(memory.Filter{Scope: memory.ScopeProject}); len(p) != 0 {
+		t.Fatalf("project memory %+v", p)
+	}
+	if err := r.e.SendCards([]string{c.ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "two sent outcomes", func() bool { return len(ledgerBy(r, memory.OutcomeSent)) == 2 })
+	for dot, o := range ledgerBy(r, memory.OutcomeSent) {
+		if o.Edited != "" || strings.HasPrefix(o.Body, "#") {
+			t.Fatalf("%s: outcome %+v", dot, o)
+		}
+	}
+}
+
+// Re-review follow-up 2: a member whose own answer starts with a Markdown
+// header never remembers the header.
+func TestCouncilMemberAnswerWithAHeaderRemembersItsText(t *testing.T) {
+	r := newMemRig(t, memOpts{}, member("Security", dots.ModeQueue))
+	r.attach(t, "security")
+	c, err := r.q.Add(queue.Card{Kind: queue.KindCouncil, Dot: "council", DotName: transcript.CouncilName, Glyph: transcript.CouncilGlyph,
+		PaneID: pane, Turn: 1, Severity: "warn", Mode: "queue", Project: testProject, Body: "## Should fix\n- Use cookies (Security)",
+		Parts: []queue.CardPart{{Dot: "security", DotName: "Security", Glyph: "●", Severity: "warn", Body: "## Tokens\nMove the token to a cookie."}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.e.SendCards([]string{c.ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the finding is the text, not the header", func() bool {
+		es := r.entries(memory.Filter{Scope: memory.ScopeDot, Dot: "security", Kinds: []memory.Kind{memory.KindFinding}})
+		return len(es) == 1 && es[0].Text == "Move the token to a cookie."
+	})
+}
+
 // Final review item 1: a member that no bullet of the edited digest names
 // records its own part body as sent, not the digest as edited.
 func TestEditedCouncilDigestWithoutTheMembersBulletRecordsSent(t *testing.T) {

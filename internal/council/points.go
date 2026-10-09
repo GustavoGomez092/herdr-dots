@@ -17,6 +17,14 @@ func StripStanceMarkers(body string) string {
 	return strings.TrimSpace(stanceMarkerRe.ReplaceAllString(body, ""))
 }
 
+// Member is a council member as a digest attribution may name it.
+type Member struct{ Name, Slug string }
+
+// NoPoint is what FirstPoint and MemberPoint return when there is no text
+// at all to remember (a body of only "##"). Callers check for it and store
+// nothing.
+const NoPoint = "(no point to remember)"
+
 // Point is one bullet point of a council digest.
 type Point struct {
 	Text  string   // the bullet without its list marker and attribution
@@ -33,11 +41,13 @@ var (
 // are skipped. A trailing "(…)" is an attribution, and is stripped, only when
 // every comma-separated name in it is one of members (display names or slugs,
 // any case): "(see RFC 7519)" stays part of the text.
-func Points(body string, members []string) []Point {
+func Points(body string, members []Member) []Point {
 	known := map[string]bool{}
-	for _, m := range members {
-		if m = strings.ToLower(strings.TrimSpace(m)); m != "" {
-			known[m] = true
+	for _, mb := range members {
+		for _, m := range []string{mb.Name, mb.Slug} {
+			if m = strings.ToLower(strings.TrimSpace(m)); m != "" {
+				known[m] = true
+			}
 		}
 	}
 	var out []Point
@@ -74,33 +84,68 @@ func Points(body string, members []string) []Point {
 }
 
 // FirstPoint is the digest's first bullet point. A digest without one gives
-// its first line that is not a header; it never returns a "## " header.
-func FirstPoint(body string, members []string) string {
+// its first line that is not a header. It never returns "" or a "## "
+// header: a digest with no text at all gives NoPoint.
+func FirstPoint(body string, members []Member) string {
 	if ps := Points(body, members); len(ps) > 0 {
 		return ps[0].Text
 	}
-	return firstTextLine(body)
+	return orNoPoint(firstTextLine(body))
 }
 
-// MemberPoint is the first bullet point whose attribution names the member
-// (any of self: its display name and slug). ok=false means no bullet names
-// it; text is then the member's own part body (fallback) without round-2
-// markers. It never returns a "## " header.
-func MemberPoint(body string, members, self []string, fallback string) (text string, ok bool) {
-	for _, p := range Points(body, members) {
+// MemberPoint is the first bullet point whose attribution names the member:
+// its display name first, then its slug, but only a slug that is not another
+// member's display name ("(UI)" is the member named UI, never a member whose
+// slug is ui). ok=false means no bullet names it; text is then OwnText of
+// the member's own part body (fallback). It never returns "" or a "## "
+// header.
+func MemberPoint(body string, members []Member, self Member, fallback string) (text string, ok bool) {
+	ps := Points(body, members)
+	for _, p := range ps {
 		for _, n := range p.Names {
-			for _, s := range self {
-				if s != "" && strings.EqualFold(n, s) {
-					return p.Text, true
-				}
+			if self.Name != "" && strings.EqualFold(n, self.Name) {
+				return p.Text, true
 			}
 		}
 	}
-	fallback = StripStanceMarkers(fallback)
-	if strings.HasPrefix(strings.TrimSpace(fallback), "##") {
-		return firstTextLine(fallback), false
+	slugOK := self.Slug != ""
+	for _, m := range members {
+		if strings.EqualFold(m.Name, self.Slug) && !strings.EqualFold(m.Name, self.Name) {
+			slugOK = false // the slug is another member's display name
+		}
 	}
-	return fallback, false
+	for _, p := range ps {
+		for _, n := range p.Names {
+			if slugOK && strings.EqualFold(n, self.Slug) {
+				return p.Text, true
+			}
+		}
+	}
+	return OwnText(fallback), false
+}
+
+// OwnText is what a member's own card part contributes to memory: the body
+// without round-2 markers, or its first line of text when it starts with a
+// "## " header. It never returns "" or a "## " header: a body with no text
+// gives NoPoint.
+func OwnText(body string) string {
+	body = StripStanceMarkers(body)
+	if first, _, _ := strings.Cut(body, "\n"); isHeader(first) {
+		body = firstTextLine(body)
+	}
+	return orNoPoint(body)
+}
+
+var headerRe = regexp.MustCompile(`^#{1,6}(?:\s|$)`)
+
+// isHeader reports a Markdown header line ("## Must fix", "##").
+func isHeader(line string) bool { return headerRe.MatchString(strings.TrimSpace(line)) }
+
+func orNoPoint(s string) string {
+	if s = strings.TrimSpace(s); s == "" || isHeader(s) {
+		return NoPoint
+	}
+	return s
 }
 
 // firstTextLine is the first non-empty line that is not a "## " header, or
@@ -109,7 +154,7 @@ func firstTextLine(body string) string {
 	title := ""
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "##") {
+		if isHeader(line) {
 			if title == "" {
 				title = strings.TrimSpace(strings.TrimLeft(line, "#"))
 			}

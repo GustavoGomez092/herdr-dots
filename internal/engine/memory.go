@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/council"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/queue"
@@ -381,6 +382,9 @@ func (e *Engine) Remember(cardID string, as memory.RememberAs, reason string) er
 	text := c.Body
 	if c.Kind == queue.KindCouncil {
 		text = councilConventionText(c) // the digest starts with a "## " header
+		if text == council.NoPoint {
+			return fmt.Errorf("card %s: the council digest has no point to remember", cardID)
+		}
 	}
 	in := memory.RememberInput{As: as, Dot: c.Dot, Text: text, Reason: reason, Ev: ev}
 	if _, err := e.d.Memory.Remember(pid, in); err != nil {
