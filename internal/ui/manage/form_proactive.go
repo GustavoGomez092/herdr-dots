@@ -51,6 +51,19 @@ func proactiveFields(d dots.Dot) []field {
 	}
 }
 
+// text and isOn read a field by label; a form without it reads as empty/off.
+func (f *Form) text(label string) string {
+	if fl := f.byLabel(label); fl != nil {
+		return strings.TrimSpace(fl.input.Value())
+	}
+	return ""
+}
+
+func (f *Form) isOn(label string) bool {
+	fl := f.byLabel(label)
+	return fl != nil && fl.on
+}
+
 // byLabel returns the field with this label (nil if the form has none).
 func (f *Form) byLabel(label string) *field {
 	for i := range f.fields {
@@ -63,6 +76,9 @@ func (f *Form) byLabel(label string) *field {
 
 func (f *Form) labelNum(label string) (int, error) {
 	fl := f.byLabel(label)
+	if fl == nil {
+		return 0, errNotNumber(strings.TrimSpace(label))
+	}
 	n, err := strconv.Atoi(strings.TrimSpace(fl.input.Value()))
 	if err != nil {
 		return 0, errNotNumber(strings.TrimSpace(label))
@@ -77,13 +93,13 @@ func (e errNotNumber) Error() string { return string(e) + " must be a whole numb
 // applyProactive copies the proactive fields into d. dots.Validate checks
 // the values (an invalid cron blocks the save with its message).
 func (f *Form) applyProactive(d *dots.Dot) error {
-	d.Research.Enabled = f.byLabel(lResearch).on
-	d.Research.Web = f.byLabel(lWeb).on
-	d.Research.Topics = splitList(f.byLabel(lTopics).input.Value())
-	d.Schedule.Cron = strings.TrimSpace(f.byLabel(lCron).input.Value())
-	d.Schedule.Task = strings.TrimSpace(f.byLabel(lTask).input.Value())
-	d.Schedule.Projects = splitList(f.byLabel(lProjects).input.Value())
-	d.Trigger.OnCommit = f.byLabel(lOnCommit).on
+	d.Research.Enabled = f.isOn(lResearch)
+	d.Research.Web = f.isOn(lWeb)
+	d.Research.Topics = splitList(f.text(lTopics))
+	d.Schedule.Cron = f.text(lCron)
+	d.Schedule.Task = f.text(lTask)
+	d.Schedule.Projects = splitList(f.text(lProjects))
+	d.Trigger.OnCommit = f.isOn(lOnCommit)
 	var err error
 	if d.Research.IdleMinutes, err = f.labelNum(lIdleMin); err != nil {
 		return err
@@ -167,13 +183,17 @@ func (f *Form) refreshProblems() {
 // preview, the read-only labels and the web notes. "" = none.
 func (f *Form) proactiveNote(label string) string {
 	if prob := f.problems[label]; prob != "" {
-		return "  ! " + prob // an invalid or too-frequent cron gets no preview
+		note := "  ! " + prob // an invalid or too-frequent cron gets no preview
+		if label == lCron {
+			note += "\n  scheduled runs are read-only"
+		}
+		return note
 	}
 	switch label {
 	case lResearch:
 		return "  read-only: researches with read-only repo tools, never edits files"
 	case lCron:
-		expr := strings.TrimSpace(f.byLabel(lCron).input.Value())
+		expr := f.text(lCron)
 		if expr == "" {
 			return "  off (5 fields: minute hour day month weekday, local time; runs while Herdr runs)\n  scheduled runs are read-only"
 		}
@@ -194,7 +214,7 @@ func (f *Form) proactiveNote(label string) string {
 		}
 		return "  next: " + strings.Join(slots, " · ") + "\n  local time; scheduled runs are read-only"
 	case lWeb:
-		if !f.byLabel(lWeb).on {
+		if !f.isOn(lWeb) {
 			return ""
 		}
 		if !backend.WebSupported(f.Kind()) {

@@ -4,8 +4,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"herdr-dots/internal/ui/style"
 )
+
+// minEditorHeight is the smallest height fit lays out for.
+const minEditorHeight = 3
 
 // SetHeight sets the editor's screen height; 0 = unknown (render every line).
 // With Phase 8's fields the form is taller than most popups, so View scrolls
@@ -18,19 +23,24 @@ func (f *Form) SetHeight(h int) { f.height = h }
 // very small screen it sheds the title padding and the tail's leading lines
 // (never the key help, the last line) before it gives up the focused field.
 func (f *Form) fit(view string, fieldsStart, fieldsEnd, focusStart, focusEnd int) string {
+	f.unseen = false
 	lines := strings.Split(view, "\n")
-	if f.height <= 0 || len(lines) <= f.height || fieldsEnd > len(lines) || fieldsStart >= fieldsEnd {
+	h := f.height
+	if h > 0 && h < minEditorHeight {
+		h = minEditorHeight // title, one field line and the key help
+	}
+	if h <= 0 || len(lines) <= h || fieldsEnd > len(lines) || fieldsStart >= fieldsEnd {
 		return view
 	}
 	head, mid, tail := lines[:fieldsStart], lines[fieldsStart:fieldsEnd], lines[fieldsEnd:]
-	avail := f.height - len(head) - len(tail)
+	avail := h - len(head) - len(tail)
 	if avail < 3 {
 		head = head[:min(len(head), 1)] // the title only
-		keep := max(0, f.height-len(head)-3)
+		keep := max(1, h-len(head)-3)   // the key help is the last line
 		if len(tail) > keep {
 			tail = tail[len(tail)-keep:]
 		}
-		avail = f.height - len(head) - len(tail)
+		avail = h - len(head) - len(tail)
 		if avail < 1 {
 			return view
 		}
@@ -54,6 +64,57 @@ func (f *Form) fit(view string, fieldsStart, fieldsEnd, focusStart, focusEnd int
 			win[len(win)-1] = style.Dim.Render(fmt.Sprintf("  ↓ %d more", below+1))
 		}
 	}
+	if focusStart >= fieldsStart {
+		l := focusStart - fieldsStart // the focused field's label line
+		drawn := l >= off && l < off+avail
+		if avail >= 3 && ((off > 0 && l == off) || (len(mid)-(off+avail) > 0 && l == off+avail-1)) {
+			drawn = false // an arrow replaced it
+		}
+		f.unseen = !drawn
+	}
 	out := append(append(append([]string(nil), head...), win...), tail...)
 	return strings.Join(out, "\n")
+}
+
+// clipLines truncates every line to width (0 = unknown: no clipping).
+func clipLines(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if ansi.StringWidth(l) > width {
+			lines[i] = ansi.Truncate(l, width, "…")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// wrapTo wraps s to width (0 = unknown: unchanged).
+func wrapTo(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	return ansi.Wrap(s, width, "")
+}
+
+// wrapHelp wraps the key help at its " · " separators so no hint is cut off.
+func wrapHelp(help string, width int) string {
+	if width <= 0 || ansi.StringWidth(help) <= width {
+		return help
+	}
+	var lines []string
+	cur := ""
+	for _, part := range strings.Split(help, " · ") {
+		switch {
+		case cur == "":
+			cur = part
+		case ansi.StringWidth(cur+" · "+part) <= width:
+			cur += " · " + part
+		default:
+			lines = append(lines, cur)
+			cur = part
+		}
+	}
+	return wrapTo(strings.Join(append(lines, cur), "\n"), width)
 }

@@ -52,6 +52,7 @@ type Form struct {
 	now      func() time.Time  // the cron preview's clock; nil = time.Now
 	height   int               // screen height for scrolling (SetHeight); 0 = unknown
 	problems map[string]string // field label -> validation message, set by View
+	unseen   bool              // the focused field's line was not drawn by the last View
 }
 
 func textField(label, v string) field {
@@ -215,6 +216,23 @@ func (f *Form) setFocus(i int) {
 
 func (f *Form) Update(k tea.KeyMsg) tea.Cmd {
 	cur := &f.fields[f.focus]
+	nav := false
+	switch k.String() {
+	case "tab", "shift+tab":
+		nav = true
+	case "up", "down":
+		nav = cur.kind != kArea
+	}
+	if !nav {
+		// Never act on an unseen selection: lay the form out as it will be
+		// drawn, and ignore edit keys while the focused line is off screen.
+		if f.height > 0 {
+			f.View(0)
+		}
+		if f.unseen {
+			return nil
+		}
+	}
 	switch k.String() {
 	case "tab":
 		f.setFocus(f.focus + 1)
@@ -432,18 +450,17 @@ func (f *Form) View(width int) string {
 	if f.estimate != nil {
 		if d, err := f.Dot(); err == nil {
 			if line := f.estimate(d); line != "" {
-				b.WriteString("\n" + style.Dim.Render(line) + "\n")
+				b.WriteString("\n" + style.Dim.Render(wrapTo(line, width)) + "\n")
 			}
 		}
 	}
 	if f.err != "" {
-		b.WriteString("\n" + style.Err.Render(f.err) + "\n")
+		b.WriteString("\n" + style.Err.Render(wrapTo(f.err, width)) + "\n")
 	}
 	help := "tab/shift+tab move · ←/→ change · space toggle · ctrl+s save · esc cancel"
 	if f.OnModel() {
 		help = "ctrl+space pick a model · " + help
 	}
-	b.WriteString("\n" + style.Dim.Render(help))
-	_ = width
-	return f.fit(b.String(), fieldsStart, fieldsEnd, focusStart, focusEnd)
+	b.WriteString("\n" + style.Dim.Render(wrapHelp(help, width)))
+	return f.fit(clipLines(b.String(), width), fieldsStart, fieldsEnd, focusStart, focusEnd)
 }
