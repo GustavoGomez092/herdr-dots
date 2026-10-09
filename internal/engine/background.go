@@ -650,9 +650,11 @@ func (e *Engine) deliverScheduled(j bgJob, v backend.Verdict) {
 	if err := e.d.Inbox.Put(c); err != nil {
 		if errors.Is(err, queue.ErrInboxVersion) {
 			// A newer herdr-dots owns the inbox now: this version must not
-			// rewrite it, so the result can't be filed. Say so, never drop it
-			// silently.
-			e.d.Logf("dot %s: %s result for %s not filed: %v", j.dot.Slug, j.label, name, err)
+			// rewrite it, so the result can't be filed (ruling P10-R4). Say
+			// so, never drop it silently: the log keeps its severity and
+			// sanitized first line, so the paid finding can be recovered.
+			e.d.Logf("dot %s: %s result for %s not filed: %v; finding %s: %s", j.dot.Slug, j.label, name, err,
+				textutil.SanitizeModelText(v.Severity), textutil.SanitizeModelText(firstLine(v.Message)))
 			e.notify(j.dot, fmt.Sprintf("%s (scheduled) has a finding for %s, but a newer herdr-dots wrote the inbox: upgrade to see it", j.dot.Name, name))
 			return
 		}
@@ -687,7 +689,13 @@ func (e *Engine) claimInbox(paneID, projectID string) {
 	}
 	e.hook("inbox-before-claim")
 	n, err := e.d.Queue.Claim(e.d.Inbox, projectID, paneID)
-	if err != nil {
+	switch {
+	case errors.Is(err, queue.ErrInboxVersion):
+		// Every tick and every pane would repeat it: say it once per process.
+		if e.inboxNewer.CompareAndSwap(false, true) {
+			e.d.Logf("inbox claim for %s: %v (no inbox cards are claimed until herdr-dots is upgraded; logged once)", paneID, err)
+		}
+	case err != nil:
 		e.d.Logf("inbox claim for %s: %v", paneID, err)
 	}
 	if n == 0 {

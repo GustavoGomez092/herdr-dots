@@ -78,6 +78,11 @@ func setupMCP(args []string, s setupIO) error {
 	if err != nil {
 		return err
 	}
+	// A record file a newer herdr-dots wrote can't be updated afterwards:
+	// fail before anything is planned or asked, so no client config changes.
+	if _, err := mcpinstall.LoadRecords(mcpinstall.RecordPath(p.ConfigDir)); errors.Is(err, mcpinstall.ErrRecordsVersion) {
+		return fmt.Errorf("%w; nothing changed: update herdr-dots first", err)
+	}
 	var plans []mcpinstall.Plan
 	for _, c := range clients {
 		var pl mcpinstall.Plan

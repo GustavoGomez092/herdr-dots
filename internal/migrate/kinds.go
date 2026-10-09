@@ -19,6 +19,14 @@ func siblingLock(file string) string { return file + ".lock" }
 // Default is every persisted file kind herdr-dots 1.0 knows. Every kind is
 // at version 1 and there are no migrations yet. Kinds a phase adds must be
 // listed here: TestEveryPathsFileIsClassified fails until they are.
+//
+// Migrations are registered in Set.Migrations here. Phase 2 memory is VITAL:
+// a migration must never lose or reactivate memory. When the first real
+// migration of a memory kind (memory-scope, memory-meta, schedule) is
+// registered (none exists yet), it must add a post-Apply invariant check
+// that compares the old and new file and refuses the upgrade unless every
+// entry's id, order and status and the entry count are unchanged (no entry
+// dropped, no dismissed, archived or forgotten entry made active again).
 func Default() Set {
 	return Set{Kinds: []Kind{
 		// Config dir (the developer edits these; atomic replace keeps them safe).

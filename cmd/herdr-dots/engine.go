@@ -246,6 +246,7 @@ func serveEngine(p paths.Paths) error {
 	}
 	defer lock.Release()
 	logger := log.New(os.Stderr, "herdr-dots ", log.LstdFlags)
+	migrated := startupMigrations(p, logger.Printf) // before any store opens a file
 
 	cfg, err := config.Load(p.ConfigFile())
 	if err != nil {
@@ -254,6 +255,11 @@ func serveEngine(p paths.Paths) error {
 	hc, err := herdr.NewFromEnv()
 	if err != nil {
 		return err
+	}
+	if msg := readOnlyNotice(migrated); msg != "" {
+		if err := hc.Notify(context.Background(), "Herdr Dots", msg); err != nil {
+			logger.Printf("notify: %v", err)
+		}
 	}
 	e, err := buildEngine(p, hc, cfg, logger.Printf)
 	if err != nil {

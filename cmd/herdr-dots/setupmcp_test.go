@@ -212,3 +212,24 @@ func TestSetupMCPRejectsAnUnknownClient(t *testing.T) {
 		t.Fatal("unknown client accepted")
 	}
 }
+
+// A record file a newer herdr-dots wrote fails fast, before the y/N prompt:
+// no client config may change when the record can't be saved afterwards.
+func TestSetupMCPRefusesANewerRecordFileBeforeAsking(t *testing.T) {
+	r := newMCPSetupRig(t, "claude", "codex")
+	rec := mcpinstall.RecordPath(r.p.ConfigDir)
+	const newer = `{"version":2,"installs":[]}`
+	if err := os.WriteFile(rec, []byte(newer), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := setupMCP(nil, r.io)
+	if !errors.Is(err, mcpinstall.ErrRecordsVersion) || !strings.Contains(err.Error(), "nothing changed") {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(r.out.String(), "Apply these changes?") || len(r.ran) != 0 || mcpFileExists(r.codexConfig()) {
+		t.Fatalf("nothing may be planned or changed: ran %v\n%s", r.ran, r.out.String())
+	}
+	if b, _ := os.ReadFile(rec); string(b) != newer {
+		t.Fatalf("the newer record changed: %s", b)
+	}
+}
