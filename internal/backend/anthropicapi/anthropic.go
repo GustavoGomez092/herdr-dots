@@ -161,11 +161,24 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		}
 		params.Tools = append(params.Tools, anthropic.BetaToolUnionParam{OfTool: &tp})
 	}
-	if r.Web && r.Pass == backend.PassResearch && !r.Write { // never mixed with write tools
-		params.Tools = append(params.Tools,
-			anthropic.BetaToolUnionParam{OfWebSearchTool20260209: &anthropic.BetaWebSearchTool20260209Param{MaxUses: anthropic.Int(webMaxUses)}},
-			anthropic.BetaToolUnionParam{OfWebFetchTool20260209: &anthropic.BetaWebFetchTool20260209Param{MaxUses: anthropic.Int(webMaxUses)}},
-		)
+	webOn := r.Web && r.Pass == backend.PassResearch && !r.Write // never mixed with write tools
+	repoTools := params.Tools
+	// webUsed counts the paid web uses (searches + fetches) over the whole
+	// run: every tool-loop turn and every pause_turn resume (ruling P8-R6).
+	webUsed := 0
+	// declareTools gives each call only what is left of the budget; at zero
+	// the web tools are dropped and the repo tools stay.
+	declareTools := func() {
+		params.Tools = repoTools
+		if left := webMaxUses - webUsed; webOn && left > 0 {
+			params.Tools = append(append([]anthropic.BetaToolUnionParam(nil), repoTools...),
+				anthropic.BetaToolUnionParam{OfWebSearchTool20260209: &anthropic.BetaWebSearchTool20260209Param{MaxUses: anthropic.Int(int64(left))}},
+				anthropic.BetaToolUnionParam{OfWebFetchTool20260209: &anthropic.BetaWebFetchTool20260209Param{
+					MaxUses: anthropic.Int(int64(left)), MaxContentTokens: anthropic.Int(webFetchMaxTokens)}},
+			)
+		}
+	}
+	if webOn {
 		// Search results come back with citations, which structured outputs
 		// reject: the JSON contract in the system prompt and ParseReply cover
 		// the reply instead. The dynamic-filtering web tools run their own
@@ -175,11 +188,13 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 	prices := b.o.PriceTable()
 	// send makes one call and resumes a turn the server paused while running
 	// web tools (stop_reason "pause_turn"): the paused assistant turn goes
-	// back as is, with no extra user message. Usage and searches are summed.
+	// back as is, with no extra user message. Usage and searches are summed,
+	// and returned with an error too, so paid calls are never lost.
 	send := func(ctx context.Context) (*anthropic.BetaMessage, pricing.Usage, int, error) {
 		var u pricing.Usage
 		searches := 0
 		for n := 0; ; n++ {
+			declareTools()
 			resp, err := c.Beta.Messages.New(ctx, params)
 			if err != nil {
 				return nil, u, searches, err
@@ -187,9 +202,14 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 			params.Messages = append(params.Messages, resp.ToParam())
 			u = u.Add(pricing.Usage{In: int(resp.Usage.InputTokens), Out: int(resp.Usage.OutputTokens),
 				CacheRead: int(resp.Usage.CacheReadInputTokens), CacheWrite: int(resp.Usage.CacheCreationInputTokens)})
-			searches += int(resp.Usage.ServerToolUse.WebSearchRequests)
-			if resp.StopReason != anthropic.BetaStopReasonPauseTurn || n == maxPauses {
+			s, f := webUses(resp)
+			searches += s
+			webUsed += s + f
+			if resp.StopReason != anthropic.BetaStopReasonPauseTurn {
 				return resp, u, searches, nil
+			}
+			if n == maxPauses || webUsed >= webMaxUses {
+				return resp, u, searches, fmt.Errorf("web research paused %d times without finishing", n+1)
 			}
 		}
 	}
@@ -212,16 +232,20 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 			params.ToolChoice = anthropic.BetaToolChoiceUnionParam{OfNone: &anthropic.BetaToolChoiceNoneParam{}}
 		}
 		resp, u, searches, err := send(ctx)
-		if err != nil {
-			return toolloop.Reply{}, mapErr(err, key, model)
-		}
-		served := string(resp.Model)
-		if served == "" {
-			served = model
+		served := model
+		if resp != nil && resp.Model != "" {
+			served = string(resp.Model)
 		}
 		usd, known := prices.CostServed(Provider, served, model, u)
 		if known {
 			usd += float64(searches) * WebSearchUSD
+		}
+		if err != nil {
+			if u == (pricing.Usage{}) {
+				return toolloop.Reply{}, mapErr(err, key, model)
+			}
+			// Calls already paid for (earlier pauses) keep their spend.
+			return toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}, mapErr(err, key, model)
 		}
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		if resp.StopReason == anthropic.BetaStopReasonRefusal {
