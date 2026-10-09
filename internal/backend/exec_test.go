@@ -16,6 +16,15 @@ func TestCleanEnvStripsHerdrAndClaudeVars(t *testing.T) {
 	}
 }
 
+func TestCleanEnvNeverReturnsNil(t *testing.T) {
+	for _, in := range [][]string{{"HERDR_X=1"}, nil, {}} {
+		got := CleanEnv(in)
+		if got == nil || len(got) != 0 {
+			t.Fatalf("CleanEnv(%v) = %#v, want non-nil empty (nil Env would inherit the parent environment)", in, got)
+		}
+	}
+}
+
 func TestExecRunnerPassesStdinDirEnv(t *testing.T) {
 	dir := t.TempDir()
 	out, _, err := ExecRunner{}.Run(context.Background(), Cmd{

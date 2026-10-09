@@ -26,9 +26,9 @@ func TestParseVerdict(t *testing.T) {
 	bad := []string{
 		``,
 		`I have nothing to add.`,
-		`{"severity":"info","message":"x"}`,       // relevant missing
+		`{"severity":"info","message":"x"}`, // relevant missing
 		`{"relevant":true,"severity":"warn","message":""}`, // relevant but empty
-		`{"relevant":"yes","message":"x"}`,        // wrong type
+		`{"relevant":"yes","message":"x"}`,                 // wrong type
 	}
 	for _, in := range bad {
 		if _, err := ParseVerdict(in); !errors.Is(err, ErrMalformed) {
