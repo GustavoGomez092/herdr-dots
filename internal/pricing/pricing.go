@@ -66,8 +66,14 @@ func parse(src string) (Table, error) {
 			if !valid(p) {
 				return Table{}, fmt.Errorf("[%s.%q]: prices must be finite and >= 0", k, model)
 			}
+			if p.Input <= 0 && p.Output <= 0 {
+				return Table{}, fmt.Errorf("[%s.%q]: needs a positive input or output price (typo in a key?)", k, model)
+			}
 		}
 		t.Prices[k] = m
+	}
+	if un := md.Undecoded(); len(un) > 0 {
+		return Table{}, fmt.Errorf("unknown key %q in the price table (expected input, output, cache_read, cache_write)", un[0].String())
 	}
 	return t, nil
 }
@@ -135,6 +141,7 @@ func (t Table) Cost(provider, model string, u Usage) (usd float64, known bool) {
 	if !ok {
 		return 0, false
 	}
+	u = Usage{max(0, u.In), max(0, u.Out), max(0, u.CacheRead), max(0, u.CacheWrite)}
 	cr, cw := p.CacheRead, p.CacheWrite
 	if cr == 0 {
 		cr = p.Input

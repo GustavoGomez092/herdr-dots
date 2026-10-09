@@ -1,6 +1,7 @@
 # Herdr Dots price table: USD per 1 million tokens. Prices change; this table
 # is data, not code. Override any entry in CONFIG_DIR/prices.toml (same shape).
-# cache_read / cache_write fall back to the input price when absent.
+# cache_read / cache_write fall back to the input price when absent or 0
+# (0 means "use the input price", not "free").
 as_of = "2026-10-08"
 
 # Anthropic: claude-api skill model table (cached 2026-09-25). cache_write is

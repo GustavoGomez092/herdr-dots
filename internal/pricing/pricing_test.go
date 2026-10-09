@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +85,52 @@ func TestLoadMissingAndMalformed(t *testing.T) {
 	}
 	if _, ok := tb.Lookup("anthropic", "claude-opus-5-5"); !ok {
 		t.Fatal("a bad override keeps the embedded table")
+	}
+}
+
+func loadSrc(t *testing.T, src string) (Table, error) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "prices.toml")
+	if err := os.WriteFile(p, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return Load(p)
+}
+
+func TestEmptyOverrideEntryIsRejected(t *testing.T) {
+	tb, err := loadSrc(t, "[openai.\"gpt-7\"]\n")
+	if err == nil || !strings.Contains(err.Error(), "gpt-7") {
+		t.Fatalf("want an error naming gpt-7, got %v", err)
+	}
+	if _, ok := tb.Lookup("openai", "gpt-7"); ok {
+		t.Fatal("an empty entry must not become a known $0 price")
+	}
+	if _, ok := tb.Lookup("anthropic", "claude-opus-5-5"); !ok {
+		t.Fatal("embedded table must survive")
+	}
+}
+
+func TestTypoedKeyIsRejected(t *testing.T) {
+	_, err := loadSrc(t, "[openai.\"gpt-7\"]\ninptu = 2\noutput = 6\n")
+	if err == nil || !strings.Contains(err.Error(), "gpt-7") || !strings.Contains(err.Error(), "inptu") {
+		t.Fatalf("want an error naming gpt-7 and inptu, got %v", err)
+	}
+}
+
+func TestValidOverrideStillLoads(t *testing.T) {
+	tb, err := loadSrc(t, "[openai.\"gpt-7\"]\ninput = 2\noutput = 6\ncache_read = 0.2\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := tb.Lookup("openai", "gpt-7"); !ok || p.Input != 2 || p.CacheRead != 0.2 {
+		t.Fatalf("%+v %v", p, ok)
+	}
+}
+
+func TestNegativeUsageNeverMakesCostNegative(t *testing.T) {
+	usd, ok := Default().Cost("anthropic", "claude-opus-5-5", Usage{In: -1000, Out: -5, CacheRead: -1, CacheWrite: -1})
+	if !ok || usd != 0 {
+		t.Fatalf("cost = %v %v, want 0", usd, ok)
 	}
 }
 
