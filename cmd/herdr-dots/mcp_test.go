@@ -194,7 +194,7 @@ func TestServeMCPAsksThePanesEngine(t *testing.T) {
 func TestEngineEnvSetsThePluginDirs(t *testing.T) {
 	p := paths.New("/cfg", "/state", "/run/herdr.sock")
 	env := engineEnv([]string{"PATH=/bin", "HERDR_PLUGIN_CONFIG_DIR=/old", "HERDR_PANE_ID=w1:p1"}, p)
-	for _, want := range []string{"PATH=/bin", "HERDR_PANE_ID=w1:p1", "HERDR_PLUGIN_CONFIG_DIR=/cfg", "HERDR_PLUGIN_STATE_DIR=/state", "HERDR_SOCKET_PATH=/run/herdr.sock"} {
+	for _, want := range []string{"PATH=/bin", "HERDR_PLUGIN_CONFIG_DIR=/cfg", "HERDR_PLUGIN_STATE_DIR=/state", "HERDR_SOCKET_PATH=/run/herdr.sock"} {
 		if !slices.Contains(env, want) {
 			t.Errorf("missing %s in %v", want, env)
 		}

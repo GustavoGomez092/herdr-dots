@@ -83,17 +83,39 @@ func ensureEngine(p paths.Paths) error {
 // plugin dirs and Herdr socket taken from p. The MCP server runs under the
 // agent CLI, whose environment has no HERDR_PLUGIN_* variables, and the
 // engine reads them (paths.FromEnv).
+//
+// The engine serves every pane, so it drops the starting pane's id and the
+// Claude Code session markers (CLAUDECODE, CLAUDE_CODE_*) of the agent whose
+// MCP server started it. It keeps the CLAUDE_CODE_* settings that choose a
+// provider or carry auth, which claude-cli dots need (backend.CleanEnv keeps
+// them too).
+//
+// An engine first started by Codex's MCP launch gets Codex's minimal
+// environment (only the variables Codex passes to MCP servers), so API keys
+// set only in the shell environment may be missing for that engine's whole
+// life; keys in credentials.toml are unaffected.
 func engineEnv(env []string, p paths.Paths) []string {
 	out := make([]string, 0, len(env)+3)
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
-		switch k {
-		case "HERDR_PLUGIN_CONFIG_DIR", "HERDR_PLUGIN_STATE_DIR", "HERDR_SOCKET_PATH":
+		switch {
+		case k == "HERDR_PLUGIN_CONFIG_DIR", k == "HERDR_PLUGIN_STATE_DIR", k == "HERDR_SOCKET_PATH",
+			k == "HERDR_PANE_ID", k == "CLAUDECODE":
+			continue
+		case strings.HasPrefix(k, "CLAUDE_CODE_") && !claudeProviderSetting(k):
 			continue
 		}
 		out = append(out, kv)
 	}
 	return append(out, "HERDR_PLUGIN_CONFIG_DIR="+p.ConfigDir, "HERDR_PLUGIN_STATE_DIR="+p.StateDir, "HERDR_SOCKET_PATH="+p.SocketPath)
+}
+
+// claudeProviderSetting reports a CLAUDE_CODE_* variable that picks the
+// model provider or carries auth (CLAUDE_CODE_USE_BEDROCK,
+// CLAUDE_CODE_SKIP_VERTEX_AUTH, CLAUDE_CODE_OAUTH_TOKEN, client certs).
+func claudeProviderSetting(k string) bool {
+	return strings.HasPrefix(k, "CLAUDE_CODE_USE_") || strings.HasPrefix(k, "CLAUDE_CODE_SKIP_") ||
+		strings.HasPrefix(k, "CLAUDE_CODE_CLIENT_") || k == "CLAUDE_CODE_OAUTH_TOKEN"
 }
 
 func waitForSocket(path string, d time.Duration) error {
