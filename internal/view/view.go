@@ -132,6 +132,7 @@ type LibraryDot struct {
 	Rel         string   `json:"rel,omitempty"`          // project dots: the file from the repository root (for display)
 	TrustedAt   string   `json:"trusted_at,omitempty"`   // project dots: where trust was given when it was another checkout ("~"-abbreviated); "" = here
 	Root        string   `json:"root,omitempty"`         // project dots: the checkout this entry is from; a project dot is (Root, Slug) (ruling P9-R13)
+	Purpose     string   `json:"purpose,omitempty"`      // project dots: the purpose of the trusted copy that runs; "" while untrusted
 }
 
 type Invalid struct {

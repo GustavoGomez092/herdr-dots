@@ -27,10 +27,14 @@ import (
 const Rows = 50
 
 type Deps struct {
-	History  *history.Store
-	Memory   *memory.Store // nil: memory off
-	Dot      view.LibraryDot
-	Purpose  string
+	History *history.Store
+	Memory  *memory.Store // nil: memory off
+	Dot     view.LibraryDot
+	Purpose string
+	// Changed: a project dot whose file changed since it was trusted. Purpose
+	// is then the trusted copy (what runs); the profile says so and T asks
+	// the parent for the trust preview of the file (TrustMsg).
+	Changed  bool
 	Now      func() time.Time                    // nil = time.Now
 	CardBody func(cardKey string) (string, bool) // full text of a card still in this session's queue; may be nil
 }
@@ -40,7 +44,11 @@ type (
 	BackMsg   struct{}
 	ExportMsg struct{ Slug string }
 	MemoryMsg struct{ Slug, Name string }
+	TrustMsg  struct{ Dot view.LibraryDot } // review the changed file of this project dot (Deps.Changed)
 )
+
+// changedNote is what a changed project dot's profile says.
+const changedNote = "the file changed since it was trusted; this is the trusted copy"
 
 type (
 	profileMsg struct {
@@ -328,6 +336,11 @@ func (m Model) keys(k tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		slug, name := m.d.Dot.Slug, m.d.Dot.Name
 		return m, func() tea.Msg { return MemoryMsg{Slug: slug, Name: name} }
+	case "T":
+		if m.d.Changed {
+			d := m.d.Dot
+			return m, func() tea.Msg { return TrustMsg{Dot: d} }
+		}
 	}
 	return m, nil
 }
@@ -536,6 +549,9 @@ func (m Model) detailView() string {
 func (m Model) parts(compact bool) (head, tail []string) {
 	w := m.w()
 	head = m.heading()
+	if m.d.Changed { // even when compact: what runs isn't what the file says
+		head = append(head, wrapped(changedNote, w-2, errStyle)...)
+	}
 	if p := style.Wrap(m.d.Purpose, w-10); strings.TrimSpace(m.d.Purpose) != "" && !compact {
 		line := "Purpose: " + p[0]
 		if len(p) > 1 {
@@ -591,7 +607,11 @@ func (m Model) parts(compact bool) (head, tail []string) {
 	if !compact {
 		tail = append(tail, "")
 	}
-	tail = append(tail, wrapped("enter details"+sep()+"M memory"+sep()+"x export"+sep()+"tab 7d/30d"+sep()+"esc back", w-2, dim)...)
+	keys := "enter details" + sep() + "M memory" + sep() + "x export" + sep() + "tab 7d/30d" + sep() + "esc back"
+	if m.d.Changed {
+		keys = "T review the file" + sep() + keys
+	}
+	tail = append(tail, wrapped(keys, w-2, dim)...)
 	return head, tail
 }
 

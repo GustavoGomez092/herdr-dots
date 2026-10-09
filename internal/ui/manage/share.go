@@ -17,6 +17,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
+	"herdr-dots/internal/projectdots"
 	"herdr-dots/internal/ui/profile"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/version"
@@ -30,7 +31,8 @@ type profileOpenMsg struct {
 	err  error
 }
 
-// openProfile loads the dot's purpose (from its file) off the UI goroutine.
+// openProfile loads the dot's purpose (from its file, or for a trusted
+// project dot from the snapshot's trusted copy) off the UI goroutine.
 // The card bodies the profile may show are copied from the snapshot now, so
 // its lookup is a map read: no engine call, no I/O in View.
 func (m Model) openProfile(d view.LibraryDot) tea.Cmd {
@@ -46,6 +48,15 @@ func (m Model) openProfile(d view.LibraryDot) tea.Cmd {
 	return func() tea.Msg {
 		var full dots.Dot
 		var err error
+		body := func(key string) (string, bool) { b, ok := cards[key]; return b, ok }
+		if d.Origin == dots.OriginProject && d.Trusted {
+			// What runs is the trusted copy the engine holds (the snapshot
+			// carries its purpose), not the file as it is now: an edit since
+			// is shown as such, with the trust preview one key away.
+			data, rerr := readBounded(d.Path, dots.MaxProjectFileBytes)
+			changed := rerr != nil || projectdots.Hex(projectdots.Sum(data)) != d.SHA256
+			return profileOpenMsg{deps: profile.Deps{History: hs, Memory: st, Dot: d, Purpose: d.Purpose, Changed: changed, CardBody: body}}
+		}
 		if d.Origin == dots.OriginProject {
 			var data []byte
 			if data, err = readBounded(d.Path, dots.MaxProjectFileBytes); err == nil {
@@ -60,7 +71,6 @@ func (m Model) openProfile(d view.LibraryDot) tea.Cmd {
 		if err != nil {
 			return profileOpenMsg{err: err}
 		}
-		body := func(key string) (string, bool) { b, ok := cards[key]; return b, ok }
 		return profileOpenMsg{deps: profile.Deps{History: hs, Memory: st, Dot: d, Purpose: full.Purpose, CardBody: body}}
 	}
 }
