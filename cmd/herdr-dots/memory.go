@@ -415,17 +415,23 @@ func (c *memCLI) forgetAll(args []string) error {
 		}
 	}
 	if !f.yes {
-		name := f.dot
-		if sc == memory.ScopeProject {
-			name = pr.Name
-			if name == "" {
-				name = pr.ID
-			}
+		// The prompt names the project (name and id); the developer types
+		// the project's name for project scope, the dot for dot and global.
+		pname := strings.TrimSpace(textutil.SanitizeModelText(pr.Name))
+		if pname == "" {
+			pname = pr.ID
+		}
+		name, what := f.dot, fmt.Sprintf("dot %s on every project", f.dot)
+		switch sc {
+		case memory.ScopeProject:
+			name, what = pname, fmt.Sprintf("project %s (%s)", pname, pr.ID)
+		case memory.ScopeDot:
+			what = fmt.Sprintf("dot %s on project %s (%s)", f.dot, pname, pr.ID)
 		}
 		if !c.interactive {
 			return errors.New("forget-all: refusing without --yes (not a terminal)")
 		}
-		if !c.confirm(fmt.Sprintf("Forget ALL %s memory for %s?", sc, name), name) {
+		if !c.confirm(fmt.Sprintf("Forget ALL %s memory for %s?", sc, what), name) {
 			return errors.New("forget-all: not confirmed")
 		}
 	}

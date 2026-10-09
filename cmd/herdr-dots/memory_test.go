@@ -381,6 +381,30 @@ func TestMemoryImportFailsBeforeAnyWriteWithoutAProject(t *testing.T) {
 	}
 }
 
+// Final review minor 11: the dot-scope forget-all prompt names the project.
+func TestMemoryForgetAllDotScopePromptNamesTheProject(t *testing.T) {
+	c, out, _ := newMemCLI(t)
+	mustRun(t, c, "add", "--scope", "dot", "--dot", "security", "first fact here")
+	c.interactive, c.in = true, strings.NewReader("nope\n")
+	if err := c.run([]string{"forget-all", "--scope", "dot", "--dot", "security"}); err == nil {
+		t.Fatal("a wrong answer must not forget")
+	}
+	prompt := out.String()
+	for _, want := range []string{"security", "repo", testPID} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt must name %q: %q", want, prompt)
+		}
+	}
+	if es, _ := c.store.List(testPID, memory.Filter{Scope: memory.ScopeDot, Dot: "security"}); len(es) != 1 {
+		t.Fatalf("entries %+v", es)
+	}
+	c.in = strings.NewReader("security\n")
+	mustRun(t, c, "forget-all", "--scope", "dot", "--dot", "security")
+	if es, _ := c.store.List(testPID, memory.Filter{Scope: memory.ScopeDot, Dot: "security"}); len(es) != 0 {
+		t.Fatalf("typing the dot confirms: %+v", es)
+	}
+}
+
 // rewriteOnRead simulates a model rewriting the proposal while the developer
 // reads the approve prompt, then answers.
 type rewriteOnRead struct {
