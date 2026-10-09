@@ -161,7 +161,38 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		}
 		params.Tools = append(params.Tools, anthropic.BetaToolUnionParam{OfTool: &tp})
 	}
+	if r.Web && r.Pass == backend.PassResearch && !r.Write { // never mixed with write tools
+		params.Tools = append(params.Tools,
+			anthropic.BetaToolUnionParam{OfWebSearchTool20260209: &anthropic.BetaWebSearchTool20260209Param{MaxUses: anthropic.Int(webMaxUses)}},
+			anthropic.BetaToolUnionParam{OfWebFetchTool20260209: &anthropic.BetaWebFetchTool20260209Param{MaxUses: anthropic.Int(webMaxUses)}},
+		)
+		// Search results come back with citations, which structured outputs
+		// reject: the JSON contract in the system prompt and ParseReply cover
+		// the reply instead. The dynamic-filtering web tools run their own
+		// code execution, so code_execution is never declared.
+		params.OutputConfig.Format = anthropic.BetaJSONOutputFormatParam{}
+	}
 	prices := b.o.PriceTable()
+	// send makes one call and resumes a turn the server paused while running
+	// web tools (stop_reason "pause_turn"): the paused assistant turn goes
+	// back as is, with no extra user message. Usage and searches are summed.
+	send := func(ctx context.Context) (*anthropic.BetaMessage, pricing.Usage, int, error) {
+		var u pricing.Usage
+		searches := 0
+		for n := 0; ; n++ {
+			resp, err := c.Beta.Messages.New(ctx, params)
+			if err != nil {
+				return nil, u, searches, err
+			}
+			params.Messages = append(params.Messages, resp.ToParam())
+			u = u.Add(pricing.Usage{In: int(resp.Usage.InputTokens), Out: int(resp.Usage.OutputTokens),
+				CacheRead: int(resp.Usage.CacheReadInputTokens), CacheWrite: int(resp.Usage.CacheCreationInputTokens)})
+			searches += int(resp.Usage.ServerToolUse.WebSearchRequests)
+			if resp.StopReason != anthropic.BetaStopReasonPauseTurn || n == maxPauses {
+				return resp, u, searches, nil
+			}
+		}
+	}
 	turn := func(ctx context.Context, results []toolloop.Result, final bool) (toolloop.Reply, error) {
 		if len(results) > 0 {
 			var blocks []anthropic.BetaContentBlockParamUnion
@@ -173,25 +204,25 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 			}
 			params.Messages = append(params.Messages, anthropic.NewBetaUserMessage(blocks...))
 		}
-		if final && len(params.Tools) > 0 {
-			// Tools stay declared (the history holds tool_use blocks); "none"
-			// is allowed on every model, unlike forced any/tool.
+		if final && len(tools) > 0 {
+			// Repo tools stay declared (the history holds tool_use blocks);
+			// "none" is allowed on every model, unlike forced any/tool. With
+			// only web tools there is no tool budget to end, so a web-only
+			// first (final) turn keeps tool_choice unset.
 			params.ToolChoice = anthropic.BetaToolChoiceUnionParam{OfNone: &anthropic.BetaToolChoiceNoneParam{}}
 		}
-		resp, err := c.Beta.Messages.New(ctx, params)
+		resp, u, searches, err := send(ctx)
 		if err != nil {
 			return toolloop.Reply{}, mapErr(err, key, model)
-		}
-		params.Messages = append(params.Messages, resp.ToParam())
-		u := pricing.Usage{
-			In: int(resp.Usage.InputTokens), Out: int(resp.Usage.OutputTokens),
-			CacheRead: int(resp.Usage.CacheReadInputTokens), CacheWrite: int(resp.Usage.CacheCreationInputTokens),
 		}
 		served := string(resp.Model)
 		if served == "" {
 			served = model
 		}
 		usd, known := prices.CostServed(Provider, served, model, u)
+		if known {
+			usd += float64(searches) * WebSearchUSD
+		}
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		if resp.StopReason == anthropic.BetaStopReasonRefusal {
 			return reply, backend.Refused(string(resp.StopDetails.Category))

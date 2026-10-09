@@ -139,6 +139,9 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 			Name: t.Name, Description: openai.String(t.Description), Parameters: strictSchema(t.Schema), Strict: openai.Bool(true),
 		}})
 	}
+	if r.Web && r.Pass == backend.PassResearch && !r.Write { // never mixed with write tools
+		params.Tools = append(params.Tools, responses.ToolUnionParam{OfWebSearch: &responses.WebSearchToolParam{Type: responses.WebSearchToolTypeWebSearch}})
+	}
 	prices := b.o.PriceTable()
 	turn := func(ctx context.Context, results []toolloop.Result, final bool) (toolloop.Reply, error) {
 		for _, res := range results {
@@ -153,7 +156,7 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		if final && len(results) > 0 {
 			input = append(input, responses.ResponseInputItemParamOfMessage(toolloop.FinalNudge, responses.EasyInputMessageRoleUser))
 		}
-		if final && len(params.Tools) > 0 {
+		if final && len(tools) > 0 { // repo tools only: a web-only turn keeps its tool
 			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsNone)}
 		}
 		params.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: input}
@@ -170,8 +173,13 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		usd, known := prices.CostServed(Provider, served, r.Model, u)
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		var refusal string
+		searches := 0
 		for _, it := range resp.Output {
 			switch v := it.AsAny().(type) {
+			case responses.ResponseFunctionWebSearch:
+				p := v.ToParam()
+				input = append(input, responses.ResponseInputItemUnionParam{OfWebSearchCall: &p})
+				searches++
 			case responses.ResponseReasoningItem:
 				p := v.ToParam()
 				input = append(input, responses.ResponseInputItemUnionParam{OfReasoning: &p})
@@ -191,6 +199,9 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 					}
 				}
 			}
+		}
+		if known {
+			reply.CostUSD += float64(searches) * WebSearchCallUSD
 		}
 		if refusal != "" {
 			return reply, backend.Refused(clip(refusal, 80))
