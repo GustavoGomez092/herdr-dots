@@ -53,9 +53,11 @@ func (c CodexCLI) BuildCmd(r Request) Cmd {
 	if r.Model != "" {
 		args = append(args, "-m", r.Model)
 	}
+	env := CleanEnv(c.environ())
 	args = append(args, dots.SafeArgs(c.Kind(), r.Args)...) // never override --sandbox
+	args = append(args, codexMCPOff(env)...)                // a dot never starts the Dots MCP server (Phase 5)
 	args = append(args, "-")
-	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: CleanEnv(c.environ()), Stdin: SystemPrompt(r) + "\n\n" + UserPrompt(r)}
+	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: env, Stdin: SystemPrompt(r) + "\n\n" + UserPrompt(r)}
 }
 
 func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
