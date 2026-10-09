@@ -15,6 +15,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
@@ -139,6 +140,9 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 			Name: t.Name, Description: openai.String(t.Description), Parameters: strictSchema(t.Schema), Strict: openai.Bool(true),
 		}})
 	}
+	webOn := r.Web && r.Pass == backend.PassResearch && !r.Write // never mixed with write tools
+	repoTools := params.Tools
+	webUsed := 0 // paid web search calls over the whole run, all turns (P8-R6)
 	prices := b.o.PriceTable()
 	turn := func(ctx context.Context, results []toolloop.Result, final bool) (toolloop.Reply, error) {
 		for _, res := range results {
@@ -153,8 +157,17 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		if final && len(results) > 0 {
 			input = append(input, responses.ResponseInputItemParamOfMessage(toolloop.FinalNudge, responses.EasyInputMessageRoleUser))
 		}
-		if final && len(params.Tools) > 0 {
+		if final && len(tools) > 0 { // repo tools only: a web-only turn keeps its tool
 			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsNone)}
+		}
+		// Each turn gets only what is left of the web budget. max_tool_calls
+		// covers built-in tools only, so repo function tools are unaffected;
+		// at zero the web tool is dropped.
+		params.Tools, params.MaxToolCalls = repoTools, param.Opt[int64]{}
+		if left := webMaxCalls - webUsed; webOn && left > 0 {
+			params.Tools = append(append([]responses.ToolUnionParam(nil), repoTools...),
+				responses.ToolUnionParam{OfWebSearch: &responses.WebSearchToolParam{Type: responses.WebSearchToolTypeWebSearch}})
+			params.MaxToolCalls = openai.Int(int64(left))
 		}
 		params.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: input}
 		resp, err := c.Responses.New(ctx, params)
@@ -170,8 +183,13 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		usd, known := prices.CostServed(Provider, served, r.Model, u)
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		var refusal string
+		searches := 0
 		for _, it := range resp.Output {
 			switch v := it.AsAny().(type) {
+			case responses.ResponseFunctionWebSearch:
+				p := v.ToParam()
+				input = append(input, responses.ResponseInputItemUnionParam{OfWebSearchCall: &p})
+				searches++
 			case responses.ResponseReasoningItem:
 				p := v.ToParam()
 				input = append(input, responses.ResponseInputItemUnionParam{OfReasoning: &p})
@@ -191,6 +209,10 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 					}
 				}
 			}
+		}
+		webUsed += searches
+		if known {
+			reply.CostUSD += float64(searches) * WebSearchCallUSD
 		}
 		if refusal != "" {
 			return reply, backend.Refused(clip(refusal, 80))
