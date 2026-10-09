@@ -3,12 +3,12 @@ package backend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
-	"syscall"
 
 	"herdr-dots/internal/dots"
+	"herdr-dots/internal/platform"
 )
 
 type Cmd struct {
@@ -17,49 +17,74 @@ type Cmd struct {
 	Dir   string
 	Env   []string
 	Stdin string
+	// Cleanup removes files BuildCmd wrote for this command (a long system
+	// prompt); nil when there are none. Callers run it through Close.
+	Cleanup func()
+}
+
+// Close runs Cleanup when it is set; safe on any Cmd.
+func (c Cmd) Close() {
+	if c.Cleanup != nil {
+		c.Cleanup()
+	}
 }
 
 type Runner interface {
 	Run(ctx context.Context, c Cmd) (stdout, stderr []byte, err error)
 }
 
-// ExecRunner runs commands in their own process group so a timeout kills the
-// CLI and everything it spawned.
+// ExecRunner runs commands as a process tree (a process group on Unix, a Job
+// Object on Windows) so a timeout kills the CLI and everything it spawned.
+// On Windows a .cmd/.bat shim runs through cmd.exe with every argument
+// quoted; an argument cmd.exe can't carry, or a line over its limit, fails
+// before anything starts (platform.ErrUnsafeBatchArg, platform.ErrCmdTooLong).
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, c Cmd) ([]byte, []byte, error) {
-	cmd := exec.Command(c.Name, c.Args...)
+	cmd, err := platform.Command(c.Name, c.Args)
+	if err != nil {
+		return nil, nil, err
+	}
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
 	cmd.Stdin = strings.NewReader(c.Stdin)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
+	tree, err := platform.StartTree(cmd)
+	if err != nil {
 		return nil, nil, err
 	}
+	defer tree.Close()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
 		return out.Bytes(), errb.Bytes(), err
 	case <-ctx.Done():
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = tree.Kill()
 		<-done
 		return out.Bytes(), errb.Bytes(), ctx.Err()
 	}
+}
+
+// Preflight reports whether err stopped a command before it started (a
+// Windows .cmd shim argument or length problem); its message is the fix.
+func Preflight(err error) bool {
+	return errors.Is(err, platform.ErrCmdTooLong) || errors.Is(err, platform.ErrUnsafeBatchArg)
 }
 
 // CleanEnv drops variables that would make a dot's CLI talk to Herdr or think
 // it runs nested inside another Claude Code session. Drops HERDR_*, CLAUDECODE,
 // CLAUDE_CODE_ENTRYPOINT, and CLAUDE_CODE_CHILD_SESSION, but preserves other
 // CLAUDE_* variables that carry auth and config (CLAUDE_CONFIG_DIR, etc.).
+// Names compare in platform.EnvKey form, so case-insensitively on Windows.
 func CleanEnv(env []string) []string {
 	// Non-nil on purpose: a nil exec.Cmd.Env inherits the full parent environment.
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
+		name, _, _ := strings.Cut(kv, "=")
+		k := platform.EnvKey(name)
 		if strings.HasPrefix(k, "HERDR_") || k == "CLAUDECODE" || k == "CLAUDE_CODE_ENTRYPOINT" || k == "CLAUDE_CODE_CHILD_SESSION" {
 			continue
 		}
