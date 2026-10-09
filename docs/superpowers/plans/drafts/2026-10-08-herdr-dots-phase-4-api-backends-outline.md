@@ -40,7 +40,8 @@ internal/credentials/credentials.go     Source interface, File store, Lookup, Re
 internal/pricing/pricing.go             Table, Default, Load, Cost
 internal/pricing/prices.toml            embedded dated price table
 internal/backend/backend.go             + kinds, Request/Result fields, ModelLister, Options
-internal/backend/registry.go            + NewWith
+internal/backend/registry.go            + Factory, Register, NewWith
+internal/backend/all/all.go             blank-imports the four adapter packages
 internal/backend/schema.go              VerdictSchema
 internal/backend/httpx/httpx.go         PostJSON with retry/backoff/redaction
 internal/backend/toolloop/tools.go      Tool, RepoTools, Jail, deny-list
@@ -95,15 +96,15 @@ README.md                               backends, keys, privacy per provider, co
 **Files:** Modify `internal/backend/backend.go`, `registry.go`; create `internal/backend/schema.go`, `internal/backend/httpx/httpx.go`. Test: `internal/backend/registry_test.go`, `schema_test.go`, `httpx/httpx_test.go`.
 **Interfaces:**
 - Consumes: v1 `Backend`, `Request`, `Result`, `New`; Tasks 2–3.
-- Produces: kind consts (`KindClaudeCLI` … `KindOllama`); `Request.Effort, MaxTokens, BaseURL, ContextWindow, Fallbacks`; `Result.CacheReadTokens, CacheWriteTokens int; CostKnown bool; Model string; ToolCalls int; Duration time.Duration`; `type ModelLister interface{ Models(ctx context.Context) ([]string, error) }`; `type Options struct{ Runner Runner; Creds credentials.Source; HTTP *http.Client; Prices pricing.Table; Provider config.ProviderConfig; Deny []string }`; `NewWith(kind string, o Options) (Backend, error)`; `VerdictSchema() map[string]any`; `httpx.PostJSON(ctx context.Context, c *http.Client, url string, headers map[string]string, body, out any, retries int) (status int, err error)` and `httpx.GetJSON(...)` (retry on 408/409/429/5xx with backoff and `Retry-After`; errors passed through `credentials.Redact`).
-**Tests:** `New("claude-cli", r)` still works; `NewWith` for each kind returns the right type; an unknown kind errors; the schema validates a sample verdict with and without `remember`; httpx retries 429 then succeeds, honors `Retry-After`, stops at the context deadline, and redacts a key echoed in an error body.
+- Produces: kind consts (`KindClaudeCLI` … `KindOllama`); `Request.Effort, MaxTokens, BaseURL, ContextWindow, Fallbacks`; `Result.CacheReadTokens, CacheWriteTokens int; CostKnown bool; Model string; ToolCalls int; Duration time.Duration`; `type ModelLister interface{ Models(ctx context.Context) ([]string, error) }`; `type Options struct{ Runner Runner; Creds credentials.Source; HTTP *http.Client; Prices pricing.Table; Provider config.ProviderConfig; Deny []string }`; `type Factory func(o Options) (Backend, error)`; `Register(kind string, f Factory)`; `NewWith(kind string, o Options) (Backend, error)` (adapters register in `init()`; `backend` never imports them); `VerdictSchema() map[string]any`; `httpx.PostJSON(ctx context.Context, c *http.Client, url string, headers map[string]string, body, out any, retries int) (status int, err error)` and `httpx.GetJSON(ctx context.Context, c *http.Client, url string, headers map[string]string, out any, retries int) (status int, err error)` (both retry on 408/409/429/5xx with backoff and `Retry-After`; errors passed through `credentials.Redact`).
+**Tests:** `New("claude-cli", r)` still works; `NewWith` returns a registered fake factory's backend; an unknown kind errors; double `Register` of one kind panics (programming error); a test in `internal/backend/all` asserts all six kinds are registered; the schema validates a sample verdict with and without `remember`; httpx retries 429 then succeeds, honors `Retry-After`, stops at the context deadline, and redacts a key echoed in an error body.
 
 ### Task 5: Anthropic adapter
 
 **Files:** Create `internal/backend/anthropicapi/anthropic.go`. Test: `internal/backend/anthropicapi/anthropic_test.go`, `anthropic_live_test.go` (`//go:build live`).
 **Interfaces:**
 - Consumes: `anthropic-sdk-go` (`anthropic.NewClient`, `option.WithAPIKey`, `option.WithBaseURL` for tests, `option.WithHTTPClient`, `client.Messages.New`, `client.Beta.Messages.New` for fallbacks, `client.Models.Get` (exact names per V1)); `toolloop.Driver`; `pricing`; `credentials`.
-- Produces: `type Backend struct{ …unexported… }`; `New(o backend.Options) *Backend`; methods `Kind() string` (`"anthropic-api"`), `Check(ctx) error`, `Run(ctx, backend.Request) (backend.Result, error)`, `Models(ctx) ([]string, error)`; `const DefaultModel = "claude-opus-5-5"`.
+- Produces: `type Backend struct{ …unexported… }`; `New(o backend.Options) *Backend`; methods `Kind() string` (`"anthropic-api"`), `Check(ctx) error`, `Run(ctx, backend.Request) (backend.Result, error)`, `Models(ctx) ([]string, error)`; `const DefaultModel = "claude-opus-5-5"`; `init()` calls `backend.Register(backend.KindAnthropicAPI, …)`. (Tasks 6 and 7 register their kinds the same way.)
 **Tests (against `httptest.Server` via `option.WithBaseURL`):** the request has no `temperature`/`thinking`/prefill; `output_config.effort` only when set; the JSON-schema output format is present; the system block has `cache_control`; the memory block is a separate cached user block; the fallbacks beta header and `fallbacks: "default"` are present unless `Fallbacks == "off"`; a tool-use round trip through the driver; `stop_reason: "refusal"` → error containing the category; usage → cost via the price table; 401 → "key rejected"; 404 on `Check` → "model not available".
 
 ### Task 6: OpenAI adapter
@@ -116,7 +117,7 @@ README.md                               backends, keys, privacy per provider, co
 
 ### Task 7: OpenRouter and Ollama adapters
 
-**Files:** Create `internal/backend/openrouter/openrouter.go`, `internal/backend/ollama/ollama.go`. Test: `openrouter_test.go`, `ollama_test.go`, and live variants.
+**Files:** Create `internal/backend/openrouter/openrouter.go`, `internal/backend/ollama/ollama.go`, `internal/backend/all/all.go` (blank-imports `anthropicapi`, `openaiapi`, `openrouter`, `ollama`; test `all_test.go`). Test: `openrouter_test.go`, `ollama_test.go`, and live variants.
 **Interfaces:**
 - Consumes: `httpx`, driver, credentials (OpenRouter), pricing (unused for OpenRouter because `usage.cost` is authoritative).
 - Produces: `openrouter.New(o backend.Options) *Backend` (`Kind()` = `"openrouter"`); `ollama.New(o backend.Options) *Backend` (`Kind()` = `"ollama"`); both implement `Check`, `Run`, `Models`; `ollama.EstimateTokens(s string) int`; `ollama.FitPrompt(r backend.Request, window int) (backend.Request, bool)`.

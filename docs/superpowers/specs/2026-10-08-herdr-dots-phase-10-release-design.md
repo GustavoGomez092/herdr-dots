@@ -92,7 +92,7 @@ No new user-facing data. Version fields everywhere (F7). Migration markers: `CON
 
 ### 6.1 Install (marketplace user without Go)
 
-`herdr plugin install owner/herdr-outriders` → Herdr runs `[[build]]` → `scripts/build.sh` reads `internal/version/VERSION` and `release/SHA256SUMS` → downloads `herdr-outriders_<ver>_<os>_<arch>.tar.gz` (or `.zip` on Windows) from the GitHub release → verifies SHA-256 → extracts to `bin/` → done. Network failure or checksum mismatch → falls back to `go build` if available, else fails with the reason and the manual steps.
+`herdr plugin install owner/herdr-outriders` → Herdr runs `[[build]]` → `scripts/build.sh` reads `internal/version/VERSION` and `release/SHA256SUMS` → downloads `herdr-outriders_<ver>_<os>_<arch>.tar.gz` (or `.zip` on Windows) from the GitHub release → verifies SHA-256 → extracts to `bin/`. Network failure or checksum mismatch → falls back to `go build` if available, else fails with the reason and the manual steps.
 
 ### 6.2 Upgrade from `herdr-dots`
 

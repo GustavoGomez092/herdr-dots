@@ -73,7 +73,8 @@ Sources: Anthropic facts come from the bundled `claude-api` skill (cached 2026-0
 
 ```
 internal/backend/backend.go        Backend interface (unchanged), Request/Result additions, kinds
-internal/backend/registry.go       NewWith(kind, Options); New(kind, r) kept as a wrapper
+internal/backend/registry.go       Register(kind, Factory), NewWith(kind, Options); New(kind, r) kept as a wrapper
+internal/backend/all/all.go        blank-imports every adapter package so their init() registers them
 internal/backend/schema.go         VerdictSchema() (JSON schema shared by all API backends)
 internal/backend/toolloop/         Tool, RepoTools(root, Limits), Jail, Driver
 internal/backend/anthropicapi/     Messages API adapter (SDK)
@@ -119,7 +120,7 @@ Default deny-list: `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`,
 |---|---|
 | `backend.Request` | Add `Effort string`, `MaxTokens int`, `BaseURL string`, `ContextWindow int`, `Fallbacks string` |
 | `backend.Result` | Add `CacheReadTokens, CacheWriteTokens int`, `CostKnown bool`, `Model string` (the model that actually answered, which matters with fallbacks), `ToolCalls int`, `Duration time.Duration` |
-| `backend` | Add consts `KindClaudeCLI = "claude-cli"`, `KindCodexCLI = "codex-cli"`, `KindAnthropicAPI = "anthropic-api"`, `KindOpenAIAPI = "openai-api"`, `KindOpenRouter = "openrouter"`, `KindOllama = "ollama"`; `type ModelLister interface{ Models(ctx context.Context) ([]string, error) }`; `type Options struct{ Runner Runner; Creds credentials.Source; HTTP *http.Client; Prices pricing.Table; Provider config.ProviderConfig }`; `NewWith(kind string, o Options) (Backend, error)`. `New(kind string, r Runner) (Backend, error)` stays, calling `NewWith(kind, Options{Runner: r})` (API kinds then fail `Check` with "no credentials") |
+| `backend` | Add consts `KindClaudeCLI = "claude-cli"`, `KindCodexCLI = "codex-cli"`, `KindAnthropicAPI = "anthropic-api"`, `KindOpenAIAPI = "openai-api"`, `KindOpenRouter = "openrouter"`, `KindOllama = "ollama"`; `type ModelLister interface{ Models(ctx context.Context) ([]string, error) }`; `type Options struct{ Runner Runner; Creds credentials.Source; HTTP *http.Client; Prices pricing.Table; Provider config.ProviderConfig }`; `type Factory func(o Options) (Backend, error)`; `Register(kind string, f Factory)`; `NewWith(kind string, o Options) (Backend, error)`. Adapter packages import `backend` and call `Register` in `init()`, so `backend` never imports them (no import cycle); `cmd/herdr-dots` imports `internal/backend/all`. The CLI kinds register from inside `backend`. `New(kind string, r Runner) (Backend, error)` stays, calling `NewWith(kind, Options{Runner: r})` (API kinds then fail `Check` with "no credentials") |
 | `backend.ClaudeCLI` | `Run` sets `Result.CostKnown = true` when `total_cost_usd` is present (v1 already parses it) |
 | `dots.BackendKinds` | Append the four API kinds |
 | `dots.BackendSpec` | Add `Effort string` (`""`, `low`, `medium`, `high`, `xhigh`, `max`; valid for `anthropic-api` and `openai-api`), `MaxTokens int` (0 = 4,096; ≤ 64,000), `BaseURL string` (`ollama` and `openrouter` only), `ContextWindow int` (`ollama` only; 2,048–262,144), `Fallbacks string` (`anthropic-api` only: `default` \| `off`). Validation: `Model` required for API kinds except `anthropic-api` (default `claude-opus-5-5`) |
