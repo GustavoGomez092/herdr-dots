@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/paths"
+	"herdr-dots/internal/platform/platformtest"
 )
 
 func TestKeysNeverEchoAnUnrecognisedProviderArgument(t *testing.T) {
@@ -73,9 +73,9 @@ func TestKeysSetReadsStdinWritesOwnerOnlyAndVerifies(t *testing.T) {
 	if err := keysCmd([]string{"set", "anthropic"}, k); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := os.Stat(k.store.Path)
-	if st.Mode().Perm() != 0o600 || out.String() != "stored · verified\n" || len(*verified) != 1 {
-		t.Fatalf("mode %v out %q verified %v", st.Mode().Perm(), out, *verified)
+	platformtest.AssertPrivateFile(t, k.store.Path)
+	if out.String() != "stored · verified\n" || len(*verified) != 1 {
+		t.Fatalf("out %q verified %v", out, *verified)
 	}
 	if key, _, _ := k.store.Lookup("anthropic"); key != "sk-ant-api03-PIPEDKEY00001234" {
 		t.Fatalf("stored %q", key)

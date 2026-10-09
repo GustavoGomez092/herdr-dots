@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"herdr-dots/internal/lockfile"
+	"herdr-dots/internal/platform/platformtest"
 )
 
 const pid = "g-0123456789abcdef"
@@ -283,14 +284,10 @@ func TestFilesArePrivate(t *testing.T) {
 	mustAdd(t, s, pid, dotNote("security", "a fact"))
 	mustAdd(t, s, "", Entry{Scope: ScopeGlobal, Dot: "security", Kind: KindPreference, Text: "British spelling"})
 	for _, d := range []string{s.Dir, filepath.Join(s.Dir, pid), filepath.Join(s.Dir, pid, "dots"), filepath.Join(s.Dir, GlobalID, "dots")} {
-		if st, err := os.Stat(d); err != nil || st.Mode().Perm() != 0o700 {
-			t.Errorf("%s: %v %v", d, err, st)
-		}
+		platformtest.AssertPrivateDir(t, d)
 	}
 	for _, f := range []string{filepath.Join(s.Dir, pid, "dots", "security.json"), filepath.Join(s.Dir, pid, "memory.lock"), filepath.Join(s.Dir, GlobalID, "dots", "security.json")} {
-		if st, err := os.Stat(f); err != nil || st.Mode().Perm() != 0o600 {
-			t.Errorf("%s: %v %v", f, err, st)
-		}
+		platformtest.AssertPrivateFile(t, f)
 	}
 }
 

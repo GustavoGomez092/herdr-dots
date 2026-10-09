@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"herdr-dots/internal/platform/platformtest"
 )
 
 func TestAttachmentsCRUDAndPersistence(t *testing.T) {
@@ -136,10 +138,7 @@ func TestFeedAppendRecentAndReload(t *testing.T) {
 	if len(r) != 5 || r[4].Turn != 60 || r[0].Turn != 56 {
 		t.Fatalf("recent %+v", r)
 	}
-	st, _ := os.Stat(p)
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("perm %v", st.Mode().Perm())
-	}
+	platformtest.AssertPrivateFile(t, p)
 	f2, _ := OpenFeed(p)
 	if r := f2.Recent("p1", 100); len(r) != 50 || r[49].Turn != 60 {
 		t.Fatalf("reload keeps last 50 per pane, got %d", len(r))

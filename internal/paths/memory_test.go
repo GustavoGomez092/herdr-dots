@@ -7,17 +7,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"herdr-dots/internal/platform/platformtest"
 )
 
 func TestMemoryDirIsSharedAcrossSessions(t *testing.T) {
-	p := New("/c", "/s", "/sock")
-	if p.MemoryDir() != "/s/memory" {
+	c, s := platformtest.Abs("c"), platformtest.Abs("s")
+	p := New(c, s, "/sock")
+	if p.MemoryDir() != filepath.Join(s, "memory") {
 		t.Fatalf("memory dir %q", p.MemoryDir())
 	}
 	if strings.HasPrefix(p.MemoryDir(), p.SessionDir) {
 		t.Fatal("memory must not live under the per-session dir")
 	}
-	if New("/c", "/s", "/other.sock").MemoryDir() != p.MemoryDir() {
+	if New(c, s, "/other.sock").MemoryDir() != p.MemoryDir() {
 		t.Fatal("two Herdr sessions must share one memory dir")
 	}
 }
@@ -30,17 +33,12 @@ func TestEnsureCreatesMemoryDirAndStatePointer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	st, err := os.Stat(p.MemoryDir())
-	if err != nil || st.Mode().Perm() != 0o700 {
-		t.Fatalf("memory dir: %v %v", err, st)
-	}
+	platformtest.AssertPrivateDir(t, p.MemoryDir())
 	b, err := os.ReadFile(p.StatePointerFile())
 	if err != nil || strings.TrimSpace(string(b)) != p.StateDir {
 		t.Fatalf("pointer = %q, %v", b, err)
 	}
-	if st, _ := os.Stat(p.StatePointerFile()); st.Mode().Perm() != 0o600 {
-		t.Fatalf("pointer perm %v", st.Mode().Perm())
-	}
+	platformtest.AssertPrivateFile(t, p.StatePointerFile())
 }
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -50,8 +48,9 @@ func TestDiscoverPrefersHerdrEnv(t *testing.T) {
 		t.Fatal("must not shell out when the env is set")
 		return "", nil
 	}
-	p, err := discover(env(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": "/c", "HERDR_PLUGIN_STATE_DIR": "/s"}), run)
-	if err != nil || p.ConfigDir != "/c" || p.StateDir != "/s" || p.MemoryDir() != "/s/memory" {
+	c, s := platformtest.Abs("c"), platformtest.Abs("s")
+	p, err := discover(env(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": c, "HERDR_PLUGIN_STATE_DIR": s}), run)
+	if err != nil || p.ConfigDir != c || p.StateDir != s || p.MemoryDir() != filepath.Join(s, "memory") {
 		t.Fatalf("%+v %v", p, err)
 	}
 }
@@ -128,7 +127,7 @@ func TestDiscoverRejectsRelativeStateDir(t *testing.T) {
 	run := func(context.Context, string, ...string) (string, error) {
 		return "", nil
 	}
-	_, err := discover(env(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": "/c", "HERDR_PLUGIN_STATE_DIR": "relative/state"}), run)
+	_, err := discover(env(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": platformtest.Abs("c"), "HERDR_PLUGIN_STATE_DIR": "relative/state"}), run)
 	if err == nil || !strings.Contains(err.Error(), "not absolute") || !strings.Contains(err.Error(), "HERDR_PLUGIN_STATE_DIR") {
 		t.Fatalf("want error about HERDR_PLUGIN_STATE_DIR not absolute, got %v", err)
 	}

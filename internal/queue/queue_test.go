@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"herdr-dots/internal/platform/platformtest"
 )
 
 func open(t *testing.T) (*Store, string) {
@@ -22,10 +24,7 @@ func TestAddAssignsIDAndPersists(t *testing.T) {
 	if err != nil || c.ID == "" || c.Status != StatusPending || c.CreatedAt.IsZero() {
 		t.Fatalf("%+v %v", c, err)
 	}
-	st, _ := os.Stat(p)
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("perm %v", st.Mode().Perm())
-	}
+	platformtest.AssertPrivateFile(t, p)
 	s2, _ := Open(p)
 	if got, ok := s2.Get(c.ID); !ok || got.Body != "x" {
 		t.Fatal("not persisted")

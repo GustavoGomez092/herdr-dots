@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"herdr-dots/internal/platform/platformtest"
 )
 
 func valid(name string) Dot {
@@ -28,10 +30,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if got.Name != "Security" || got.Purpose != d.Purpose || got.Trigger.FileGlobs[0] != "**/*.ts" || got.Slug != "security" {
 		t.Fatalf("round trip: %+v", got)
 	}
-	st, _ := os.Stat(filepath.Join(dir, "security.toml"))
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("perm %v", st.Mode().Perm())
-	}
+	platformtest.AssertPrivateFile(t, filepath.Join(dir, "security.toml"))
 	raw, _ := os.ReadFile(filepath.Join(dir, "security.toml"))
 	if !strings.Contains(string(raw), `"""`) {
 		t.Fatalf("purpose should be written as a multi-line string:\n%s", raw)
