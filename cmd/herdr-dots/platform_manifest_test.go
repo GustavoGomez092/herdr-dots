@@ -112,7 +112,20 @@ func TestWindowsBuildScriptBuildsTheExe(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(b)
-	for _, want := range []string{`go build -o 'bin\herdr-dots.exe' '.\cmd\herdr-dots'`, "Go toolchain (>= 1.25) is required", "exit $LASTEXITCODE"} {
+	for _, want := range []string{
+		"Get-FileHash -Algorithm SHA256", // verifies the download against release/SHA256SUMS
+		"HERDR_PLUGIN_BUILD_OFFLINE",
+		`'.\cmd\herdr-dots'`, // the source-build fallback
+		"Install Go 1.25 or newer",
+		"exit $code",
+		"bin/$Name.exe", // the installed binary
+		// pwsh is not on every dev machine, so pin the fixes the PS tests
+		// exercise where it is: an empty REPO is "" (not $null.Trim()), no
+		// progress bar, a validated platform override.
+		`"$(Get-Content -Raw -LiteralPath 'release/REPO')".Trim()`,
+		"$ProgressPreference = 'SilentlyContinue'",
+		"'^(darwin|linux|windows)_(amd64|arm64)$'",
+	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("build.ps1 lacks %q", want)
 		}
