@@ -13,6 +13,8 @@ import (
 
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/memory"
+	"herdr-dots/internal/ui/memui"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -26,6 +28,9 @@ type Deps struct {
 	DotsDir string
 	Check   func(ctx context.Context, kind string) error // backend CLI present?
 	NewDot  func() dots.Dot                              // blank dot with config defaults; nil → dots.New("")
+
+	Memory  *memory.Store                               // nil: memory off (no M/P, no memory step on delete)
+	Project func(target string) (memory.Project, error) // the target pane's project when the snapshot lacks it; may be nil
 }
 
 type SnapshotMsg view.Snapshot
@@ -38,8 +43,16 @@ type (
 		slug  string
 		isNew bool
 	}
-	deletedMsg  struct{ name string }
+	deletedMsg  struct{ name, slug string }
 	reloadedMsg struct{}
+	memOpenMsg  struct {
+		deps memui.Deps
+		err  error
+	}
+	memDeletedMsg struct {
+		name  string
+		files int
+	}
 )
 
 type screen int
@@ -49,6 +62,8 @@ const (
 	scrTemplates
 	scrEditor
 	scrConfirm
+	scrMemory        // the memory browser (memui)
+	scrConfirmMemory // after deleting a dot: also delete its memory?
 )
 
 type Model struct {
@@ -68,6 +83,7 @@ type Model struct {
 	delSlug   string // dot the confirm screen asks about, fixed when D is pressed
 	delName   string
 	width     int
+	mem       *memui.Model // open memory browser (scrMemory)
 }
 
 func New(target string, d Deps) Model {
@@ -92,7 +108,40 @@ func (m Model) reload() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.scr == scrMemory && m.mem != nil {
+		switch msg.(type) {
+		case SnapshotMsg: // the library keeps tracking snapshots below
+		case memui.BackMsg:
+			m.scr, m.mem = scrLibrary, nil
+			return m, nil
+		default:
+			if ws, ok := msg.(tea.WindowSizeMsg); ok {
+				m.width = ws.Width
+			}
+			nm, cmd := m.mem.Update(msg)
+			mm := nm.(memui.Model)
+			m.mem = &mm
+			return m, cmd
+		}
+	}
 	switch msg := msg.(type) {
+	case memOpenMsg:
+		if msg.deps.Store == nil {
+			if msg.err != nil {
+				m.status = msg.err.Error()
+			}
+			return m, nil
+		}
+		mm := memui.New(msg.deps)
+		m.mem, m.scr = &mm, scrMemory
+		if m.width > 0 {
+			nm, _ := mm.Update(tea.WindowSizeMsg{Width: m.width})
+			mm = nm.(memui.Model)
+			m.mem = &mm
+		}
+		return m, mm.Init()
+	case memDeletedMsg:
+		m.status = fmt.Sprintf("deleted %s and its memory (%d files)", msg.name, msg.files)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 	case SnapshotMsg:
@@ -129,6 +178,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case deletedMsg:
 		m.scr = scrLibrary
 		m.status = "deleted " + msg.name
+		if m.d.Memory != nil {
+			m.scr, m.delSlug, m.delName = scrConfirmMemory, msg.slug, msg.name
+		}
 		return m, m.reload()
 	case reloadedMsg:
 	case doneMsg:
@@ -141,6 +193,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.keysEditor(msg)
 		case scrConfirm:
 			return m.keysConfirm(msg)
+		case scrConfirmMemory:
+			return m.keysConfirmMemory(msg)
 		}
 		return m.keysLibrary(msg)
 	}
@@ -197,8 +251,48 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if d, ok := m.current(); ok {
 			m.scr, m.delSlug, m.delName = scrConfirm, d.Slug, d.Name
 		}
+	case "M":
+		if m.d.Memory == nil {
+			m.status = "memory is turned off (memory_enabled = false)"
+			return m, nil
+		}
+		if d, ok := m.current(); ok {
+			return m, m.openMemory(d.Slug, d.Name)
+		}
+	case "P":
+		if m.d.Memory == nil {
+			m.status = "memory is turned off (memory_enabled = false)"
+			return m, nil
+		}
+		return m, m.openMemory("", "")
 	}
 	return m, nil
+}
+
+// openMemory resolves the target pane's project (snapshot first, then
+// Deps.Project) off the UI goroutine and opens the memory browser.
+func (m Model) openMemory(dot, name string) tea.Cmd {
+	pv, _ := m.snap.Pane(m.target)
+	target, resolve, st, caller := m.target, m.d.Project, m.d.Memory, m.d.Caller
+	return func() tea.Msg {
+		pr := memory.Project{ID: pv.ProjectID, Name: pv.ProjectName}
+		var err error
+		if pr.ID == "" && target != "" && resolve != nil {
+			pr, err = resolve(target)
+		}
+		if pr.ID == "" && dot == "" {
+			if err == nil {
+				err = errors.New("no project: focus an agent pane first")
+			}
+			return memOpenMsg{err: err}
+		}
+		notify := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil)
+		}
+		return memOpenMsg{deps: memui.Deps{Store: st, Project: pr, Dot: dot, DotName: name, Notify: notify}}
+	}
 }
 
 // apply attaches newly checked dots in one call and detaches unchecked ones.
@@ -304,10 +398,34 @@ func (m Model) keysConfirm(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := dots.Delete(dir, slug); err != nil {
 				return errMsg{err}
 			}
-			return deletedMsg{name: name}
+			return deletedMsg{name: name, slug: slug}
 		}
 	default:
 		m.scr = scrLibrary
+	}
+	return m, nil
+}
+
+// keysConfirmMemory answers "Also delete its memory in all projects? (Y/n)".
+func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	slug, name, st, caller := m.delSlug, m.delName, m.d.Memory, m.d.Caller
+	switch k.String() {
+	case "n", "N", "esc":
+		m.scr = scrLibrary
+		m.status = "deleted " + name + " (memory kept)"
+		return m, nil
+	case "y", "Y", "enter":
+		m.scr = scrLibrary
+		return m, func() tea.Msg {
+			n, err := st.DeleteDot(slug)
+			if err != nil {
+				return errMsg{err}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil)
+			return memDeletedMsg{name: name, files: n}
+		}
 	}
 	return m, nil
 }
@@ -334,6 +452,13 @@ func (m Model) View() string {
 		return b.String()
 	case scrConfirm:
 		return style.Title.Render(fmt.Sprintf("Delete %s?", m.delName)) + "\n\n" + style.Dim.Render("y delete · any other key cancels")
+	case scrConfirmMemory:
+		return style.Title.Render(fmt.Sprintf("Deleted %s.", m.delName)) + "\nAlso delete its memory in all projects? (Y/n)\n\n" +
+			style.Dim.Render("y/enter delete memory · n keep it (re-creating the dot picks it back up)")
+	case scrMemory:
+		if m.mem != nil {
+			return m.mem.View()
+		}
 	}
 	var b strings.Builder
 	head := "DOTS LIBRARY ─ target: " + m.target
@@ -361,6 +486,10 @@ func (m Model) View() string {
 	if m.status != "" {
 		b.WriteString("\n" + m.status + "\n")
 	}
-	b.WriteString("\n" + style.Dim.Render("space toggle · enter apply · n new · t template · e edit · D delete · esc close"))
+	help := "space toggle · enter apply · n new · t template · e edit · D delete · esc close"
+	if m.d.Memory != nil {
+		help += " · M memory · P project memory"
+	}
+	b.WriteString("\n" + style.Dim.Render(help))
 	return b.String()
 }
