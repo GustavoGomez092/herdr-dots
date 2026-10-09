@@ -1,6 +1,12 @@
 package dots
 
-import "strings"
+import (
+	"regexp"
+	"slices"
+	"strings"
+
+	"herdr-dots/internal/credentials"
+)
 
 // argRule is one backend CLI flag a dot's [backend].args may not pass, because
 // it would override the read-only safety flags the backend sets.
@@ -37,6 +43,7 @@ var deniedArgs = map[string][]argRule{
 		{flag: "--resume", takes: true, variadic: true},
 		{flag: "--continue"},
 		{flag: "--system-prompt", takes: true, variadic: true},
+		{flag: "--system-prompt-file", takes: true, variadic: true}, // P9-R4
 	},
 	"codex-cli": {
 		{flag: "--dangerously-bypass-approvals-and-sandbox"},
@@ -44,16 +51,34 @@ var deniedArgs = map[string][]argRule{
 		{flag: "--full-auto"},
 		{flag: "--sandbox", takes: true},
 		{flag: "-s", takes: true},
-		{flag: "-c", takes: true, when: sandboxOrMCP},
-		{flag: "--config", takes: true, when: sandboxOrMCP},
+		{flag: "-c", takes: true, when: codexConfigDenied},
+		{flag: "--config", takes: true, when: codexConfigDenied},
 		{flag: "--add-dir", takes: true, variadic: true}, // more writable roots
 		{flag: "-C", takes: true},                        // another working root
 		{flag: "--cd", takes: true},
+		// P9-R4: another provider or profile (prompts sent elsewhere), web
+		// search, feature switches, and a file written outside the sandbox.
+		{flag: "-p", takes: true},
+		{flag: "--profile", takes: true},
+		{flag: "--oss"},
+		{flag: "--local-provider", takes: true},
+		{flag: "--enable", takes: true},
+		{flag: "--disable", takes: true},
+		{flag: "--search"},
+		{flag: "-o", takes: true},
+		{flag: "--output-last-message", takes: true},
 	},
 }
 
-func sandboxOrMCP(v string) bool {
-	return strings.Contains(v, "sandbox") || strings.Contains(v, "mcp_servers")
+// codexConfigKeys are the only `codex -c key=value` overrides a dot may pass
+// (P9-R4): every other key (base_url, model_provider(s), tools.*,
+// web_search, mcp_servers, sandbox*, shell*, approval*, env, profile, ...)
+// could send prompts elsewhere, turn on web access or loosen the sandbox.
+var codexConfigKeys = []string{"model", "model_reasoning_effort", "model_reasoning_summary", "hide_agent_reasoning"}
+
+func codexConfigDenied(v string) bool {
+	key, _, ok := strings.Cut(v, "=")
+	return !ok || !slices.Contains(codexConfigKeys, strings.TrimSpace(key))
 }
 
 // match reports whether args[i] is this rule's flag and returns the inline
@@ -104,15 +129,58 @@ func scanArgs(kind string, args []string) (kept, denied []string) {
 		if hit.when != nil && !hit.when(value) {
 			kept = append(kept, args[i:end+1]...)
 		} else {
-			denied = append(denied, a)
+			// The flag with its value, so an error names the exact arg;
+			// redacted, as errors reach the feed.
+			denied = append(denied, credentials.Redact(strings.Join(args[i:end+1], " ")))
 		}
 		i = end
 	}
 	return kept, denied
 }
 
-// DeniedArgs returns the flags in args that a dot of this backend kind may not
-// pass, because they would override the read-only safety flags.
+// plainToken is a model name as an arg value: no shell or flag syntax.
+var plainToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}$`)
+
+// sharedArg reports whether flag with value v may stay in someone else's dot.
+func sharedArg(flag, v string) bool {
+	switch flag {
+	case "--model", "-m":
+		return plainToken.MatchString(v)
+	case "--effort":
+		return slices.Contains(Efforts, v)
+	}
+	return false
+}
+
+// sharedArgs keeps only --model/-m <model> and --effort <effort> (and the
+// --flag=value forms) with plain values, for imported and project dots
+// (P9-R4). Everything else is removed: an allowlist, because a flag this
+// version doesn't know can't be judged.
+func sharedArgs(kind string, args []string) (kept, removed []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if flag, v, ok := strings.Cut(a, "="); ok && strings.HasPrefix(flag, "--") {
+			if sharedArg(flag, v) {
+				kept = append(kept, a)
+				continue
+			}
+		} else if i+1 < len(args) && sharedArg(a, args[i+1]) {
+			kept = append(kept, a, args[i+1])
+			i++
+			continue
+		}
+		removed = append(removed, credentials.Redact(a))
+	}
+	kept = SafeArgs(kind, kept) // never needed today; the denylist still wins
+	if kept == nil {
+		kept = []string{}
+	}
+	return kept, removed
+}
+
+// DeniedArgs returns the flags in args (each with its value) that a dot of
+// this backend kind may not pass, because they would override the read-only
+// safety flags, send prompts elsewhere or turn on web access.
 func DeniedArgs(kind string, args []string) []string {
 	_, denied := scanArgs(kind, args)
 	return denied

@@ -3,6 +3,7 @@ package dots
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -20,7 +21,8 @@ const (
 	CapBaseURL  = "base_url" // backend.base_url (Phase 4): sends prompts (and an API key) to another endpoint
 )
 
-// CapArgs is the clamp that removes denied backend args; CapProjects removes
+// CapArgs is the clamp that removes every backend arg but --model/-m and
+// --effort with plain values (P9-R4); CapProjects removes
 // absolute schedule.projects paths (Phase 8), which name directories on the
 // author's machine: someone else's dot may run only on the projects it is
 // attached to. Neither can be kept.
@@ -29,18 +31,34 @@ const (
 	CapProjects = "projects"
 )
 
+// CapBudget caps someone else's dot's budget (P9 fix round): calls at the
+// default, dollars at SharedMaxUSDPerSession, also when the file turned the
+// dollar budget off. It can't be kept. CapBackend marks the preview facts
+// (backend kind and model): shown, not changed.
+const (
+	CapBudget  = "budget"
+	CapBackend = "backend"
+)
+
+// SharedMaxUSDPerSession is the dollar budget per session of a clamped dot.
+const SharedMaxUSDPerSession = 2.0
+
 // Capabilities lists the keepable capabilities in display order.
 var Capabilities = []string{CapInject, CapWrite, CapMCP, CapResearch, CapWeb, CapSchedule, CapCommit, CapBaseURL}
 
 // Clamp is one change ClampDot made.
 type Clamp struct {
-	Capability string // one of Capabilities, or CapArgs
+	Capability string // one of Capabilities, CapArgs, CapProjects, CapBudget, or CapBackend (a fact)
 	Field      string // the TOML key, e.g. "delivery.mode"
 	From, To   string // display values
 	Keepable   bool
+	Fact       bool // not a change: a value the preview must show (From)
 }
 
 func (c Clamp) String() string {
+	if c.Fact {
+		return fmt.Sprintf("%s: %s = %s", c.Capability, c.Field, c.From)
+	}
 	to := c.To
 	if to == "" {
 		to = "(off)"
@@ -59,8 +77,9 @@ func CheckCapabilities(caps []string) error {
 }
 
 // ClampDot returns d with every risky capability turned off except those in
-// keep, and the clamps it applied. Denied backend args are always removed.
-// d itself is not changed.
+// keep, and the clamps it applied, in this order: keepable capabilities,
+// args, projects, budget (none of these three can be kept), then the backend
+// kind and model as facts for the preview. d itself is not changed.
 //
 // It fails closed: unless write is kept, [capabilities] is rebuilt from the
 // fields readOnly knows, so a capability field added later starts off.
@@ -108,20 +127,39 @@ func ClampDot(d Dot, keep []string) (Dot, []Clamp) {
 		clamp(CapBaseURL, "backend.base_url", fmt.Sprintf("%q", d.Backend.BaseURL), "")
 		d.Backend.BaseURL = ""
 	}
-	if denied := DeniedArgs(d.Backend.Kind, d.Backend.Args); len(denied) > 0 {
-		out = append(out, Clamp{Capability: CapArgs, Field: "backend.args", From: strings.Join(denied, " "), To: "(removed)"})
-		d.Backend.Args = SafeArgs(d.Backend.Kind, d.Backend.Args)
-		if d.Backend.Args == nil {
-			d.Backend.Args = []string{}
-		}
+	if kept, removed := sharedArgs(d.Backend.Kind, d.Backend.Args); len(removed) > 0 {
+		out = append(out, Clamp{Capability: CapArgs, Field: "backend.args", From: strings.Join(removed, " "), To: "(removed)"})
+		d.Backend.Args = kept
 	}
 	attached := func(p string) bool { return p == ScheduleAttached }
 	if abs := slices.DeleteFunc(slices.Clone(d.Schedule.Projects), attached); len(abs) > 0 {
 		out = append(out, Clamp{Capability: CapProjects, Field: "schedule.projects", From: strings.Join(abs, ", "), To: "(removed)"})
 		d.Schedule.Projects = slices.DeleteFunc(d.Schedule.Projects, func(p string) bool { return !attached(p) })
 	}
+	if n := d.Budget.MaxCallsPerSession; n > DefaultMaxCallsPerSession {
+		out = append(out, Clamp{Capability: CapBudget, Field: "budget.max_calls_per_session", From: strconv.Itoa(n), To: strconv.Itoa(DefaultMaxCallsPerSession)})
+		d.Budget.MaxCallsPerSession = DefaultMaxCallsPerSession
+	}
+	// Not "<= cap" alone: NaN compares false both ways, and 0 means no limit.
+	if usd := d.Budget.MaxUSDPerSession; !(usd > 0 && usd <= SharedMaxUSDPerSession) {
+		from := money(usd)
+		if usd == 0 {
+			from = "0 (off)"
+		}
+		out = append(out, Clamp{Capability: CapBudget, Field: "budget.max_usd_per_session", From: from, To: money(SharedMaxUSDPerSession)})
+		d.Budget.MaxUSDPerSession = SharedMaxUSDPerSession
+	}
+	model := d.Backend.Model
+	if model == "" {
+		model = "(default)"
+	}
+	out = append(out,
+		Clamp{Capability: CapBackend, Field: "backend.kind", From: d.Backend.Kind, To: d.Backend.Kind, Fact: true},
+		Clamp{Capability: CapBackend, Field: "backend.model", From: model, To: model, Fact: true})
 	return d, out
 }
+
+func money(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
 // readOnly is c with Write off. It rebuilds the struct instead of assigning
 // to .Write: Phase 7's write-tool guard (TestOnlyDraftsAskForWriteTools in

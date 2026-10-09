@@ -102,8 +102,42 @@ func TestLoadProjectRefusesALinkedDotsDirectory(t *testing.T) {
 		t.Skip("symlinks unavailable:", err)
 	}
 	ds, bad := LoadProject(root, projID)
-	if len(ds) != 0 || len(bad) != 1 || !strings.Contains(bad[0].Err.Error(), "directory") {
+	if len(ds) != 0 || len(bad) != 1 || !strings.Contains(bad[0].Err.Error(), "directory") || bad[0].File != ".herdr-dots" {
 		t.Fatalf("dots %+v bad %+v", ds, bad)
+	}
+	// A linked dots directory inside a real .herdr-dots, named repo-relative.
+	inner := t.TempDir()
+	if err := os.Mkdir(filepath.Join(inner, ".herdr-dots"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(elsewhere, ".herdr-dots", "dots"), filepath.Join(inner, ".herdr-dots", "dots")); err != nil {
+		t.Fatal(err)
+	}
+	if ds, bad := LoadProject(inner, projID); len(ds) != 0 || len(bad) != 1 || bad[0].File != ".herdr-dots/dots" {
+		t.Fatalf("dots %+v bad %+v", ds, bad)
+	}
+}
+
+// The file opened is the file checked: no link is followed at open, and what
+// was opened must be a regular file (a swap after ReadDir is caught).
+func TestReadCappedOpensOnlyRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := readCapped(dir, 10); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("directory: %v", err)
+	}
+	target := filepath.Join(dir, "real.toml")
+	if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := readCapped(target, 10); err != nil || string(data) != "x" {
+		t.Fatalf("regular file: %q %v", data, err)
+	}
+	link := filepath.Join(dir, "link.toml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	if _, err := readCapped(link, 10); err == nil {
+		t.Fatal("a link is never followed")
 	}
 }
 
@@ -153,7 +187,9 @@ func TestUserFilesKeepTemplateAndImportOriginsOnly(t *testing.T) {
 	if got, _ := Load(dir, "plain"); got.Origin != OriginUser {
 		t.Fatalf("plain origin %q", got.Origin)
 	}
-	os.WriteFile(filepath.Join(dir, "sneaky.toml"), []byte("origin = \"project\"\n"+strings.TrimPrefix(a11yTOML, "")), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "sneaky.toml"), []byte("origin = \"project\"\n"+a11yTOML), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if got, err := Load(dir, "sneaky"); err != nil || got.Origin != OriginUser {
 		t.Fatalf("a user file can't claim to be a project dot: %+v %v", got, err)
 	}
@@ -174,8 +210,22 @@ func TestEncodeKeepsPurposeReadableAndRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Purpose != d.Purpose || got.Origin != OriginImport || got.Name != "Round" {
+	// P9-R7: Encode writes the origin the caller set; DecodeStrict never
+	// trusts it (every caller sets the origin itself).
+	if !strings.Contains(string(data), "origin = \"import\"\n") {
+		t.Fatalf("origin not written:\n%s", data)
+	}
+	if got.Purpose != d.Purpose || got.Origin != "" || got.Name != "Round" {
 		t.Fatalf("round trip: %+v", got)
+	}
+}
+
+func TestDecodeStrictNeverTrustsTheOrigin(t *testing.T) {
+	for _, o := range []string{OriginTemplate, OriginImport, OriginUser, OriginProject, "elsewhere"} {
+		got, err := DecodeStrict([]byte("origin = \"" + o + "\"\n" + a11yTOML))
+		if err != nil || got.Origin != "" {
+			t.Fatalf("pack declaring origin %q: %q %v", o, got.Origin, err)
+		}
 	}
 }
 
@@ -256,8 +306,11 @@ func TestEncodeRoundTripsEveryField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(data), "origin = \"import\"\n") {
+		t.Fatalf("origin not written:\n%s", data)
+	}
 	want := d
-	want.Slug, want.SourcePath = "", ""
+	want.Slug, want.SourcePath, want.Origin = "", "", "" // DecodeStrict clears the origin
 	got.Slug = ""
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip:\n got %+v\nwant %+v\n%s", got, want, data)
@@ -275,6 +328,14 @@ func TestEncodeRefusesSecrets(t *testing.T) {
 		"name":             func(d *Dot) { d.Name = key },
 		"backend.base_url": func(d *Dot) { d.Backend.BaseURL = "https://u:" + strings.Repeat("p4ss", 3) + "@example.invalid" },
 		"backend.args":     func(d *Dot) { d.Backend.Args = []string{"--header", "x-api-key: " + strings.Repeat("k3y", 4)} },
+		// P9-R6: everything secrets.Scan finds, not just Redact's shapes.
+		"glyph": func(d *Dot) { d.Glyph = "-----BEGIN RSA PRIVATE KEY-----" },
+		"trigger.file_globs": func(d *Dot) {
+			d.Trigger.FileGlobs = []string{"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}
+		},
+		"schedule.projects": func(d *Dot) { d.Schedule.Projects = []string{"/srv/password=S3cr3tPassw0rd"} },
+		"backend.model":     func(d *Dot) { d.Backend.Model = "AIza" + "SyA1234567890abcdefghijklmnopqrstuv" },
+		"backend.fallbacks": func(d *Dot) { d.Backend.Fallbacks = "Zx9Qm2LpT7vR4kW8nB3yH6cJ1fD5gS0a" },
 	} {
 		d := New("Leaky")
 		d.Purpose = "p"

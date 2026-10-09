@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"herdr-dots/internal/credentials"
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/secrets"
 )
 
 var ErrExists = errors.New("a dot with this name already exists")
@@ -120,7 +120,7 @@ func Save(dir string, d Dot, create bool) error {
 // whose text holds something shaped like a credential is refused: the error
 // names the field, never the value.
 func Encode(d Dot) ([]byte, error) {
-	if field := secretField(reflect.ValueOf(d), ""); field != "" {
+	if field := secretField(d); field != "" {
 		return nil, fmt.Errorf("%s looks like it holds a secret (a key, token or password); remove it before sharing this dot", field)
 	}
 	return encode(d)
@@ -147,18 +147,33 @@ func encode(d Dot) ([]byte, error) {
 	return []byte(insertPurpose(buf.String(), purpose)), nil
 }
 
-var privateKeyRe = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
-
-// looksSecret reports text credentials.Redact would change, or a PEM private
-// key. (memory.ScanSecrets can't be used: package memory imports dots.)
+// looksSecret reports text the secret scanner flags (secrets.Scan, the
+// patterns behind memory.ScanSecrets, PEM private keys included) or that
+// credentials.Redact would change.
 func looksSecret(s string) bool {
-	return credentials.Redact(s) != s || privateKeyRe.MatchString(s)
+	if found, _ := secrets.Scan(s); found {
+		return true
+	}
+	return credentials.Redact(s) != s
 }
 
-// secretField walks every serialized string of v (a Dot or one of its
-// tables) and returns the TOML key of the first that looks secret, or "".
-// Walking by reflection means a text field added later is checked too.
-func secretField(v reflect.Value, key string) string {
+// secretField returns the TOML key of the first serialized string of d that
+// looks secret, or "". Walking by reflection (eachString) means a text field
+// added later is checked too.
+func secretField(d Dot) string {
+	hit := ""
+	eachString(reflect.ValueOf(d), "", func(key, s string) {
+		if hit == "" && looksSecret(s) {
+			hit = key
+		}
+	})
+	return hit
+}
+
+// eachString calls fn with the TOML key and value of every serialized string
+// in v (a Dot or one of its tables), list elements included. Fields tagged
+// toml:"-" (Slug, SourcePath) are skipped.
+func eachString(v reflect.Value, key string, fn func(key, s string)) {
 	switch v.Kind() {
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
@@ -173,22 +188,23 @@ func secretField(v reflect.Value, key string) string {
 			if key != "" {
 				name = key + "." + name
 			}
-			if hit := secretField(v.Field(i), name); hit != "" {
-				return hit
-			}
+			eachString(v.Field(i), name, fn)
 		}
-	case reflect.Slice:
+	case reflect.Slice, reflect.Array:
 		for i := 0; i < v.Len(); i++ {
-			if hit := secretField(v.Index(i), key); hit != "" {
-				return hit
-			}
+			eachString(v.Index(i), key, fn)
+		}
+	case reflect.Map:
+		for it := v.MapRange(); it.Next(); {
+			eachString(it.Value(), key, fn)
+		}
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			eachString(v.Elem(), key, fn)
 		}
 	case reflect.String:
-		if looksSecret(v.String()) {
-			return key
-		}
+		fn(key, v.String())
 	}
-	return ""
 }
 
 // multilineBasic escapes a string for use in a TOML multiline basic string (""" ... """).

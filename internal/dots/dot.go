@@ -5,6 +5,7 @@ package dots
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -105,6 +106,9 @@ const (
 	ReservedSlug = "council"
 )
 
+// DefaultMaxCallsPerSession is a new dot's [budget] max_calls_per_session.
+const DefaultMaxCallsPerSession = 40
+
 // New returns a dot with every default from the spec filled in.
 func New(name string) Dot {
 	return Dot{
@@ -116,7 +120,7 @@ func New(name string) Dot {
 		Delivery: DeliverySpec{Mode: ModeQueue},
 		Trigger:  TriggerSpec{OnTurn: true, FileGlobs: []string{}},
 		Context:  ContextSpec{Turns: 3, RepoRead: true, Verbosity: "normal"},
-		Budget:   BudgetSpec{MaxCallsPerSession: 40},
+		Budget:   BudgetSpec{MaxCallsPerSession: DefaultMaxCallsPerSession},
 		Memory:   DefaultMemory(),
 		Research: DefaultResearch(),
 		Schedule: DefaultSchedule(),
@@ -202,10 +206,51 @@ func (d Dot) Validate() error {
 	if d.Budget.MaxCallsPerSession < 1 {
 		add("budget max_calls_per_session must be >= 1")
 	}
+	errs = append(errs, textErrors(d)...)
 	errs = append(errs, d.Memory.validate()...)
 	errs = append(errs, d.Research.validate()...)
 	errs = append(errs, d.Schedule.validate()...)
 	errs = append(errs, d.Capabilities.validate(d.Backend.Kind)...)
 	errs = append(errs, validateAPI(d)...)
 	return errors.Join(errs...)
+}
+
+// multilineKeys may hold newlines and tabs (CRLF line ends too).
+var multilineKeys = []string{"purpose", "schedule.task"}
+
+// textErrors refuses control and bidi characters in every string of the dot
+// (P9-R5): names, glyphs, models and the rest reach the terminal, where an
+// escape can rewrite the screen or the clipboard (OSC 52) and bidi controls
+// make a preview read differently from what runs. Research topics and the
+// schedule task keep their own control-character messages (Phase 8).
+func textErrors(d Dot) []error {
+	var errs []error
+	if unsafeText(d.Slug, false) || hasBidi(d.Slug) {
+		errs = append(errs, fmt.Errorf("slug %q must not contain control or bidi characters", d.Slug))
+	}
+	seen := map[string]bool{}
+	eachString(reflect.ValueOf(d), "", func(key, s string) {
+		if seen[key] {
+			return
+		}
+		multiline := slices.Contains(multilineKeys, key)
+		if multiline {
+			s = strings.ReplaceAll(s, "\r\n", "\n")
+		}
+		phase8 := key == "research.topics" || key == "schedule.task"
+		if hasBidi(s) || (!phase8 && unsafeText(s, multiline)) {
+			seen[key] = true
+			errs = append(errs, fmt.Errorf("%s must not contain control or bidi characters", key))
+		}
+	})
+	return errs
+}
+
+// hasBidi reports a bidirectional formatting character: embeddings and
+// overrides (U+202A-202E), isolates (U+2066-2069) and marks (U+200E, U+200F,
+// U+061C).
+func hasBidi(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) || r == 0x200E || r == 0x200F || r == 0x061C
+	})
 }

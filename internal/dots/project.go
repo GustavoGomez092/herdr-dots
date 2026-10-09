@@ -10,8 +10,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
+
+	"herdr-dots/internal/platform"
 )
 
 // Dot origins (Dot.Origin). User files store template and import; a user
@@ -101,21 +104,22 @@ type ProjectFile struct {
 // are refused with a LoadError. A missing directory is not an error.
 func ReadProjectFiles(root string) ([]ProjectFile, []LoadError) {
 	dir := filepath.Join(root, ProjectDir)
-	for _, d := range []string{filepath.Join(root, ".herdr-dots"), dir} {
-		st, err := os.Lstat(d)
+	relDir := filepath.ToSlash(ProjectDir)
+	for _, rel := range []string{".herdr-dots", relDir} {
+		st, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		if err != nil {
-			return nil, []LoadError{{File: d, Err: err}}
+			return nil, []LoadError{{File: rel, Err: err}}
 		}
 		if !st.IsDir() {
-			return nil, []LoadError{{File: d, Err: errors.New("must be a directory, not a link or a file")}}
+			return nil, []LoadError{{File: rel, Err: errors.New("must be a directory, not a link or a file")}}
 		}
 	}
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, []LoadError{{File: dir, Err: err}}
+		return nil, []LoadError{{File: relDir, Err: err}}
 	}
 	var out []ProjectFile
 	var bad []LoadError
@@ -145,12 +149,24 @@ func ReadProjectFiles(root string) ([]ProjectFile, []LoadError) {
 	return out, bad
 }
 
+// readCapped reads at most limit bytes of the regular file at path. It opens
+// without following a link and without blocking on a FIFO
+// (platform.OpenNoFollow), then checks the opened file itself, so a file
+// swapped for a link, FIFO or directory after ReadDir is refused.
 func readCapped(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := platform.OpenNoFollow(path)
 	if err != nil {
+		if errors.Is(err, syscall.ELOOP) || errors.Is(err, platform.ErrReparsePoint) {
+			return nil, errors.New("must be a regular file, not a link")
+		}
 		return nil, err
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err != nil {
+		return nil, err
+	} else if !st.Mode().IsRegular() {
+		return nil, errors.New("must be a regular file")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
@@ -179,7 +195,8 @@ func DecodeProject(f ProjectFile, projectID string) (Dot, error) {
 }
 
 // DecodeStrict decodes a dot from TOML over the defaults and refuses keys it
-// doesn't know. It does not validate.
+// doesn't know. It does not validate. The origin in the data is never
+// trusted (P9-R7): Origin comes back "" and every caller sets it.
 func DecodeStrict(data []byte) (Dot, error) {
 	d := New("")
 	md, err := toml.Decode(string(data), &d)
@@ -193,6 +210,7 @@ func DecodeStrict(data []byte) (Dot, error) {
 		}
 		return Dot{}, fmt.Errorf("unknown keys %s: this herdr-dots can't tell what they do, so it won't load them", strings.Join(keys, ", "))
 	}
+	d.Origin = ""
 	return d, nil
 }
 
