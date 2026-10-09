@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"herdr-dots/internal/dots"
 )
 
 const exportHeader = `# herdr-dots memory. Edit text, kind, paths, pinned or status (active, proposed, archived).
@@ -58,9 +60,14 @@ func ExportTOML(entries []Entry) ([]byte, error) {
 // ImportTOML parses an exported (and maybe edited) document. Entries keep
 // their id when "ref" matches their scope; new blocks have no id.
 func ImportTOML(data []byte) ([]Entry, error) {
+	// The file may have come from someone else: refuse nesting bombs before
+	// the decoder, and cap what the decoder echoes back.
+	if err := dots.PreScanTOML(data); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, dots.CleanText(err.Error(), 300))
+	}
 	var doc tomlDoc
 	if _, err := toml.Decode(string(data), &doc); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, dots.CleanText(err.Error(), 300))
 	}
 	if doc.Version > fileVersion {
 		return nil, fmt.Errorf("%w (version %d)", ErrVersion, doc.Version)

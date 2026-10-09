@@ -320,15 +320,17 @@ func (m Model) keysBrowse(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !pin {
 			label = "unpinned "
 		}
-		return m, m.mutate(label+ref.String(), func(st *memory.Store) error {
-			_, err := st.Update(pid, ref, func(x *memory.Entry) error {
+		return m, m.mutateSaying(func(st *memory.Store) (string, error) {
+			was := false
+			got, err := st.Update(pid, ref, func(x *memory.Entry) error {
 				if x.Text != seen {
 					return errChanged
 				}
+				was = x.Status == memory.StatusArchived
 				x.Pinned = pin
 				return nil
 			})
-			return err
+			return archivedSay(label+ref.String(), got, was), err
 		})
 	case "x":
 		if e, ok := m.selected(); ok {
@@ -379,16 +381,34 @@ func (m Model) keysConfirmApprove(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	e := m.approve
 	ref, pid, seen := e.Ref(), m.pidOf(e), e.Text
-	return m, m.mutate("approved "+ref.String(), func(st *memory.Store) error {
-		_, err := st.Update(pid, ref, func(x *memory.Entry) error {
+	return m, m.mutateSaying(func(st *memory.Store) (string, error) {
+		was := false
+		got, err := st.Update(pid, ref, func(x *memory.Entry) error {
 			if x.Text != seen {
 				return errChanged
 			}
+			was = x.Status == memory.StatusArchived
 			x.Status = memory.StatusActive
 			return nil
 		})
-		return err
+		return archivedSay("approved "+ref.String(), got, was), err
 	})
+}
+
+// archivedSay adds to a success line when the cap archived the entry at once
+// (an import approved or unpinned in a full scope, P9-R15).
+func archivedSay(status string, got memory.Entry, was bool) string {
+	if got.Status != memory.StatusArchived || was {
+		return status
+	}
+	whose := "this dot's"
+	switch got.Scope {
+	case memory.ScopeProject:
+		whose = "this project's"
+	case memory.ScopeGlobal:
+		whose = "global"
+	}
+	return status + ", then archived: " + whose + " memory is full and imports give way to your own entries"
 }
 
 // wrap breaks clean(s) into lines of at most w runes, on spaces where it can.
@@ -582,7 +602,9 @@ func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			ref, pid, seen := *m.editRef, m.editPid, m.editSeen
 			return m, m.mutateSaying(func(st *memory.Store) (string, error) {
 				status := "saved " + ref.String()
-				_, err := st.Update(pid, ref, func(x *memory.Entry) error {
+				was := false
+				got, err := st.Update(pid, ref, func(x *memory.Entry) error {
+					was = x.Status == memory.StatusArchived
 					// An import saved with its text unchanged stays someone
 					// else's conclusion (the CLI rule, Task 10): it is an
 					// approval of the text the editor showed, never a rewrite.
@@ -607,7 +629,7 @@ func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					return nil
 				})
-				return status, err
+				return archivedSay(status, got, was), err
 			})
 		}
 		sc, dot, pid := m.newTarget()

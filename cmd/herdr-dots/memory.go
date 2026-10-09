@@ -459,7 +459,7 @@ func (c *memCLI) mark(verb string, args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.store.Update(pid, ref, func(e *memory.Entry) error {
+	got, err := c.store.Update(pid, ref, func(e *memory.Entry) error {
 		switch verb {
 		case "pin":
 			e.Pinned = true
@@ -472,6 +472,10 @@ func (c *memCLI) mark(verb string, args []string) error {
 		return err
 	}
 	past := map[string]string{"pin": "pinned", "unpin": "unpinned"}[verb]
+	if got.Status == memory.StatusArchived {
+		fmt.Fprintln(c.out, c.archivedAtOnce(past, got))
+		return nil
+	}
 	fmt.Fprintf(c.out, "%s %s\n", past, ref)
 	return nil
 }
@@ -530,7 +534,7 @@ func (c *memCLI) approve(args []string) error {
 		}
 	}
 	seen := e.Text
-	_, err = c.store.Update(pid, ref, func(x *memory.Entry) error {
+	got, err := c.store.Update(pid, ref, func(x *memory.Entry) error {
 		if x.Text != seen {
 			return errApproveChanged
 		}
@@ -543,8 +547,26 @@ func (c *memCLI) approve(args []string) error {
 	if err != nil {
 		return err
 	}
+	if got.Status == memory.StatusArchived {
+		fmt.Fprintln(c.out, c.archivedAtOnce("approved", got))
+		return nil
+	}
 	fmt.Fprintf(c.out, "approved %s\n", ref)
 	return nil
+}
+
+// archivedAtOnce says that an approval or unpin took a full scope over its
+// limit and the entry, an import, was archived by the cap (P9-R15).
+func (c *memCLI) archivedAtOnce(verb string, e memory.Entry) string {
+	whose := "the project"
+	switch e.Scope {
+	case memory.ScopeDot:
+		whose = textutil.SanitizeModelText(e.Dot)
+	case memory.ScopeGlobal:
+		whose = "global"
+	}
+	return fmt.Sprintf("%s %s, but it was archived at once: %s's memory is full (limit %d) and imported entries give way to yours. Forget an entry or raise the limit, then import it again.",
+		verb, e.Ref(), whose, c.store.Cap(e.Scope))
 }
 
 func (c *memCLI) export(args []string) error {
@@ -729,7 +751,7 @@ func (c *memCLI) edit(args []string) error {
 		na++
 	}
 	for _, e := range updates {
-		_, err := c.store.Update(pidOf(e.Scope), e.Ref(), func(x *memory.Entry) error {
+		got, err := c.store.Update(pidOf(e.Scope), e.Ref(), func(x *memory.Entry) error {
 			imported := x.Source == memory.SourceImport
 			textChanged := strings.TrimSpace(e.Text) != strings.TrimSpace(x.Text)
 			// An import is someone else's conclusion and never suppresses
@@ -754,6 +776,9 @@ func (c *memCLI) edit(args []string) error {
 		if err != nil {
 			errs = append(errs, err)
 			continue
+		}
+		if got.Status == memory.StatusArchived && e.Status != memory.StatusArchived {
+			fmt.Fprintln(c.out, c.archivedAtOnce("saved", got))
 		}
 		nu++
 	}
