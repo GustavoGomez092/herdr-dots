@@ -1,0 +1,207 @@
+// Package projectdots finds the team dots a repository ships in
+// .herdr-dots/dots/ and gates them behind a direnv-style trust store: trust is
+// per file content (a SHA-256 of the exact bytes), so any change makes a file
+// untrusted again. Untrusted files can't be attached; trusted files run with
+// every risky capability clamped except the ones the developer granted.
+package projectdots
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"time"
+
+	"herdr-dots/internal/dots"
+	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/lockfile"
+)
+
+// trustVersion is written into trusted.json; newer files are refused.
+const trustVersion = 1
+
+var (
+	ErrCorrupt = errors.New("trusted.json is unreadable: fix or delete it (every project dot stays untrusted until then)")
+	ErrLocked  = errors.New("trusted.json is locked by another process")
+)
+
+// TrustEntry is one trusted file. The key is (Project, Rel, SHA256): the
+// same bytes at the same place in any clone or worktree of the same
+// repository (decision #11: project identity is the git root commit).
+type TrustEntry struct {
+	Project      string    `json:"project"`
+	Rel          string    `json:"rel"`
+	Path         string    `json:"path"` // where it was trusted (display only)
+	SHA256       string    `json:"sha256"`
+	Capabilities []string  `json:"capabilities"`
+	TrustedAt    time.Time `json:"trusted_at"`
+}
+
+type trustDoc struct {
+	Version int          `json:"version"`
+	Entries []TrustEntry `json:"entries"`
+}
+
+// TrustStore is CONFIG_DIR/trusted.json.
+type TrustStore struct {
+	Path        string
+	LockTimeout time.Duration    // 0 → 2s
+	Now         func() time.Time // nil = time.Now
+}
+
+func Hex(sum [32]byte) string { return hex.EncodeToString(sum[:]) }
+
+// Sum is the trust hash of a file's bytes.
+func Sum(data []byte) [32]byte { return sha256.Sum256(data) }
+
+// plainErr drops the path from a file system error, so no absolute path (a
+// home directory) reaches the UI; callers name the file themselves.
+func plainErr(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return fmt.Errorf("%s: %w", pe.Op, pe.Err)
+	}
+	return err
+}
+
+// load reads the trust file and returns its raw bytes with the parsed doc.
+// A missing file is an empty store; a file that doesn't parse, or that a
+// newer version wrote, is ErrCorrupt (nothing is trusted).
+func (t *TrustStore) load() (trustDoc, []byte, error) {
+	data, err := os.ReadFile(t.Path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return trustDoc{Version: trustVersion}, nil, nil
+	}
+	if err != nil {
+		return trustDoc{}, nil, fmt.Errorf("trusted.json: %w", plainErr(err))
+	}
+	var doc trustDoc
+	if err := json.Unmarshal(data, &doc); err != nil || doc.Version < 1 || doc.Version > trustVersion {
+		return trustDoc{}, data, ErrCorrupt
+	}
+	return doc, data, nil
+}
+
+func (t *TrustStore) read() (trustDoc, error) {
+	doc, _, err := t.load()
+	return doc, err
+}
+
+// List returns every trust entry, newest first.
+func (t *TrustStore) List() ([]TrustEntry, error) {
+	doc, err := t.read()
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(doc.Entries, func(i, j int) bool { return doc.Entries[i].TrustedAt.After(doc.Entries[j].TrustedAt) })
+	return doc.Entries, nil
+}
+
+// Check reports whether this exact content is trusted and which capabilities
+// were granted. Any error means untrusted.
+func (t *TrustStore) Check(project, rel string, sum [32]byte) (bool, []string, error) {
+	doc, err := t.read()
+	if err != nil {
+		return false, nil, err
+	}
+	h := Hex(sum)
+	for _, e := range doc.Entries {
+		if e.Project == project && e.Rel == rel && e.SHA256 == h {
+			return true, slices.Clone(e.Capabilities), nil
+		}
+	}
+	return false, nil, nil
+}
+
+// mutate applies fn to the store under its lock and replaces the file
+// atomically (0600). A corrupt file is never overwritten: a copy is kept
+// aside as trusted.json.corrupt and the change fails with ErrCorrupt.
+func (t *TrustStore) mutate(fn func(*trustDoc)) error {
+	timeout := t.LockTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	if err := os.MkdirAll(filepath.Dir(t.Path), 0o700); err != nil {
+		return fmt.Errorf("trusted.json: %w", plainErr(err))
+	}
+	l, err := lockfile.Acquire(t.Path+".lock", timeout)
+	if errors.Is(err, lockfile.ErrLocked) {
+		return ErrLocked
+	}
+	if err != nil {
+		return fmt.Errorf("trusted.json: %w", plainErr(err))
+	}
+	defer l.Release()
+	doc, raw, err := t.load()
+	if errors.Is(err, ErrCorrupt) {
+		if aerr := fsutil.WriteFileAtomic(t.Path+".corrupt", raw, 0o600); aerr != nil {
+			return fmt.Errorf("%w (and keeping a copy failed: %v)", ErrCorrupt, plainErr(aerr))
+		}
+		return err
+	}
+	if err != nil {
+		return err // never overwrite a file we couldn't read
+	}
+	fn(&doc)
+	doc.Version = trustVersion
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(t.Path, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("trusted.json: %w", plainErr(err))
+	}
+	return nil
+}
+
+// Trust records this content of project/rel as trusted with caps (which must
+// be known capabilities), replacing any earlier entry for the same file.
+// project must be a memory project id (ruling 11), so trust given in one
+// repository never applies to another.
+func (t *TrustStore) Trust(project, rel, path string, sum [32]byte, caps []string) error {
+	if dots.ProjectTag(project) == "" || rel == "" {
+		return errors.New("trust needs a project and a file")
+	}
+	if err := dots.CheckCapabilities(caps); err != nil {
+		return err
+	}
+	now := time.Now()
+	if t.Now != nil {
+		now = t.Now()
+	}
+	caps = slices.Clone(caps)
+	if caps == nil {
+		caps = []string{}
+	}
+	return t.mutate(func(d *trustDoc) {
+		d.Entries = slices.DeleteFunc(d.Entries, func(e TrustEntry) bool { return e.Project == project && e.Rel == rel })
+		d.Entries = append(d.Entries, TrustEntry{Project: project, Rel: rel, Path: path, SHA256: Hex(sum), Capabilities: caps, TrustedAt: now.UTC()})
+	})
+}
+
+// Revoke forgets every trust entry for project/rel and reports whether one
+// existed.
+func (t *TrustStore) Revoke(project, rel string) (bool, error) {
+	found := false
+	err := t.mutate(func(d *trustDoc) {
+		n := len(d.Entries)
+		d.Entries = slices.DeleteFunc(d.Entries, func(e TrustEntry) bool { return e.Project == project && e.Rel == rel })
+		found = len(d.Entries) != n
+	})
+	return found, err
+}
+
+// stamp fingerprints the trust file's content.
+func (t *TrustStore) stamp() string {
+	data, err := os.ReadFile(t.Path)
+	if err != nil {
+		return "none"
+	}
+	return Hex(Sum(data))
+}
