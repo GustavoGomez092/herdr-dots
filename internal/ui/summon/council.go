@@ -1,0 +1,221 @@
+package summon
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"herdr-dots/internal/council"
+	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/ui/style"
+	"herdr-dots/internal/view"
+)
+
+// councilForm is the council popup: a question and a member checklist.
+type councilForm struct {
+	fromList  bool // opened from the summon list: esc goes back to it
+	question  textinput.Model
+	onList    bool // focus: member list (true) or question (false)
+	cursor    int
+	selected  map[string]bool
+	seeded    bool // selection initialised from the first preflight
+	preflight *council.Preflight
+	dots      []view.DotState
+}
+
+func newCouncilForm(fromList bool) *councilForm {
+	ti := textinput.New()
+	ti.Placeholder = "optional question (empty: review the recent turns)"
+	ti.Focus()
+	return &councilForm{fromList: fromList, question: ti, selected: map[string]bool{}}
+}
+
+// NewCouncil opens the popup straight in council mode (action "council",
+// pane key C). Init asks the engine for a preflight.
+func NewCouncil(target string, c Caller) Model {
+	m := New(target, c)
+	m.council = newCouncilForm(false)
+	return m
+}
+
+func (m Model) preflight() tea.Cmd {
+	c, target := m.caller, m.target
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := c.Call(ctx, ipc.CmdCouncilPreflight, ipc.CouncilArgs{PaneID: target}); err != nil {
+			return errMsg{err}
+		}
+		return nil
+	}
+}
+
+// eligible reports whether the engine's preflight lets slug sit on the council.
+func (f *councilForm) eligible(slug string) bool {
+	if f.preflight == nil {
+		return false
+	}
+	for _, s := range f.preflight.Members {
+		if s == slug {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *councilForm) chosen() []string {
+	out := []string{}
+	for _, d := range f.dots {
+		if f.selected[d.Slug] && f.eligible(d.Slug) {
+			out = append(out, d.Slug)
+		}
+	}
+	return out
+}
+
+// current is the preflight narrowed to the selection (nil before the engine answers).
+func (f *councilForm) current() *council.Preflight {
+	if f.preflight == nil {
+		return nil
+	}
+	p := f.preflight.Select(f.chosen())
+	return &p
+}
+
+func (m Model) snapshotCouncil(p view.Pane) Model {
+	f := m.council
+	f.dots = p.Dots
+	f.cursor = max(0, min(f.cursor, len(f.dots)-1))
+	if p.CouncilPreflight != nil {
+		pf := *p.CouncilPreflight
+		f.preflight = &pf
+		if !f.seeded {
+			for _, s := range pf.Members {
+				f.selected[s] = true
+			}
+			f.seeded = true
+		}
+	}
+	return m
+}
+
+func (m Model) updateCouncil(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	f := m.council
+	switch msg.String() {
+	case "esc":
+		if f.fromList {
+			m.council = nil
+			return m, nil
+		}
+		return m, tea.Quit
+	case "ctrl+c":
+		return m, tea.Quit
+	case "tab":
+		f.onList = !f.onList
+		if f.onList {
+			f.question.Blur()
+			return m, nil
+		}
+		f.question.Focus()
+		return m, textinput.Blink
+	case "enter":
+		cur := f.current()
+		if cur == nil {
+			m.status = "checking budgets…"
+			return m, nil
+		}
+		if !cur.Allowed {
+			m.status = cur.Refusal
+			return m, nil
+		}
+		c, target, q, slugs := m.caller, m.target, strings.TrimSpace(f.question.Value()), cur.Members
+		return m, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := c.Call(ctx, ipc.CmdCouncil, ipc.CouncilArgs{PaneID: target, Question: q, Slugs: slugs}); err != nil {
+				return errMsg{err}
+			}
+			return tea.Quit()
+		}
+	}
+	if !f.onList {
+		var cmd tea.Cmd
+		f.question, cmd = f.question.Update(msg)
+		return m, cmd
+	}
+	switch msg.String() {
+	case "j", "down":
+		f.cursor = min(f.cursor+1, max(0, len(f.dots)-1))
+	case "k", "up":
+		f.cursor = max(f.cursor-1, 0)
+	case " ":
+		if f.cursor < len(f.dots) {
+			if s := f.dots[f.cursor].Slug; f.eligible(s) {
+				f.selected[s] = !f.selected[s]
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m Model) viewCouncil() string {
+	f := m.council
+	var b strings.Builder
+	b.WriteString(style.Title.Render("COUNCIL → "+m.target) + "\n\n")
+	b.WriteString(f.question.View() + "\n\n")
+	if len(f.dots) == 0 {
+		b.WriteString(style.Dim.Render("No dots attached to this pane. Press prefix+d to add some.") + "\n")
+	}
+	for i, d := range f.dots {
+		marker := "  "
+		if f.onList && i == f.cursor {
+			marker = "▸ "
+		}
+		box := "[ ]"
+		if f.selected[d.Slug] && f.eligible(d.Slug) {
+			box = "[x]"
+		}
+		line := fmt.Sprintf("%s%s %s %s", marker, box, style.Glyph(d.Glyph, d.Color), d.Name)
+		if f.preflight != nil && !f.eligible(d.Slug) {
+			reason := f.preflight.Reasons[d.Slug]
+			if reason == "" {
+				reason = "not eligible"
+			}
+			line = style.Dim.Render(line + " (" + reason + ")")
+		}
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("\n")
+	switch cur := f.current(); {
+	case cur == nil:
+		b.WriteString(style.Dim.Render("checking budgets…") + "\n")
+	case !cur.Allowed:
+		b.WriteString(style.Err.Render(cur.Refusal) + "\n")
+	default:
+		b.WriteString(style.Dim.Render(estimateLine(*cur)) + "\n")
+	}
+	if m.status != "" {
+		b.WriteString(style.Err.Render(m.status) + "\n")
+	}
+	b.WriteString(style.Dim.Render("enter convene · space toggle member · tab focus · esc cancel"))
+	return b.String()
+}
+
+func estimateLine(p council.Preflight) string {
+	calls := "calls"
+	if p.EstimatedCalls == 1 {
+		calls = "call"
+	}
+	s := fmt.Sprintf("estimate: %d %s (%d dots × %d round", p.EstimatedCalls, calls, len(p.Members), p.Rounds)
+	if p.Rounds != 1 {
+		s += "s"
+	}
+	if p.Chair && len(p.Members) >= 2 {
+		s += " + chair"
+	}
+	return s + fmt.Sprintf(") · %d left", p.PaneLeft)
+}
