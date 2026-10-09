@@ -14,20 +14,16 @@ import (
 
 type handler func(args []string) error
 
-func notYet(name string) handler {
-	return func([]string) error { return fmt.Errorf("%s: not implemented yet", name) }
-}
-
 var commands = map[string]handler{
 	"version": func([]string) error {
 		fmt.Println("herdr-dots", version.Version, "(scaffold)")
 		return nil
 	},
-	"engine":     notYet("engine"),
-	"pane":       notYet("pane"),
-	"manage":     notYet("manage"),
-	"summon-ui":  notYet("summon-ui"),
-	"action":     notYet("action"),
+	"engine":     runEngine,
+	"pane":       runPane,
+	"manage":     runManage,
+	"summon-ui":  runSummonUI,
+	"action":     runAction,
 	"setup-keys": runSetupKeys,
 }
 
