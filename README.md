@@ -465,9 +465,13 @@ what is running (`◌ researching…`, `◌ scheduled run…`, `◌ reviewing co
 one at a time per engine. The pane header shows `today $0.37/1.00` once anything ran today. A
 background run on a pane also counts toward the dot's and the pane's session budgets, and a run with
 an unknown cost counts as one run and $0. When the budget is reached, background work stops until
-local midnight and each Herdr session toasts once. A run already going can take the day slightly over
-the cap. If `daily.json` is corrupt, it is set aside (`daily.json.corrupt-<time>`) and background
-work stops for the rest of that local day; while it can't be read or written, nothing runs. The
+local midnight and each Herdr session toasts once. A run already going can take the day over the cap,
+by how much depends on the backend: a `claude-cli` background run is given the budget left, at most
+$0.50 a run (`--max-budget-usd`), and Claude Code stops it there; API backends are bounded only by
+their per-run token and web-use limits; a run with an unknown cost counts $0. A `claude-cli` run
+that fails still counts the cost Claude Code reports, but one killed by `run_timeout_seconds`
+reports no cost and counts $0. If `daily.json` is corrupt, it is set aside
+(`daily.json.corrupt-<time>`) and background work stops for the rest of that local day; while it can't be read or written, nothing runs. The
 budget never becomes unlimited.
 
 ## Files

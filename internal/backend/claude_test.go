@@ -121,6 +121,60 @@ func TestParseClaudeOutput(t *testing.T) {
 	}
 }
 
+// P8-R15(a): a run the CLI reports as failed (is_error, e.g. stopped by
+// --max-budget-usd) still spent money: its cost and usage stay in Result so
+// the run is charged, while the error still surfaces.
+func TestClaudeIsErrorKeepsCost(t *testing.T) {
+	out := `{"type":"result","subtype":"error_max_budget_usd","is_error":true,"result":"budget exceeded","total_cost_usd":0.37,"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":5,"cache_creation_input_tokens":7}}`
+	res, err := ParseClaudeOutput([]byte(out))
+	if err == nil {
+		t.Fatal("is_error must still surface as an error")
+	}
+	if !res.CostKnown || res.CostUSD != 0.37 || res.InputTokens != 112 || res.OutputTokens != 20 {
+		t.Fatalf("is_error with a cost must keep it: %+v", res)
+	}
+	if res.Verdict.Relevant || res.Verdict.Message != "" {
+		t.Fatalf("a failed run has no verdict: %+v", res.Verdict)
+	}
+	for _, exit := range []error{nil, errors.New("exit status 1")} {
+		run := &fakeRunner{stdout: out, err: exit}
+		res, err := ClaudeCLI{Runner: run, Environ: func() []string { return nil }}.Run(context.Background(), req())
+		if err == nil || !res.CostKnown || res.CostUSD != 0.37 || res.InputTokens != 112 {
+			t.Fatalf("exit %v: Run must return the cost with the error: %+v %v", exit, res, err)
+		}
+	}
+}
+
+// P8-R15(b): a background run's dollar cap reaches claude as
+// --max-budget-usd; a run without one (every foreground run) has no flag,
+// and a non-positive cap is never passed.
+func TestClaudeMaxBudgetFlag(t *testing.T) {
+	c := ClaudeCLI{Environ: func() []string { return nil }}
+	r := req()
+	r.Pass, r.MaxBudgetUSD = PassResearch, 0.1
+	if v, ok := argAfter(c.BuildCmd(r).Args, "--max-budget-usd"); !ok || v != "0.1" {
+		t.Fatalf("--max-budget-usd = %q (%v), want 0.1", v, ok)
+	}
+	r.MaxBudgetUSD = 0.5
+	if v, _ := argAfter(c.BuildCmd(r).Args, "--max-budget-usd"); v != "0.5" {
+		t.Fatalf("--max-budget-usd = %q, want 0.5", v)
+	}
+	r.Args = []string{"--max-budget-usd", "99"} // the dot's own args can't raise the cap
+	if args := c.BuildCmd(r).Args; args[len(args)-2] != "--max-budget-usd" || args[len(args)-1] != "0.5" {
+		t.Fatalf("the engine's cap must come last: %v", args[len(args)-4:])
+	}
+	r.Args = nil
+	for _, v := range []float64{0, -0.2} {
+		r.MaxBudgetUSD = v
+		if slices.Contains(c.BuildCmd(r).Args, "--max-budget-usd") {
+			t.Fatalf("cap %v must not be passed", v)
+		}
+	}
+	if slices.Contains(c.BuildCmd(req()).Args, "--max-budget-usd") {
+		t.Fatal("a review without a cap has no --max-budget-usd")
+	}
+}
+
 func TestClaudeRunMapsLoginFailureToHint(t *testing.T) {
 	r := &fakeRunner{stdout: "", stderr: "Invalid API key · Please run /login", err: errors.New("exit status 1")}
 	_, err := ClaudeCLI{Runner: r, Environ: func() []string { return nil }}.Run(context.Background(), req())

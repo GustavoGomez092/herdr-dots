@@ -47,3 +47,6 @@ No soak check failed. Cleanup: `p8soak` and the engine were killed and `herdr --
 - Codex web search (V3) and OpenAI web search (V6) are documented-format, not live-verified.
 - Anthropic server web search (V5) needs an `ANTHROPIC_API_KEY`; run the brief's Step 4 curl once a key is available.
 - A real Windows run of proactive dots is part of Phase 6's Windows gate.
+- `claude-cli` background runs now pass `--max-budget-usd` (the daily budget left, at most $0.50; ruling P8-R15). How a live run behaves when that cap stops it (the exit code, `is_error`, the reported `total_cost_usd`, and that the engine charges it) is not live-verified: run one research pass with a tiny `daily_budget_usd` under the live-step safety rules.
+- `claude-cli` research now runs `--restricted` with WebSearch only (no WebFetch) and a settings JSON that denies Read of secret files (ruling P8-R14). Not live-verified: confirm a research pass still searches, and that a denied file (a scratch `.env`) is refused.
+- `anthropic-api` research: once a run reaches its web-use cap, the web tools are dropped but the conversation history keeps the earlier `server_tool_use` blocks. Whether the API accepts that history is tied to the V5 live gate.

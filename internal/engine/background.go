@@ -321,6 +321,9 @@ func (e *Engine) runBackground(j bgJob) {
 	case state.RunCommit:
 		req.Trigger = backend.TriggerCommit
 	}
+	if c := e.bgRunCap(); c > 0 { // the gate stopped the run if nothing is left
+		req.MaxBudgetUSD = c
+	}
 	ctx, cancel := context.WithTimeout(e.ctx, e.config().RunTimeout())
 	defer cancel()
 	res, err := be.Run(ctx, req)
@@ -364,6 +367,23 @@ func (e *Engine) runBackground(j bgJob) {
 	if j.deliver != nil {
 		j.deliver(j, v)
 	}
+}
+
+// bgRunMaxUSD is the most one background run may spend where the backend
+// can stop it (claude-cli --max-budget-usd; ruling P8-R15).
+const bgRunMaxUSD = 0.50
+
+// bgRunCap is a background run's dollar cap: the daily budget left (the
+// day backgroundGate just read), at most bgRunMaxUSD, rounded to a
+// millionth of a dollar. It may be zero or less; the caller passes only a
+// positive cap.
+func (e *Engine) bgRunCap() float64 {
+	budget := dailyBudget(e.config().DailyBudgetUSD)
+	now := e.now()
+	e.mu.Lock()
+	spent := e.todayLocked(now).CostUSD
+	e.mu.Unlock()
+	return math.Round(min(budget-spent, bgRunMaxUSD)*1e6) / 1e6
 }
 
 // bgFeed writes a job's feed line with the pane check in the same e.mu

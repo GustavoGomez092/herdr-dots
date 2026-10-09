@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -185,6 +186,11 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	// Denied args (dots.Validate rejects them too) are dropped so they can never
 	// override the flags above.
 	args = append(args, dots.SafeArgs(c.Kind(), r.Args)...)
+	if r.MaxBudgetUSD > 0 {
+		// A background run's dollar cap (P8-R15), after the dot's own args so
+		// a --max-budget-usd there can't raise it (the last value wins).
+		args = append(args, "--max-budget-usd", strconv.FormatFloat(r.MaxBudgetUSD, 'f', -1, 64))
+	}
 	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: CleanEnv(c.environ()), Stdin: UserPrompt(r), Cleanup: cleanup}
 }
 
@@ -206,7 +212,9 @@ func (c ClaudeCLI) Run(ctx context.Context, r Request) (Result, error) {
 	}
 	res, perr := parseClaude(out, r.Pass)
 	if err != nil && perr != nil {
-		return Result{}, fmt.Errorf("claude failed: %s", Hint(c.Kind(), string(stderr)+"\n"+string(out)))
+		// res carries only the usage and cost an is_error reply reported
+		// (zero otherwise), so the failed run is still charged.
+		return res, fmt.Errorf("claude failed: %s", Hint(c.Kind(), string(stderr)+"\n"+string(out)))
 	}
 	return res, perr
 }
@@ -229,14 +237,18 @@ func parseClaude(out []byte, pass string) (Result, error) {
 	if err := json.Unmarshal(bytes.TrimSpace(out), &o); err != nil {
 		return Result{}, fmt.Errorf("claude output is not JSON: %w", err)
 	}
-	if o.IsError {
-		return Result{}, fmt.Errorf("claude error: %s", o.Result)
-	}
 	// The real input is uncached + cache writes + cache reads.
 	res := Result{InputTokens: o.Usage.In + o.Usage.CacheWrite + o.Usage.CacheRead, OutputTokens: o.Usage.Out,
-		CacheReadTokens: o.Usage.CacheRead, CacheWriteTokens: o.Usage.CacheWrite, Raw: o.Result}
+		CacheReadTokens: o.Usage.CacheRead, CacheWriteTokens: o.Usage.CacheWrite}
 	if o.Cost != nil {
 		res.CostUSD, res.CostKnown = *o.Cost, true
 	}
+	if o.IsError {
+		// A failed run (an API error, or one stopped by --max-budget-usd)
+		// may still have spent money: keep its usage and cost so it is
+		// charged (ruling P8-R15), but no verdict.
+		return res, fmt.Errorf("claude error: %s", o.Result)
+	}
+	res.Raw = o.Result
 	return finishResult(res, o.Result, pass)
 }
