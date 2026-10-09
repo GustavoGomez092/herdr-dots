@@ -3,6 +3,8 @@
 package queue
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,10 +69,24 @@ type Card struct {
 	PatchID    string   `json:"patch_id,omitempty"`    // the draft id: patches/<id>.patch and <id>.json
 	DiffStat   string   `json:"diff_stat,omitempty"`   // "3 files +42 −7"
 	PatchFlags []string `json:"patch_flags,omitempty"` // binary, mode, symlink, symlink-kept, submodule-skipped, conflicts
+
+	// Proactive cards (Phase 8) only.
+	Origin string `json:"origin,omitempty"` // "" = a turn review; else state.RunResearch, RunScheduled or RunCommit
+	Label  string `json:"label,omitempty"`  // header text in place of "turn N": "commit a1b2c3d", "scheduled Mon 09:00"
+
+	// Inbox bookkeeping (Phase 8). SourceID is the inbox ID a queue card was claimed from
+	// (it makes a re-claim idempotent). ClaimedBy/ClaimedAt are inbox-only claim marks.
+	SourceID  string    `json:"source_id,omitempty"`
+	ClaimedBy string    `json:"claimed_by,omitempty"`
+	ClaimedAt time.Time `json:"claimed_at,omitzero"`
 }
 
 // KindCouncil marks a council card: one digest merged from several dots.
 const KindCouncil = "council"
+
+// KindDigest marks a "while you were away" card: the relevant results of one
+// idle period's research passes, one part per dot (Parts, like a council).
+const KindDigest = "digest"
 
 // KindPatch marks a patch card: a write-capable dot's drafted fix (Phase 7).
 const KindPatch = "patch"
@@ -97,6 +113,7 @@ type Store struct {
 	mu    sync.Mutex
 	cards []Card
 	next  int
+	tok   string // this Store's inbox claim token
 }
 
 type file struct {
@@ -148,14 +165,39 @@ func (s *Store) find(id string) int {
 func (s *Store) Add(c Card) (Card, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if c.SourceID != "" {
+		if i := slices.IndexFunc(s.cards, func(x Card) bool { return x.SourceID == c.SourceID }); i >= 0 {
+			return s.cards[i], nil // already claimed from the inbox: idempotent
+		}
+	}
+	c = sanitizeCard(c)
+	prev, prevNext := slices.Clone(s.cards), s.next // save() reorders s.cards; keep both to roll back
 	s.next++
 	c.ID = strconv.Itoa(s.next)
-	c.CreatedAt = time.Now()
+	if c.SourceID == "" || c.CreatedAt.IsZero() { // a claimed inbox card keeps its original time
+		c.CreatedAt = time.Now()
+	}
 	if c.Status == "" {
 		c.Status = StatusPending
 	}
 	s.cards = append(s.cards, c)
-	return c, s.save()
+	if err := s.save(); err != nil {
+		s.cards, s.next = prev, prevNext // nothing stays in memory un-persisted
+		return Card{}, err
+	}
+	return c, nil
+}
+
+// token is this Store's inbox claim token, one per Store (per session).
+func (s *Store) token() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tok == "" {
+		var b [8]byte
+		_, _ = rand.Read(b[:])
+		s.tok = hex.EncodeToString(b[:])
+	}
+	return s.tok
 }
 
 func (s *Store) Get(id string) (Card, bool) {
