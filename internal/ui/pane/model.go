@@ -63,6 +63,10 @@ type Model struct {
 	height      int // 0 = unknown: render everything
 	status      string
 	seen        bool // a snapshot or disconnect has been received
+
+	// Council (council.go).
+	expandID string                    // council card whose member answers are shown
+	opener   func(target string) error // opens the council popup (WithOpener); nil = unavailable
 }
 
 const offlineHint = "offline: actions unavailable until the engine restarts"
@@ -280,6 +284,9 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
+	if mm, cmd, ok := m.councilKeys(k); ok {
+		return mm, cmd
+	}
 	switch k.String() {
 	case "enter", "a", "x", "e", "s", "m", "p", "d", "r", "M":
 		if !m.connected {
@@ -465,6 +472,11 @@ func (m Model) View() string {
 		roster = append(roster, line+"\n")
 	}
 	queueRule := rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w)
+	if p.Council != nil {
+		// The progress line rides with the queue rule, so the roster cut
+		// (fitRoster) counts it and it never scrolls away.
+		queueRule = style.Dim.Render(trunc(councilProgress(*p.Council), max(10, w))) + "\n" + queueRule
+	}
 
 	// Body: cards, feed and help, scrolled so the selected card stays visible.
 	b.Reset()
@@ -479,14 +491,14 @@ func (m Model) View() string {
 		if sel {
 			marker = "▸"
 		}
-		tags := ""
+		tags := councilTags(c)
 		switch {
 		case c.Status == queue.StatusOrphaned:
-			tags = " [orphaned]"
+			tags += " [orphaned]"
 		case c.Status == queue.StatusAuto:
-			tags = " [auto]"
+			tags += " [auto]"
 		case c.Mode == string(dots.ModeSuggest):
-			tags = " [suggestion]"
+			tags += " [suggestion]"
 		}
 		b.WriteString(fmt.Sprintf("%s%s %s  %s · turn %d%s\n", marker, c.Glyph, style.Severity(c.Severity).Render(strings.ToUpper(c.Severity)), c.DotName, c.Turn, tags))
 		text := c.Body
@@ -497,11 +509,12 @@ func (m Model) View() string {
 		if c.Error != "" {
 			b.WriteString(style.Err.Render("  delivery failed: "+c.Error) + "\n")
 		}
+		b.WriteString(councilDetail(c, m.expandID == c.ID, body))
 		if sel {
 			if c.Mode == string(dots.ModeSuggest) {
 				b.WriteString(style.Dim.Render("  x dismiss · copy the text to use it") + "\n")
 			} else {
-				b.WriteString(style.Dim.Render("  ⏎ send  e edit  x dismiss") + "\n")
+				b.WriteString(style.Dim.Render("  ⏎ send  e edit  x dismiss"+councilHint(c)) + "\n")
 			}
 		}
 		if i == m.card {
@@ -519,7 +532,7 @@ func (m Model) View() string {
 		}
 	}
 	if m.showHelp {
-		b.WriteString(rule("HELP", w) + helpText + "\n")
+		b.WriteString(rule("HELP", w) + helpText + "\n" + councilHelp + "\n")
 	}
 	bodyText := b.String()
 
