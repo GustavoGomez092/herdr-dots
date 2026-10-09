@@ -16,11 +16,13 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/memory"
+	"herdr-dots/internal/patchstore"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/textutil"
 	"herdr-dots/internal/transcript"
 	"herdr-dots/internal/view"
+	"herdr-dots/internal/worktree"
 )
 
 type Deps struct {
@@ -42,6 +44,11 @@ type Deps struct {
 
 	Memory         *memory.Store                            // nil = memory off (v1 behavior)
 	ResolveProject func(cwd string) (memory.Project, error) // nil = memory.ResolveProject with git
+
+	// Drafts (Phase 7). Patches nil = drafts unavailable.
+	Patches      *patchstore.Store // SessionDir/patches
+	WorktreesDir string            // SessionDir/worktrees
+	Git          worktree.Git      // hooks off, timeouts
 }
 
 type key struct{ pane, slug string }
@@ -112,6 +119,15 @@ type Engine struct {
 	origBody map[string]string       // card id → body before its first edit
 	memToast bool                    // "memory write failed" already shown
 
+	// Drafts (draft.go), guarded by mu. Git and patch I/O never happen under mu.
+	drafts    map[string]*draftRun // running drafts by id
+	applying  map[string]bool      // patch cards being applied or discarded, by card id
+	gens      map[string]uint64    // by pane id: bumped whenever the attachment is dropped, so a reused id is a new attachment
+	startedAt time.Time            // Start time: older "drafting" records were interrupted
+
+	cleanupStop func(step string) bool // tests only: true = the process "dies" before that cleanup step
+	testHook    func(point string)     // tests only: called at named points of apply and discard
+
 	// wmu/wg/closed track background goroutines so Wait can drain them.
 	wmu    sync.Mutex
 	wg     sync.WaitGroup
@@ -173,6 +189,9 @@ func New(d Deps) *Engine {
 		learning: map[key]bool{},
 		memStats: map[string]memory.Stats{},
 		origBody: map[string]string{},
+		drafts:   map[string]*draftRun{},
+		applying: map[string]bool{},
+		gens:     map[string]uint64{},
 	}
 	if e.d.ConfigCheck <= 0 {
 		e.d.ConfigCheck = 3 * time.Second
@@ -217,6 +236,9 @@ func (e *Engine) ReloadDots() {
 // and begins polling. Call once, before serving commands.
 func (e *Engine) Start(ctx context.Context) {
 	e.ctx = ctx
+	e.mu.Lock()
+	e.startedAt = time.Now()
+	e.mu.Unlock()
 	for _, a := range e.d.Attachments.List() {
 		if _, err := e.d.Herdr.PaneGet(ctx, a.PaneID); err != nil {
 			if herdr.IsNotFound(err) {
@@ -232,6 +254,9 @@ func (e *Engine) Start(ctx context.Context) {
 	e.spawn(e.pollLoop)
 	if e.d.Memory != nil {
 		e.spawn(e.memoryLoop)
+	}
+	if e.d.Patches != nil {
+		e.spawn(e.draftLoop)
 	}
 }
 
@@ -327,10 +352,17 @@ func (e *Engine) Detach(paneID, slug string) error {
 	e.mu.Lock()
 	delete(e.status, key{paneID, slug})
 	delete(e.warned, key{paneID, slug})
+	e.abandonDraftsLocked(paneID, slug) // a detached dot's draft would make a card for a dot that is gone
+	if empty {
+		// In the same e.mu section as the delete: a draft registering after it
+		// sees the attachment gone, one before it is abandoned here.
+		e.abandonDraftsLocked(paneID, "")
+		e.gens[paneID]++
+		_ = e.d.Attachments.Delete(paneID)
+	}
 	e.mu.Unlock()
 	if empty {
 		e.unwatch(paneID)
-		_ = e.d.Attachments.Delete(paneID)
 	}
 	e.broadcast()
 	return nil
@@ -891,7 +923,7 @@ func (e *Engine) feed(paneID, slug string, turn int, outcome, detail string) {
 func (e *Engine) Snapshot() view.Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll}
+	s := view.Snapshot{InjectEnabled: e.config().InjectEnabled, PausedAll: e.pausedAll, WriteEnabled: e.config().WriteEnabled}
 	slugs := make([]string, 0, len(e.dots))
 	for slug := range e.dots {
 		slugs = append(slugs, slug)
@@ -902,7 +934,8 @@ func (e *Engine) Snapshot() view.Snapshot {
 	for _, slug := range slugs {
 		d := e.dots[slug]
 		s.Library = append(s.Library, view.LibraryDot{Slug: slug, Name: d.Name, Glyph: d.Glyph, Color: d.Color,
-			Backend: d.Backend.Kind, Model: d.Backend.Model, Mode: string(d.Delivery.Mode)})
+			Backend: d.Backend.Kind, Model: d.Backend.Model, Mode: string(d.Delivery.Mode),
+			Write: d.Capabilities.Write && dots.CanWrite(d.Backend.Kind), WriteTimeoutSeconds: d.Capabilities.WriteTimeoutSeconds})
 	}
 	for _, le := range e.invalid {
 		s.Invalid = append(s.Invalid, view.Invalid{File: le.File, Line: le.Line, Error: le.Err.Error()})
@@ -935,6 +968,7 @@ func (e *Engine) Snapshot() view.Snapshot {
 				BudgetUSD: d.Budget.MaxUSDPerSession})
 		}
 		pv.Cards = e.d.Queue.Visible(a.PaneID)
+		pv.Drafts = e.draftViews(a.PaneID)
 		pv.Feed = e.d.Feed.Recent(a.PaneID, 20)
 		pv.Council, pv.CouncilPreflight = e.councilViewLocked(a.PaneID)
 		s.Panes = append(s.Panes, pv)

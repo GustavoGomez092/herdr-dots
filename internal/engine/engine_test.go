@@ -117,6 +117,7 @@ type rig struct {
 	atts    *state.Attachments
 	usage   *state.Usage
 	saved   []dots.Dot
+	stop    context.CancelFunc // cancels the engine's context
 }
 
 const pane = "w1:p1"
@@ -172,6 +173,7 @@ func newRigWith(t *testing.T, opt func(*Deps), ds ...dots.Dot) *rig {
 	}
 	r.e = New(deps)
 	ctx, cancel := context.WithCancel(context.Background())
+	r.stop = cancel
 	t.Cleanup(r.e.Wait) // runs after cancel: no engine goroutine may outlive the test's temp dir
 	t.Cleanup(cancel)
 	r.e.Start(ctx)

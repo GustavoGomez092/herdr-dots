@@ -38,26 +38,30 @@ var (
 
 // Meta describes one draft.
 type Meta struct {
-	ID        string    `json:"id"`
-	Dot       string    `json:"dot"`
-	Pane      string    `json:"pane"`
-	Card      string    `json:"card,omitempty"`
-	Repo      string    `json:"repo"`
-	Snapshot  string    `json:"snapshot,omitempty"` // the snapshot commit
-	Ref       string    `json:"ref,omitempty"`      // its private ref
-	BaseHead  string    `json:"base_head,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
-	Stat      string    `json:"stat,omitempty"` // "3 files +42 −7"
-	Files     int       `json:"files"`
-	Bytes     int       `json:"bytes"`
-	Paths     []string  `json:"paths,omitempty"`
-	Flags     []string  `json:"flags,omitempty"`
-	SHA256    string    `json:"sha256,omitempty"` // of the patch file
-	Conflicts []string  `json:"conflicts,omitempty"`
-	Status    string    `json:"status"`
-	Reason    string    `json:"reason,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID       string `json:"id"`
+	Dot      string `json:"dot"`
+	Pane     string `json:"pane"`
+	Card     string `json:"card,omitempty"`
+	Repo     string `json:"repo"`
+	Snapshot string `json:"snapshot,omitempty"` // the snapshot commit
+	Ref      string `json:"ref,omitempty"`      // its private ref
+	BaseHead string `json:"base_head,omitempty"`
+	Summary  string `json:"summary,omitempty"` // redacted: safe for every display reader
+	// SummaryRaw is the summary as the dot wrote it (sanitized, not redacted),
+	// kept only when it differs from Summary. Only the memory outcome paths
+	// read it, so their secret scan still sees a key. Never display it.
+	SummaryRaw string    `json:"summary_raw,omitempty"`
+	Stat       string    `json:"stat,omitempty"` // "3 files +42 −7"
+	Files      int       `json:"files"`
+	Bytes      int       `json:"bytes"`
+	Paths      []string  `json:"paths,omitempty"`
+	Flags      []string  `json:"flags,omitempty"`
+	SHA256     string    `json:"sha256,omitempty"` // of the patch file
+	Conflicts  []string  `json:"conflicts,omitempty"`
+	Status     string    `json:"status"`
+	Reason     string    `json:"reason,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Store reads and writes patches in Dir. One process (the engine) writes.

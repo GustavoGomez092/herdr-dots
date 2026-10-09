@@ -40,7 +40,7 @@ func (e *Engine) flushAuto(paneID string) {
 
 // deliver must be called with e.dmu held.
 func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
-	gate, err := delivery.Send(e.ctx, e.d.Herdr, paneID, cards, inject)
+	gate, err := delivery.Send(e.ctx, e.d.Herdr, paneID, e.forDelivery(cards), inject)
 	for _, c := range cards {
 		switch {
 		case err != nil:
@@ -49,7 +49,11 @@ func (e *Engine) deliver(paneID string, cards []queue.Card, inject bool) {
 			// Only cards the developer approved are accepted findings; inject
 			// deliveries were never approved.
 			if err := e.d.Queue.SetStatus(c.ID, queue.StatusSent); err == nil && c.Approved {
-				e.spawnOutcome(c, memory.OutcomeSent)
+				if c.Kind == queue.KindPatch {
+					e.patchSent(c) // marks the patch sent and records the outcome
+				} else {
+					e.spawnOutcome(c, memory.OutcomeSent)
+				}
 			}
 		case c.Status == queue.StatusPending:
 			_ = e.d.Queue.SetStatus(c.ID, queue.StatusAuto)
@@ -68,6 +72,11 @@ func (e *Engine) SendCards(ids []string) error {
 	defer e.dmu.Unlock()
 	byPane := map[string][]queue.Card{}
 	var order []string
+	for _, id := range ids {
+		if c, ok := e.d.Queue.Get(id); ok && c.Kind == queue.KindPatch && e.cardReserved(id) {
+			return fmt.Errorf("card %s is being applied or discarded", id)
+		}
+	}
 	for _, id := range ids {
 		c, ok := e.d.Queue.Get(id)
 		if !ok {
@@ -94,6 +103,9 @@ func (e *Engine) SendCards(ids []string) error {
 // Dismiss and Edit hold e.dmu so they never interleave with a delivery: a card
 // is either sent as it was, or dismissed/edited before any flush reads it.
 func (e *Engine) Dismiss(id string) error {
+	if c, ok := e.d.Queue.Get(id); ok && c.Kind == queue.KindPatch {
+		return e.DiscardPatch(id) // x on a patch card discards the patch too
+	}
 	e.dmu.Lock()
 	defer e.dmu.Unlock()
 	c, ok := e.d.Queue.Get(id)
@@ -113,6 +125,9 @@ func (e *Engine) Edit(id, body string) error {
 	e.dmu.Lock()
 	defer e.dmu.Unlock()
 	before, ok := e.d.Queue.Get(id)
+	if ok && before.Kind == queue.KindPatch {
+		return errors.New("a patch card can't be edited: discard it and draft again")
+	}
 	if err := e.d.Queue.Edit(id, body); err != nil {
 		return err
 	}
@@ -159,6 +174,9 @@ func (e *Engine) poll() {
 }
 
 func (e *Engine) dropPane(paneID string) {
+	// First: a draft running for this pane ends without a card or a charge,
+	// even if the pane id is reused by a new attachment.
+	e.abandonDrafts(paneID, "")
 	e.abandonCouncil(paneID) // a closed pane gets no council card
 	e.unwatch(paneID)
 	// Orphan cards first: the attachment disappearing is the visible signal that
@@ -172,6 +190,8 @@ func (e *Engine) dropPane(paneID string) {
 	// attachment: a run ending now either lands before the reset or sees the
 	// pane gone, and a reused pane id inherits no spend or status.
 	e.mu.Lock()
+	e.abandonDraftsLocked(paneID, "") // same section as the delete (see Draft)
+	e.gens[paneID]++
 	_ = e.d.Usage.ResetPane(paneID)
 	_ = e.d.Attachments.Delete(paneID)
 	for k := range e.status {

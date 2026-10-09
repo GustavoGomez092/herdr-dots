@@ -38,7 +38,7 @@ func (e *Engine) ReloadConfig() {
 	c, err := config.Load(e.d.ConfigPath)
 	if err != nil {
 		c = e.config()
-		c.InjectEnabled, c.MemoryEnabled = false, false
+		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled = false, false, false
 		e.d.Logf("config: %v (keeping the last good settings; inject and memory disabled until it is fixed)", err)
 	}
 	e.cfg.Store(&c)

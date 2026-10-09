@@ -19,11 +19,13 @@ import (
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/lockfile"
+	"herdr-dots/internal/patchstore"
 	"herdr-dots/internal/paths"
 	"herdr-dots/internal/platform"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/transcript"
+	"herdr-dots/internal/worktree"
 )
 
 const maxLogBytes = 5 << 20
@@ -196,6 +198,10 @@ func buildEngine(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(st
 
 		Memory:         memoryStoreFor(p, cfg, logf),
 		ResolveProject: resolveProject,
+
+		Patches:      patchstore.Open(p.PatchesDir()),
+		WorktreesDir: p.WorktreesDir(),
+		Git:          worktree.Git{},
 	}), nil
 }
 
