@@ -419,6 +419,36 @@ func TestAttachUnknownDotFails(t *testing.T) {
 	}
 }
 
+// Attaching another dot must not overwrite updates made to the attachment
+// while Attach was reading the transcript (pause, failures, cooldown, detach).
+func TestAttachDoesNotLoseConcurrentAttachmentUpdates(t *testing.T) {
+	r := newRig(t, dot("Security", dots.ModeQueue), dot("Frontend", dots.ModeQueue))
+	r.attach(t, "security")
+	rd := r.readers["s1"]
+	rd.arm()
+	done := make(chan error, 1)
+	go func() { done <- r.e.Attach(context.Background(), pane, []string{"frontend"}) }()
+	select {
+	case <-rd.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Attach never read the transcript")
+	}
+	if err := r.e.SetPaused(pane, "security", true); err != nil { // e.g. runFailed stopping the dot
+		t.Fatal(err)
+	}
+	close(rd.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	a, _ := r.atts.Get(pane)
+	if da := a.Find("security"); da == nil || !da.Paused {
+		t.Fatalf("pause made during Attach was lost: %+v", a.Dots)
+	}
+	if a.Find("frontend") == nil {
+		t.Fatalf("frontend not attached: %+v", a.Dots)
+	}
+}
+
 // Dots attach only to agent panes (not a shell, not the Dots pane itself).
 func TestAttachToPaneWithoutAgentFails(t *testing.T) {
 	r := newRig(t, dot("Security", dots.ModeQueue))

@@ -67,6 +67,25 @@ func TestUsage(t *testing.T) {
 	}
 }
 
+func TestAttachmentsUpsert(t *testing.T) {
+	s, _ := OpenAttachments(filepath.Join(t.TempDir(), "attachments.json"))
+	add := func(slug string) func(*Attachment) {
+		return func(a *Attachment) { a.Dots = append(a.Dots, DotAttachment{Slug: slug}) }
+	}
+	if err := s.Upsert(Attachment{PaneID: "w1:p1", Agent: "claude"}, add("a")); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Update("w1:p1", func(a *Attachment) { a.Find("a").Paused = true })
+	// An existing attachment is updated in place; the base is ignored.
+	if err := s.Upsert(Attachment{PaneID: "w1:p1", Agent: "other"}, add("b")); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.Get("w1:p1")
+	if a.Agent != "claude" || len(a.Dots) != 2 || !a.Find("a").Paused || a.Find("b") == nil {
+		t.Fatalf("upsert %+v", a)
+	}
+}
+
 func TestUsageResetDot(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "usage.json")
 	u, _ := OpenUsage(p)

@@ -191,27 +191,34 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 		}
 	}
 	r := e.reader(att)
-	att.Source = r.Source()
 	turns, err := r.Turns(ctx)
 	if err != nil {
 		e.d.Logf("pane %s: initial transcript read: %v", paneID, err)
 	}
 	e.mu.Lock()
+	add := make([]state.DotAttachment, 0, len(slugs))
 	for _, slug := range slugs {
 		d, ok := e.dots[slug]
 		if !ok {
 			e.mu.Unlock()
 			return fmt.Errorf("unknown dot %q", slug)
 		}
-		if att.Find(slug) != nil {
-			continue
-		}
 		// Catch-up: the newest Context.Turns turns count as "new" for this dot.
-		att.Dots = append(att.Dots, state.DotAttachment{Slug: slug, LastSeenTurn: max(0, len(turns)-d.Context.Turns)})
-		delete(e.warned, key{paneID, slug})
+		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: max(0, len(turns)-d.Context.Turns)})
 	}
+	// Update-or-create in one store call: runFailed, cooldown or Detach updates
+	// made while the transcript was read are kept, not overwritten.
+	err = e.d.Attachments.Upsert(att, func(x *state.Attachment) {
+		x.Source = r.Source()
+		for _, da := range add {
+			if x.Find(da.Slug) == nil {
+				x.Dots = append(x.Dots, da)
+				delete(e.warned, key{paneID, da.Slug})
+			}
+		}
+	})
 	e.mu.Unlock()
-	if err := e.d.Attachments.Put(att); err != nil {
+	if err != nil {
 		return err
 	}
 	e.subscribe(paneID)

@@ -120,6 +120,21 @@ func (s *Attachments) Delete(paneID string) error {
 	return writeJSON(s.path, s.m)
 }
 
+// Upsert applies fn to the stored attachment for base.PaneID, or to base when
+// none exists, and saves, atomically. fn must not call back into the store.
+func (s *Attachments) Upsert(base Attachment, fn func(*Attachment)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.m[base.PaneID]
+	if !ok {
+		a = base
+	}
+	a = a.clone()
+	fn(&a)
+	s.m[a.PaneID] = a
+	return writeJSON(s.path, s.m)
+}
+
 // Update applies fn to the stored attachment and saves. fn must not call back
 // into the store.
 func (s *Attachments) Update(paneID string, fn func(*Attachment)) error {
