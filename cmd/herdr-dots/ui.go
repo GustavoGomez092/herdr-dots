@@ -103,7 +103,11 @@ func runPane([]string) error {
 	if err != nil {
 		return err
 	}
-	prog := tea.NewProgram(pane.New(resolveTarget(p.DotsPanesFile()), cl).WithOpener(paneOpener), tea.WithAltScreen())
+	m := pane.New(resolveTarget(p.DotsPanesFile()), cl).WithOpener(paneOpener)
+	if hc, err := herdr.NewFromEnv(); err == nil {
+		m = m.WithPatchViewer(patchViewer(hc)) // v and A on a patch card open the diff pane
+	}
+	prog := tea.NewProgram(m, tea.WithAltScreen())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pumpSnapshots(ctx, p, cl, prog.Send, func(s view.Snapshot) tea.Msg { return pane.SnapshotMsg(s) }, pane.DisconnectedMsg{})
