@@ -129,7 +129,7 @@ func PlanInstall(c Client, env Env, bin, configDir, stateDir string) (Plan, erro
 	}
 	switch c {
 	case ClientClaude:
-		return planClaudeInstall(env, bin, configDir, stateDir), nil
+		return planClaudeInstall(env, bin, configDir, stateDir)
 	case ClientCodex:
 		return planCodexInstall(env, bin, configDir, stateDir)
 	}
@@ -144,7 +144,11 @@ func PlanRemove(c Client, env Env) (Plan, error) {
 			Commands: []Command{{Args: claudeRemoveArgs()}},
 			Verify:   []string{"claude", "mcp", "list"},
 			Preview:  "Claude Code removes the \"" + ServerName + "\" entry from " + env.ClaudeConfigPath() + ".\n"}
-		if _, found := readClaudeEntry(p.Config); !found {
+		_, found, err := readClaudeEntry(p.Config)
+		if err != nil {
+			return Plan{}, err
+		}
+		if !found {
 			// `claude mcp remove` would exit 1 ("No MCP server named …").
 			return Plan{Client: c, Remove: true, Config: p.Config, Nothing: true,
 				Preview: "not installed in " + p.Config + "\n"}, nil
@@ -186,7 +190,7 @@ func claudeRemoveArgs() []string {
 // planClaudeInstall removes any older entry (allowed to fail) and adds the
 // server with the pane variables forwarded through ${VAR:-} expansion, so a
 // Claude Code started outside Herdr hands the server empty values.
-func planClaudeInstall(env Env, bin, configDir, stateDir string) Plan {
+func planClaudeInstall(env Env, bin, configDir, stateDir string) (Plan, error) {
 	add := []string{"claude", "mcp", "add", "--scope", "user"}
 	for _, k := range ForwardEnv {
 		add = append(add, "--env", k+"=${"+k+":-}")
@@ -196,10 +200,14 @@ func planClaudeInstall(env Env, bin, configDir, stateDir string) Plan {
 	p := Plan{Client: ClientClaude, Config: env.ClaudeConfigPath(),
 		Commands: []Command{{Args: claudeRemoveArgs(), MayFail: true}, {Args: add}},
 		Verify:   []string{"claude", "mcp", "get", ServerName}}
-	if e, found := readClaudeEntry(p.Config); found && claudeEntryMatches(e, bin, configDir, stateDir) {
+	e, found, err := readClaudeEntry(p.Config)
+	if err != nil {
+		return Plan{}, err
+	}
+	if found && claudeEntryMatches(e, bin, configDir, stateDir) {
 		// Already as planned: no commands and no backup of a multi-MB file.
 		return Plan{Client: ClientClaude, Config: p.Config, Nothing: true, Verify: p.Verify,
-			Preview: "already installed in " + p.Config + "\n"}
+			Preview: "already installed in " + p.Config + "\n"}, nil
 	}
 	if exists(p.Config) {
 		p.Backups = []string{p.Config}
@@ -212,7 +220,7 @@ func planClaudeInstall(env Env, bin, configDir, stateDir string) Plan {
 		pv.WriteString("+ " + l + "\n")
 	}
 	p.Preview = pv.String()
-	return p
+	return p, nil
 }
 
 func claudeEnv() map[string]string {
@@ -233,25 +241,34 @@ type claudeEntry struct {
 
 // readClaudeEntry reads (never writes) the user-scope entry from Claude's
 // config. found is true when the entry exists, and also when the file can't
-// be parsed: then the claude CLI decides.
-func readClaudeEntry(path string) (claudeEntry, bool) {
+// be parsed: then the claude CLI decides. A missing file is "not installed";
+// a file that exists but can't be read is an error, never "not installed".
+func readClaudeEntry(path string) (claudeEntry, bool, error) {
 	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return claudeEntry{}, false, nil
+	}
 	if err != nil {
-		return claudeEntry{}, false
+		why := err
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			why = pe.Err
+		}
+		return claudeEntry{}, false, fmt.Errorf("can't read %s: %v; fix it or remove manually with `%s`", path, why, strings.Join(claudeRemoveArgs(), " "))
 	}
 	var f struct {
 		MCPServers map[string]json.RawMessage `json:"mcpServers"`
 	}
 	if json.Unmarshal(b, &f) != nil {
-		return claudeEntry{}, true
+		return claudeEntry{}, true, nil
 	}
 	raw, ok := f.MCPServers[ServerName]
 	if !ok {
-		return claudeEntry{}, false
+		return claudeEntry{}, false, nil
 	}
 	var e claudeEntry
 	_ = json.Unmarshal(raw, &e)
-	return e, true
+	return e, true, nil
 }
 
 func claudeEntryMatches(e claudeEntry, bin, configDir, stateDir string) bool {
