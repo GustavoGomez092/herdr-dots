@@ -18,6 +18,13 @@ func TestScanSecretsFindsCredentials(t *testing.T) {
 		{"password = 'S3cr3tPassw0rd!'", "credential assignment"},
 		{`api_key: "AbCdEf123456GhIj"`, "credential assignment"},
 		{"key Zx9Qm2LpT7vR4kW8nB3yH6cJ1fD5gS0a works", "high-entropy string"},
+		{"DB_PASSWORD=Hunter2xyzABC", "credential assignment"},
+		{"STRIPE_SECRET_KEY=abc12345def", "credential assignment"},
+		{`{"api_key": "AbCdEf123456GhIj"}`, "credential assignment"},
+		{"export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "credential assignment"},
+		{"postgres://app:Sup3rS3cretPw@db:5432/x", "url credentials"},
+		{"Authorization: Bearer abcDEF123456ghiJKL789", "bearer token"},
+		{"AIzaSyA1234567890abcdefghijklmnopqrstuv", "google api key"},
 	}
 	for _, c := range cases {
 		found, kind := ScanSecrets(c.text)
@@ -41,6 +48,11 @@ func TestScanSecretsIgnoresLookAlikes(t *testing.T) {
 		"secret = ${STRIPE_KEY}",
 		"api_key: YOUR_API_KEY_HERE",
 		"Auth token: localStorage is unsafe",
+		"password_reset_url=/reset",
+		"token_count=42",
+		"the secret sauce is good",
+		"api_key_header: X-Api-Key",
+		"see http://localhost:8080/docs and https://example.com/a@b",
 	} {
 		if found, kind := ScanSecrets(text); found {
 			t.Errorf("false positive %q (%s)", text, kind)

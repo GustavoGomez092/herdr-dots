@@ -167,3 +167,44 @@ func TestResolveProjectNeedsCwd(t *testing.T) {
 		t.Fatalf("%+v %v", pr, err)
 	}
 }
+
+// An inherited GIT_DIR would override -C and identify the wrong repository.
+func TestResolveProjectIgnoresInheritedGitEnv(t *testing.T) {
+	isolateGit(t)
+	a := newRepo(t, 1)
+	b := newRepo(t, 2)
+	want, err := resolve(t, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(b, ".git"))
+	t.Setenv("GIT_WORK_TREE", b)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(b, ".git", "index"))
+	got, err := resolve(t, a)
+	if err != nil || got.ID != want.ID || got.Root != realPath(a) {
+		t.Fatalf("got %+v %v, want %+v", got, err, want)
+	}
+}
+
+func TestGitEnvStripsHerdrAndGitOverrides(t *testing.T) {
+	in := []string{"PATH=/bin", "HERDR_SOCKET=x", "CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=cli",
+		"CLAUDE_CODE_CHILD_SESSION=1", "GIT_DIR=/x", "GIT_WORK_TREE=/x", "GIT_INDEX_FILE=/x",
+		"GIT_COMMON_DIR=/x", "GIT_OBJECT_DIRECTORY=/x", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/x",
+		"GIT_CONFIG_GLOBAL=/x", "GIT_CONFIG_COUNT=1", "HOME=/h"}
+	out := gitEnv(in)
+	joined := "\n" + strings.Join(out, "\n") + "\n"
+	for _, bad := range []string{"HERDR_", "CLAUDECODE", "CLAUDE_CODE_", "GIT_DIR=", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+		"GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT"} {
+		if strings.Contains(joined, "\n"+bad) {
+			t.Errorf("%s survived: %v", bad, out)
+		}
+	}
+	for _, want := range []string{"PATH=/bin", "HOME=/h", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1"} {
+		if !strings.Contains(joined, "\n"+want+"\n") {
+			t.Errorf("missing %s: %v", want, out)
+		}
+	}
+	if gitEnv(nil) == nil {
+		t.Error("must return a non-nil slice")
+	}
+}

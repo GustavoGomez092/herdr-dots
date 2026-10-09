@@ -31,9 +31,31 @@ var gitTimeout = 5 * time.Second
 func ExecGit(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir, "-c", "core.hooksPath=/dev/null"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = gitEnv(os.Environ())
+	cmd.WaitDelay = 500 * time.Millisecond
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
+}
+
+// gitEnv filters env for a git child: no HERDR_*/Claude session variables, and
+// none of the GIT_* variables that would override -C or the config. (A local
+// filter: importing internal/backend here would be an import cycle.)
+func gitEnv(env []string) []string {
+	out := make([]string, 0, len(env)+3)
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "HERDR_") || strings.HasPrefix(name, "GIT_CONFIG") {
+			continue
+		}
+		switch name {
+		case "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION",
+			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
 }
 
 // ResolveProject identifies the project cwd belongs to: the lowest root commit
@@ -59,7 +81,7 @@ func ResolveProject(ctx context.Context, cwd string, git GitRunner) (Project, er
 	if sh, err := git(ctx, top, "rev-parse", "--is-shallow-repository"); err == nil && sh == "true" {
 		return pathProject(top), errors.New("shallow clone (root commit unstable): using path identity")
 	}
-	out, err := git(ctx, top, "rev-list", "--max-parents=0", "HEAD")
+	out, err := git(ctx, top, "rev-list", "--max-parents=0", "--end-of-options", "HEAD")
 	roots := strings.Fields(out)
 	if err != nil || len(roots) == 0 {
 		return pathProject(top), fmt.Errorf("no commits yet (%v): using path identity", err)

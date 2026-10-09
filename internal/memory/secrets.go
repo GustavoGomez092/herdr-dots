@@ -22,11 +22,19 @@ var secretPatterns = []secretPattern{
 	{"stripe key", regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`)},
 	{"anthropic key", regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_\-]{20,}`)},
 	{"openai key", regexp.MustCompile(`\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}`)},
+	{"google api key", regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}`)},
+	{"url credentials", regexp.MustCompile(`[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@`)},
+	{"bearer token", regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}`)},
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)},
 }
 
-var assignRe = regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\s*[:=]\s*['"]?([A-Za-z0-9_\-+/=!@#^&*.]{8,})`)
+// assignRe matches NAME=value / "name": "value" where NAME contains a secret
+// keyword, with any identifier prefix or suffix (DB_PASSWORD, SECRET_KEY).
+var assignRe = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)[A-Za-z0-9_]*["']?\s*[:=]\s*['"]?([A-Za-z0-9_\-+/=!@#^&*.]{8,})`)
 
+// placeholders mark documentation values. Tradeoff: a long value (24+ runes)
+// with a digit is treated as a real secret even if it contains one (the AWS
+// docs key "...EXAMPLEKEY"): better to refuse a doc sample than store a key.
 var placeholders = []string{"redacted", "example", "placeholder", "xxxx", "changeme", "your", "here", "dummy"}
 
 var entropyTokenRe = regexp.MustCompile(`[A-Za-z0-9+/=_\-]{32,}`)
@@ -55,9 +63,11 @@ func ScanSecrets(text string) (bool, string) {
 
 func secretValue(v string) bool {
 	low := strings.ToLower(v)
-	for _, ph := range placeholders {
-		if strings.Contains(low, ph) {
-			return false
+	if !(len(v) >= 24 && strings.ContainsAny(v, "0123456789")) {
+		for _, ph := range placeholders {
+			if strings.Contains(low, ph) {
+				return false
+			}
 		}
 	}
 	var upper, lower, digit bool
@@ -95,15 +105,18 @@ func highEntropy(tok string) bool {
 }
 
 func shannon(s string) float64 {
-	counts := map[rune]int{}
-	n := 0
-	for _, r := range s {
-		counts[r]++
-		n++
+	// Tokens are ASCII (entropyTokenRe), so a fixed array keeps the sum order,
+	// and so the float result, deterministic.
+	var counts [256]int
+	for i := 0; i < len(s); i++ {
+		counts[s[i]]++
 	}
 	var h float64
 	for _, c := range counts {
-		p := float64(c) / float64(n)
+		if c == 0 {
+			continue
+		}
+		p := float64(c) / float64(len(s))
 		h -= p * math.Log2(p)
 	}
 	return h
