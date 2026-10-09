@@ -69,6 +69,12 @@ type Model struct {
 	// Council (council.go).
 	expandID string                    // council card whose member answers are shown
 	opener   func(target string) error // opens the council popup (WithOpener); nil = unavailable
+
+	// Drafts and patch cards (patch.go).
+	draft   *draftForm       // the gate-1 confirm, when open
+	viewer  PatchViewer      // opens the diff viewer (WithPatchViewer); nil = unavailable
+	ticking bool             // a once-a-second tick runs while drafts run
+	clock   func() time.Time // nil = time.Now
 }
 
 const offlineHint = "offline: actions unavailable until the engine restarts"
@@ -193,7 +199,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ""
 		}
 		m.reselect()
-		return m, nil
+		m = m.checkDraft()
+		return m.tickIfDrafting()
+	case tickMsg:
+		m.ticking = false
+		return m.tickIfDrafting()
 	case DisconnectedMsg:
 		m.connected, m.seen = false, true
 		return m, nil
@@ -202,6 +212,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		switch {
+		case m.draft != nil:
+			return m.updateDraft(msg)
 		case m.editing:
 			return m.updateEditor(msg)
 		case m.asking:
@@ -293,6 +305,9 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if mm, cmd, ok := m.councilKeys(k); ok {
 		return mm, cmd
 	}
+	if mm, cmd, ok := m.patchKeys(k); ok {
+		return mm, cmd
+	}
 	switch k.String() {
 	case "enter", "a", "x", "e", "s", "m", "p", "d", "r", "M":
 		if !m.connected {
@@ -348,7 +363,7 @@ func (m Model) updateKeys(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		var ids []string
 		for _, c := range m.pane().Cards {
-			if sendable(c) {
+			if sendable(c) && c.Kind != queue.KindPatch { // each patch is its own decision
 				ids = append(ids, c.ID)
 			}
 		}
@@ -462,7 +477,7 @@ func (m Model) View() string {
 	}
 	// The project segment gives way first, so the budget and cost tail
 	// survives a narrow pane; one final cut keeps the header on one line.
-	if room := w - len([]rune(lead)) - len([]rune(tail)); room < len([]rune(project)) {
+	if room := w - lipgloss.Width(lead) - lipgloss.Width(tail); room < lipgloss.Width(project) {
 		if room <= 0 {
 			project = ""
 		} else {
@@ -500,6 +515,10 @@ func (m Model) View() string {
 		queueRule = style.Dim.Render(trunc(councilProgress(*p.Council), max(10, w))) + "\n" + queueRule
 	}
 
+	if len(p.Drafts) > 0 {
+		queueRule = draftProgress(p, m.clockNow(), w) + queueRule // never scrolls away either
+	}
+
 	// Body: cards, feed and help, scrolled so the selected card stays visible.
 	b.Reset()
 	selStart, selEnd := -1, -1
@@ -513,7 +532,7 @@ func (m Model) View() string {
 		if sel {
 			marker = "▸"
 		}
-		tags := councilTags(c)
+		tags := councilTags(c) + patchTags(c)
 		switch {
 		case c.Status == queue.StatusOrphaned:
 			tags += " [orphaned]"
@@ -522,20 +541,27 @@ func (m Model) View() string {
 		case c.Mode == string(dots.ModeSuggest):
 			tags += " [suggestion]"
 		}
-		b.WriteString(fmt.Sprintf("%s%s %s  %s · turn %d%s\n", marker, c.Glyph, style.Severity(c.Severity).Render(strings.ToUpper(c.Severity)), c.DotName, c.Turn, tags))
-		text := c.Body
+		label := cardLabel(c)
+		room := max(10, w) - lipgloss.Width(marker+c.Glyph+" "+label+"  ")
+		who := trunc(fmt.Sprintf("%s · turn %d%s", c.DotName, c.Turn, tags), max(1, room))
+		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", marker, c.Glyph, style.Severity(c.Severity).Render(label), who))
+		text := patchText(c)
 		if !sel {
 			text = trunc(strings.ReplaceAll(text, "\n", " "), max(20, w*2))
 		}
 		b.WriteString(body.Render("  "+text) + "\n")
 		if c.Error != "" {
-			b.WriteString(style.Err.Render("  delivery failed: "+c.Error) + "\n")
+			b.WriteString(wrapStyled(style.Err, "  delivery failed: "+c.Error, m.width) + "\n")
 		}
 		b.WriteString(councilDetail(c, m.expandID == c.ID, body))
+		b.WriteString(patchDetail(c, w))
 		if sel {
-			if c.Mode == string(dots.ModeSuggest) {
+			switch {
+			case c.Kind == queue.KindPatch:
+				b.WriteString(style.Dim.Render(trunc(patchHint, max(10, w))) + "\n")
+			case c.Mode == string(dots.ModeSuggest):
 				b.WriteString(style.Dim.Render("  x dismiss · copy the text to use it") + "\n")
-			} else {
+			default:
 				b.WriteString(style.Dim.Render("  ⏎ send  e edit  x dismiss"+councilHint(c)) + "\n")
 			}
 		}
@@ -556,12 +582,21 @@ func (m Model) View() string {
 		}
 	}
 	if m.showHelp {
-		b.WriteString(rule("HELP", w) + helpText + "\n" + councilHelp + "\n")
+		b.WriteString(rule("HELP", w) + helpText + "\n" + councilHelp + "\n" + patchHelp + "\n")
 	}
 	bodyText := b.String()
 
 	// Footer: open editors and the status line, always on screen.
 	b.Reset()
+	if m.draft != nil {
+		// The confirm has screen priority: its header always shows, so the
+		// roster and the cards give way (they are cut below).
+		avail := 0
+		if m.height > 0 {
+			avail = m.height - lineCount(top) - lineCount(queueRule) - 1 // -1: the status line
+		}
+		b.WriteString(m.draftView(w, avail))
+	}
 	if m.editing {
 		b.WriteString(rule("EDIT", w) + m.editor.View() + "\n" + style.Dim.Render("ctrl+s save · esc cancel") + "\n")
 	}
@@ -578,11 +613,11 @@ func (m Model) View() string {
 			b.WriteString(rule("REMEMBER", w) + "f accepted finding · r rule: don't raise this again\nc project convention · g this dot everywhere · esc cancel\n")
 		}
 	}
-	footer := "j/k move · ⏎ send · a all · s summon · ? help"
+	footer := trunc("j/k move · ⏎ send · a all · s summon · ? help", max(10, w))
 	if m.status != "" {
 		footer = m.status
 	}
-	b.WriteString(style.Dim.Render(footer))
+	b.WriteString(wrapStyled(style.Dim, footer, m.width))
 	foot := b.String()
 
 	if m.height > 0 {
@@ -598,6 +633,9 @@ func (m Model) View() string {
 	if m.height > 0 {
 		avail := max(1, m.height-lineCount(head)-lineCount(foot))
 		bodyText = window(bodyText, avail, selStart, selEnd)
+		if m.draft != nil {
+			bodyText = ""
+		}
 	}
 	return head + bodyText + foot
 }
@@ -702,4 +740,13 @@ func costPart(detail string) string {
 		return detail[i:]
 	}
 	return ""
+}
+
+// wrapStyled renders s in st wrapped to width w, so lineCount sees the real
+// number of lines. It never cuts text. An unknown width (0) leaves s alone.
+func wrapStyled(st lipgloss.Style, s string, w int) string {
+	if w > 0 {
+		st = st.Width(max(10, w))
+	}
+	return st.Render(s)
 }
