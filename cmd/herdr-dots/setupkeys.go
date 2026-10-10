@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -16,6 +17,9 @@ func runSetupKeys(args []string) error {
 	fs := flag.NewFlagSet("setup-keys", flag.ContinueOnError)
 	yes := fs.Bool("yes", false, "append without asking")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) { // -h: the flag set printed its usage
+			return nil
+		}
 		return err
 	}
 	home, _ := os.UserHomeDir()
