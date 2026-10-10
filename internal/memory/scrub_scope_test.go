@@ -66,6 +66,24 @@ func TestForgetScrubMatchesACardOnlyInItsSessionAndDot(t *testing.T) {
 	}
 }
 
+// M17: an entry whose evidence names a card but no session (written before
+// sessions were recorded, or hand-edited) still scrubs its card's lines on
+// its dot; another dot's line with that card id stays.
+func TestForgetScrubMatchesACardWhenTheEntryHasNoSession(t *testing.T) {
+	s := testStore(t)
+	appendLines(t, s,
+		Outcome{Dot: "security", Session: "s1", Card: "4", Kind: OutcomeDismissed, Body: "Session cookies lack SameSite."},
+		Outcome{Dot: "frontend", Session: "s1", Card: "4", Kind: OutcomeSent, Body: "Buttons need an accessible label."},
+	)
+	e := mustAdd(t, s, pid, Entry{Scope: ScopeDot, Dot: "security", Kind: KindDismissed, Text: "Rate limits on the login form are handled upstream.", Source: SourceOutcome, Evidence: Evidence{Card: "4"}})
+	if err := s.Forget(pid, e.Ref(), true); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cards(t, s), []string{"frontend/s1/4"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ledger %v, want %v", got, want)
+	}
+}
+
 // M17: an "Applied patch: …" finding merges every card that applied the same
 // patch; a scrub also removes the lines of the earlier cards, not only the
 // card in its evidence.

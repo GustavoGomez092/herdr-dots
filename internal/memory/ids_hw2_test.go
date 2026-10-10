@@ -73,6 +73,42 @@ func TestHandEditedNonCanonicalIDsAreRenumberedNotLost(t *testing.T) {
 	}
 }
 
+// A hand-edited id whose number overflows an int is given a fresh id too:
+// the entry is kept, every id stays one a ref can name, and the next id the
+// store hands out is a small positive number, not a wrapped one.
+func TestAnOverflowingHandEditedIDIsRenumberedNotLost(t *testing.T) {
+	s := testStore(t)
+	path := s.scopePath(pid, ScopeDot, "security")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"version":1,"next":2,"entries":[
+{"id":"m2","kind":"note","status":"active","source":"user","text":"canonical two","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"},
+{"id":"m99999999999999999999999","kind":"finding","status":"active","source":"user","text":"huge id","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}
+]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	added := mustAdd(t, s, pid, Entry{Scope: ScopeDot, Dot: "security", Kind: KindNote, Text: "added after", Source: SourceUser})
+	es := list(t, s, pid, Filter{Scope: ScopeDot, Dot: "security"})
+	if len(es) != 3 {
+		t.Fatalf("entries %+v", es)
+	}
+	byText := map[string]string{}
+	for _, e := range es {
+		byText[e.Text] = e.ID
+		if _, err := ParseRef("d:"+e.ID, "security"); err != nil {
+			t.Errorf("entry %q has an id no ref can name: %s", e.Text, e.ID)
+		}
+		if got, err := s.Get(pid, e.Ref()); err != nil || got.Text != e.Text {
+			t.Errorf("entry %q (%s) can't be fetched by its ref: %+v %v", e.Text, e.ID, got, err)
+		}
+	}
+	if byText["canonical two"] != "m2" || byText["huge id"] != "m3" || added.ID != "m4" {
+		t.Fatalf("ids %v, added %s; want m2, m3 and m4", byText, added.ID)
+	}
+}
+
 // M20: prepare refuses an unknown source instead of storing it.
 func TestAddRefusesAnUnknownSource(t *testing.T) {
 	s := testStore(t)

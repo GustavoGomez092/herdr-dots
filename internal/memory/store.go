@@ -243,13 +243,17 @@ func (f *scopeFile) find(id string) int {
 }
 
 // idNum is the number of a canonical id (validEntryID), else 0: an entry
-// with a hand-edited id ("m+5", "m005") gets a fresh one, like an entry
-// without an id, so no two entries share a number (M20).
+// with a hand-edited id ("m+5", "m005", or a number too large for an int)
+// gets a fresh one, like an entry without an id, so no two entries share a
+// number (M20).
 func idNum(id string) int {
 	if !validEntryID(id) {
 		return 0
 	}
-	n, _ := strconv.Atoi(id[1:])
+	n, err := strconv.Atoi(id[1:])
+	if err != nil {
+		return 0 // too large for an int: a fresh id, never a wrapped one
+	}
 	return n
 }
 
@@ -1571,8 +1575,11 @@ func (s *Store) scrubLedgerLocked(p string, e Entry) (int, error) {
 			sameDot := e.Scope == ScopeProject || o.Dot == e.Dot
 			// Card ids restart in every Herdr session: a card id names the
 			// entry's own card only in its session, and only on its dot's
-			// lines when a dot proposed the entry (M17).
-			ownCard := e.Evidence.Card != "" && o.Card == e.Evidence.Card && o.Session == e.Evidence.Session &&
+			// lines when a dot proposed the entry (M17). Evidence without a
+			// session (an older or hand-edited entry) matches the card id in
+			// any session.
+			ownCard := e.Evidence.Card != "" && o.Card == e.Evidence.Card &&
+				(e.Evidence.Session == "" || o.Session == e.Evidence.Session) &&
 				(e.Dot == "" || o.Dot == e.Dot)
 			hit := sameDot && (ownCard || says(o.Body) || says(o.Edited))
 			if hit {
