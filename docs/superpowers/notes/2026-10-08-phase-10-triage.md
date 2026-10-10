@@ -21,7 +21,7 @@ This is release candidate 1.0.0-rc.1, not released.
 
 - `FIXED T9`: fixed in Phase 10 Task 9, with its test ("Round 1 (P10-R7)"
   and "Round 2" mark what its fix rounds did).
-- `FIXED T10 (pending merge)`: fixed in Phase 10 Task 10 (cross-reference;
+- `FIXED T10`: fixed in Phase 10 Task 10 (cross-reference;
   Task 10 runs in parallel and owns those files). Its tests are not on this
   branch yet; the controller verifies them at merge.
 - `FIXED EARLIER`: a deferred line that a later phase already resolved before
@@ -279,16 +279,16 @@ phase's final review or fix wave; "parked" is a "Parked → Phase 10" line;
 | Q2 | `Add` accepts any `Status`; `Open` trusts the persisted `next`; `save()` reorders cards; test gaps | v1 T10 | ACCEPTED | internal callers; display order is computed |
 | Q3 | Feed `Append` remembers before the write; attachments/usage change memory before `writeJSON` | v1 T11 | ACCEPTED | no data loss on disk |
 | Q4 | The feed loader ignores a scanner error and glues onto a truncated last line | v1 T11 | ACCEPTED | one damaged line, reported |
-| Q5 | `Feed.Recent(n<0)` panics | v1 T11 | FIXED T10 (pending merge) | `TestOpenFeedMakesAnOldLooseFileOwnerOnly` |
+| Q5 | `Feed.Recent(n<0)` panics | v1 T11 | FIXED T10 | `TestOpenFeedMakesAnOldLooseFileOwnerOnly` |
 | Q6 | Feed rotation rename error dropped | v1 T11 | ACCEPTED | the feed keeps appending to the current file |
-| Q7 | `O_CREATE` doesn't tighten an existing feed file's mode | v1 T11 | FIXED T10 (pending merge) | `TestOpenFeedMakesAnOldLooseFileOwnerOnly` |
+| Q7 | `O_CREATE` doesn't tighten an existing feed file's mode | v1 T11 | FIXED T10 | `TestOpenFeedMakesAnOldLooseFileOwnerOnly` |
 | Q8 | Token sums, `List` deep copy and file modes untested; tests discard errors | v1 T11 | ACCEPTED | test-only; Phase 6 added `platformtest.AssertPrivateFile` checks |
 | Q9 | No parent-directory fsync after an atomic write | v1 T3 | ACCEPTED | the rename is atomic; a power loss can lose the last write, not corrupt it |
 | Q10 | Usage dollars are float64; no concurrency test | P4 T6 | ACCEPTED | the daily budget uses int64 microdollars (P8); session sums are display-grade |
 | Q11 | Inbox claims compare-and-delete by token; Origin whitelist not tied to `state.Run*`; corrupt inbox asides not cleaned; `Add` uses `time.Now` | P8 T7 | ACCEPTED | a suspend past the TTL duplicates a card, never loses one |
 | Q12 | Daily asides: an aside dated after today, a stale side file with today's aside, an unparseable aside | P8 T3 parked | ACCEPTED | conservative: each case blocks or counts as a day already used, except a clock stepped back across a crash (one extra day's budget at most) |
 | Q13 | No cross-session daily reservation; the daily toast is per engine | P8 parked, P8 NOT in scope | ACCEPTED | overshoot of at most one run per session |
-| Q14 | More than 100 visible cards: the pane didn't say how many were hidden | Phase 10 | FIXED T10 (pending merge) | Task 10 carry-over: QUEUE count = `len(Cards)+HiddenCards` |
+| Q14 | More than 100 visible cards: the pane didn't say how many were hidden | Phase 10 | FIXED T10 | Task 10 carry-over: QUEUE count = `len(Cards)+HiddenCards` |
 | Q15 | Cards past the 100-card snapshot cap wait unseen until earlier ones resolve | Phase 10 (F9) | ACCEPTED | snapshot budget; a card is shown whole or not at all |
 
 ### 6. IPC and the Herdr client
@@ -467,7 +467,7 @@ phase's final review or fix wave; "parked" is a "Parked → Phase 10" line;
 | H10 | `scanSeq` is never cleaned | P9 parked | ACCEPTED | a few bytes per checkout |
 | H11 | In-limit hostile project files cost about 60 ms per 100 MB to pre-scan | P9 parked (final) | ACCEPTED | no key or table count cap; bounded by the size limits |
 | H12 | Templates' delivery mode isn't pinned by a test | P9 parked (final) | ACCEPTED | test-only |
-| H13 | `trustAt` doesn't requeue when the new grant drops inject; `untrustAt` doesn't requeue across every rescanned checkout | P10 carry to Task 10 | FIXED T10 (pending merge) | Task 10 (engine `projectdots.go`) |
+| H13 | `trustAt` doesn't requeue when the new grant drops inject; `untrustAt` doesn't requeue across every rescanned checkout | P10 carry to Task 10 | FIXED T10 | Task 10 (engine `projectdots.go`) |
 
 ### 16. UI: pane, manage, summon, memory screen
 
@@ -487,7 +487,7 @@ phase's final review or fix wave; "parked" is a "Parked → Phase 10" line;
 | U12 | Fixed 64-column editor layout | v1 T19a | ACCEPTED | cosmetic |
 | U13 | Manage checkboxes seeded once: a dot attached elsewhere after the popup opened can be detached by apply | v1 T19a | ACCEPTED | detach is reversible, and apply does what the checkboxes on screen show |
 | U14 | Manage edit/Check/Validate/esc paths untested; nil vs empty globs; stale save messages can cross into a newly opened editor; a Logf-only assertion | v1 T19a | ACCEPTED | test-only or cosmetic |
-| U15 | memui approve screen clipped in tiny popups | P2-R9 | FIXED T10 (pending merge) | `TestApproveShowsTheFullProposalAndNeedsY` (extended) |
+| U15 | memui approve screen clipped in tiny popups | P2-R9 | FIXED T10 | `TestApproveShowsTheFullProposalAndNeedsY` (extended) |
 | U16 | memui forget-all target empty when the project name cleans to nothing | P2 T11 | FIXED EARLIER | Phase 2 final fix 12 |
 | U17 | memui long status lines overflow the viewport; edit-mode status persists; `q` quits | P2 T11 | ACCEPTED | cosmetic |
 | U18 | memui out-of-order loads | P2 T11 | ACCEPTED | approve checks the text the developer saw |
@@ -510,10 +510,10 @@ phase's final review or fix wave; "parked" is a "Parked → Phase 10" line;
 | L8 | Backup names have 1 s resolution; empty backup when the config is missing | v1 T21 | ACCEPTED | the backup is written before the change |
 | L9 | `Plan` misses a plugin action already bound to another key | v1 T21 | ACCEPTED | the developer sees the plan first |
 | L10 | `runSetupKeys` untested; `-h` surfaces `ErrHelp` | v1 T21 | ACCEPTED | test or message only |
-| L11 | `dots.Load`/`Delete` don't sanitize the slug | v1 T4 | FIXED T10 (pending merge) | `TestSlugsThatAreNotFileNamesAreRefused` |
+| L11 | `dots.Load`/`Delete` don't sanitize the slug | v1 T4 | FIXED T10 | `TestSlugsThatAreNotFileNamesAreRefused` |
 | L12 | `Save(create=true)` Stat-then-write TOCTOU | v1 T4 | ACCEPTED | local, one user |
 | L13 | `Templates()` silently drops a broken template; dots test gaps | v1 T4 | ACCEPTED | templates are embedded and tested |
-| L14 | `TruncateRunes(n<=0)` panics | v1 T13 | FIXED T10 (pending merge) | `TestTruncateRunesNeverPanics` |
+| L14 | `TruncateRunes(n<=0)` panics | v1 T13 | FIXED T10 | `TestTruncateRunesNeverPanics` |
 | L15 | `Send` returns Busy with a PaneGet error; empty-cards path untested | v1 T13 | ACCEPTED | the card stays queued |
 | L16 | Batch truncation can cut later dots' text | v1 T13 | ACCEPTED | inject sends less than approved, never more |
 | L17 | `memory --help` needs the state dir; no `memory_enabled=false` engine wiring test | P2 T15 | ACCEPTED | cosmetic or test-only |
@@ -526,8 +526,8 @@ phase's final review or fix wave; "parked" is a "Parked → Phase 10" line;
 
 | # | Finding | Source | Status | Reason or evidence |
 |---|---|---|---|---|
-| F1 | Flaky `TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies` | P6 note, P8 post-merge, P6 NOT in scope | FIXED T10 (pending merge) | `startStub` stop waits for `ipc.Serve` |
-| F2 | Phase 7 draft tests time out under load | Phase 7 | FIXED T10 (pending merge) | `eventually` waits up to 15 s |
+| F1 | Flaky `TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies` | P6 note, P8 post-merge, P6 NOT in scope | FIXED T10 | `startStub` stop waits for `ipc.Serve` |
+| F2 | Phase 7 draft tests time out under load | Phase 7 | FIXED T10 | `eventually` waits up to 15 s |
 | F3 | Flaky `TestFinishedPaidReviewIsNotDoubleCounted` | P9 | FIXED EARLIER | controller fix; 100/100 runs |
 | F4 | `TestAskCouncilCountsAsOneAsk` flaked once under load | P9 parked (final) | ACCEPTED | 150 loaded runs green; the likely cause and the fix are written in the known issues |
 | F5 | One unidentified full-suite flake | P9 parked | ACCEPTED | seen once; not reproduced |
