@@ -189,6 +189,10 @@ func TestQueryRoutesAskCouncil(t *testing.T) {
 func TestAskDotRefusesAMemberOfARunningCouncil(t *testing.T) {
 	r, cb := councilRig(t, nil, member("Security", dots.ModeQueue), member("Frontend", dots.ModeQueue), member("Copy", dots.ModeQueue))
 	seat(t, r, "security", "frontend", "copy")
+	// The seated turn is seen now, not by Attach's catch-up: late on a slow
+	// runner (seen on Windows CI), that pass would start the per-turn ask
+	// count over after the non-member ask below counted in it.
+	r.e.processPaneIfIdle(pane)
 	cb.on("Security", step{hang: true})
 	cb.on("Frontend", step{hang: true})
 	convene(t, r, "q", "security", "frontend")
