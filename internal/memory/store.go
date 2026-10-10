@@ -242,8 +242,11 @@ func (f *scopeFile) find(id string) int {
 	return slices.IndexFunc(f.Entries, func(e Entry) bool { return e.ID == id })
 }
 
+// idNum is the number of a canonical id (validEntryID), else 0: an entry
+// with a hand-edited id ("m+5", "m005") gets a fresh one, like an entry
+// without an id, so no two entries share a number (M20).
 func idNum(id string) int {
-	if !strings.HasPrefix(id, "m") {
+	if !validEntryID(id) {
 		return 0
 	}
 	n, _ := strconv.Atoi(id[1:])
@@ -368,6 +371,9 @@ func (s *Store) prepare(e Entry) (Entry, error) {
 	}
 	if e.Source == "" {
 		e.Source = SourceUser
+	}
+	if !e.Source.Valid() {
+		return e, fmt.Errorf("%w: source %q", ErrInvalid, e.Source)
 	}
 	if e.Scope == ScopeProject && e.Dot != "" && !ValidSlug(e.Dot) {
 		return e, fmt.Errorf("%w: dot %q", ErrInvalid, e.Dot)
@@ -1345,6 +1351,11 @@ func (s *Store) DeleteDot(slug string) (DotDeletion, error) {
 			}
 			return errors.Join(perrs...)
 		}))
+		// A Purge that ran while we waited left nothing; taking the lock
+		// recreated the directory with just memory.lock. Remove it (M36).
+		if ents, err := os.ReadDir(dir); err == nil && len(ents) == 1 && ents[0].Name() == "memory.lock" {
+			removeBareLock(dir, filepath.Join(dir, "memory.lock"))
+		}
 	}
 	return out, errors.Join(errs...)
 }
@@ -1451,11 +1462,20 @@ func (s *Store) appendLedgerLocked(p string, o Outcome) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.ledgerPath(p), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(s.ledgerPath(p), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
-	_, werr := f.Write(append(line, '\n'))
+	buf := append(line, '\n')
+	// A crash can leave a half-written last line; start on a fresh line so
+	// the new line is not glued to it and lost with it (M19).
+	if st, err := f.Stat(); err == nil && st.Size() > 0 {
+		var last [1]byte
+		if _, err := f.ReadAt(last[:], st.Size()-1); err == nil && last[0] != '\n' {
+			buf = append([]byte{'\n'}, buf...)
+		}
+	}
+	_, werr := f.Write(buf)
 	return errors.Join(werr, f.Close())
 }
 
@@ -1536,11 +1556,25 @@ func (s *Store) scrubLedgerLocked(p string, e Entry) (int, error) {
 		if err != nil {
 			return err
 		}
+		// An "Applied patch: …" finding merged every card that applied the
+		// same patch; compare those cards' bodies with the text after the
+		// prefix so the earlier cards' lines go too (M17).
+		text := e.Text
+		if t, ok := strings.CutPrefix(e.Text, appliedPrefix); ok && e.Scope == ScopeDot {
+			text = t
+		}
+		says := func(body string) bool {
+			return body != "" && (SuppressScore(body, e.Text) >= 0.8 || SuppressScore(body, text) >= 0.8)
+		}
 		kept := all[:0]
 		for _, o := range all {
 			sameDot := e.Scope == ScopeProject || o.Dot == e.Dot
-			hit := sameDot && ((e.Evidence.Card != "" && o.Card == e.Evidence.Card) ||
-				SuppressScore(o.Body, e.Text) >= 0.8 || (o.Edited != "" && SuppressScore(o.Edited, e.Text) >= 0.8))
+			// Card ids restart in every Herdr session: a card id names the
+			// entry's own card only in its session, and only on its dot's
+			// lines when a dot proposed the entry (M17).
+			ownCard := e.Evidence.Card != "" && o.Card == e.Evidence.Card && o.Session == e.Evidence.Session &&
+				(e.Dot == "" || o.Dot == e.Dot)
+			hit := sameDot && (ownCard || says(o.Body) || says(o.Edited))
 			if hit {
 				n++
 				continue

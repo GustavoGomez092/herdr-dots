@@ -160,8 +160,10 @@ func ParseRef(s, dot string) (Ref, error) {
 	return Ref{}, fmt.Errorf("%w: memory id %q must start with p:, d: or g:", ErrInvalid, s)
 }
 
+// validEntryID: "m" and a number without a sign or leading zeros (M10),
+// the only form the store hands out.
 func validEntryID(id string) bool {
-	if len(id) < 2 || id[0] != 'm' {
+	if len(id) < 2 || id[0] != 'm' || id[1] == '0' {
 		return false
 	}
 	for _, c := range id[1:] {

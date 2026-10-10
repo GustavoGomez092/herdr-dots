@@ -48,13 +48,17 @@ advice. Control, bidi and other invisible characters are refused in shared dots 
 memory.
 
 **Project dots in a repository:** put dot files in `.herdr-dots/dots/*.toml` at the repository root
-(at most 64 files are read per repository). They show in the library as `project` dots, but a file
+(at most 64 files are read per repository; a file with more than 2,048 `=` and `[` characters,
+far more keys and tables than a dot needs, is listed as invalid and never parsed). They show in the library as `project` dots, but a file
 runs only after you **trust** the exact bytes you saw: `T` in the library (or `herdr-dots dots trust
 <file>`) shows the whole file and the capabilities it asks for, each off until you grant it. Any
 edit makes the file untrusted again and pauses the dot until you trust it again; an untrusted or
 changed project dot never runs, in the background either. Trust is per project (the repository's
 git root commit): clones share it, but only for byte-identical files, and when trust came from
-another checkout the popup shows "trusted at <path>". Trusted dots still run clamped, with only the
+another checkout the popup shows "trusted at <path>". `herdr-dots dots untrust <file>` revokes
+the trust of that checkout's file: its current bytes (so a clone holding the same bytes loses it
+too), or, when the file changed, is gone or no longer parses, the trust given at that path. Another
+checkout's trust of different bytes stays. Trusted dots still run clamped, with only the
 capabilities you granted. `project_dots_enabled = false` in `config.toml` turns project dots off
 (a malformed `config.toml` does too).
 
