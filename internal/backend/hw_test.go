@@ -26,6 +26,20 @@ func TestCLIBackendWithoutARunnerFailsInsteadOfPanicking(t *testing.T) {
 	}
 }
 
+// B12 (post-rc hardening, test gap): FinishAPI sanitizes the verdict
+// message of an API reply (terminal escapes and bidi controls dropped;
+// memory op text is sanitized by memory.Apply).
+func TestFinishAPISanitizesTheReply(t *testing.T) {
+	text := `{"relevant":true,"severity":"warn","message":"Token \u001b[31mleak\u202e here","remember":[{"op":"add","scope":"dot","kind":"finding","text":"Keep \u001b]0;x\u0007tokens out"}]}`
+	res, err := FinishAPI(req(), APIRun{Text: text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(res.Verdict.Message, "\x1b\u202e") || !strings.Contains(res.Verdict.Message, "leak") {
+		t.Fatalf("message %q", res.Verdict.Message)
+	}
+}
+
 // B12 (post-rc hardening): the unknown-kind error names the kinds there are.
 func TestUnknownKindListsTheKinds(t *testing.T) {
 	_, err := NewWith("claude-api", Options{})
