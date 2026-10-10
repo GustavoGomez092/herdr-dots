@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -89,11 +90,11 @@ func TestCodexUserMCPArgsCannotReplaceTheOverride(t *testing.T) {
 }
 
 // Ruling P10-R7: a codex dot run starts none of the developer's MCP servers,
-// not only the Dots one. Every declared server is disabled, in name order,
-// and a name that isn't a bare TOML key (a dot, a space, a quote) is quoted.
+// not only the Dots one. Ruling P10-R8: Codex reads a `-c` key by splitting
+// it on '=' and then on '.', with no TOML quoting, so every name goes in raw
+// (a space or a quote is fine) and in name order.
 func TestCodexDisablesEveryDeclaredMCPServer(t *testing.T) {
 	cfg := "[mcp_servers.docs]\ncommand = \"docs\"\n\n" +
-		"[mcp_servers.\"acme.search\"]\ncommand = \"s\"\n\n" +
 		"[mcp_servers.'say \"hi\"']\ncommand = \"h\"\n\n" +
 		"[mcp_servers.herdr-dots]\ncommand = \"/bin/herdr-dots\"\n"
 	home := codexHomeWith(t, cfg)
@@ -105,15 +106,35 @@ func TestCodexDisablesEveryDeclaredMCPServer(t *testing.T) {
 		}
 	}
 	want := []string{
-		`mcp_servers."acme.search".enabled=false`,
 		`mcp_servers.docs.enabled=false`,
 		`mcp_servers.herdr-dots.enabled=false`,
-		`mcp_servers."say \"hi\"".enabled=false`,
+		`mcp_servers.say "hi".enabled=false`,
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("overrides %q, want %q", got, want)
 	}
 	if args[len(args)-1] != "-" {
 		t.Fatalf("args %v: the stdin marker stays last", args)
+	}
+}
+
+// Ruling P10-R8: a server name with '.' or '=' can't be disabled from the
+// command line (Codex would split it into other keys and leave the real
+// server enabled), so the codex dot run is refused, naming the server, and
+// nothing starts.
+func TestCodexRefusesAServerItCantDisable(t *testing.T) {
+	for _, name := range []string{"acme.search", "a=b"} {
+		cfg := "[mcp_servers.docs]\ncommand = \"docs\"\n\n[mcp_servers.\"" + name + "\"]\ncommand = \"s\"\n"
+		home := codexHomeWith(t, cfg)
+		run := &fakeRunner{stdout: "{}"}
+		c := CodexCLI{Runner: run, Environ: func() []string { return []string{platform.HomeEnv + "=" + home} }}
+		_, err := c.Run(context.Background(), req())
+		want := "rename MCP server '" + name + "' (Codex can't disable a dotted name from the command line)"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: err = %v, want %q", name, err, want)
+		}
+		if run.got.Name != "" {
+			t.Fatalf("%s: codex was started", name)
+		}
 	}
 }

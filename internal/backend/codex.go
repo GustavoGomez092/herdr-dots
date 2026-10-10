@@ -55,7 +55,8 @@ func (c CodexCLI) BuildCmd(r Request) Cmd {
 	}
 	env := CleanEnv(c.environ())
 	args = append(args, dots.SafeArgs(c.Kind(), r.Args)...) // never override --sandbox
-	args = append(args, codexMCPOff(env)...)                // a dot never starts the Dots MCP server (Phase 5)
+	off, _ := codexMCPOff(env)                              // Run refuses first when a server can't be disabled
+	args = append(args, off...)                             // a dot never starts the developer's MCP servers (P10-R7)
 	args = append(args, "-")
 	return Cmd{Name: c.bin(), Args: args, Dir: r.Cwd, Env: env, Stdin: SystemPrompt(r) + "\n\n" + UserPrompt(r)}
 }
@@ -69,6 +70,9 @@ func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
 		return Result{}, ErrCodexCannotDraft
 	}
 	if err := checkArgs(c.Kind(), r.Args); err != nil {
+		return Result{}, err
+	}
+	if _, err := codexMCPOff(CleanEnv(c.environ())); err != nil {
 		return Result{}, err
 	}
 	cmd := c.BuildCmd(r)

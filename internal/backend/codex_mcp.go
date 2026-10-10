@@ -10,6 +10,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"herdr-dots/internal/platform"
+	"herdr-dots/internal/textutil"
 )
 
 // codexMCPOff returns the -c overrides that disable every MCP server the
@@ -17,23 +18,27 @@ import (
 // loads the user's MCP servers, so a dot would otherwise start them: ours
 // (which refuses every tool anyway: CleanEnv strips HERDR_PANE_ID) and any
 // other, which a read-only dot has no business running. Servers come in
-// name order; a name that isn't a bare TOML key is quoted. Without declared
-// servers nothing is added, so Codex never sees a server entry that has no
-// command.
-func codexMCPOff(env []string) []string {
+// name order. Without declared servers nothing is added, so Codex never sees
+// a server entry that has no command.
+//
+// Codex doesn't read a -c key as TOML: it splits the override on '=' and the
+// key on '.', with no quoting (ruling P10-R8). A name goes in raw, and a name
+// holding '.' or '=' can't be addressed at all: the error names it, and the
+// run is refused rather than started with that server enabled.
+func codexMCPOff(env []string) ([]string, error) {
 	path := codexConfigPath(env)
 	if path == "" {
-		return nil
+		return nil, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var cfg struct {
 		MCPServers map[string]toml.Primitive `toml:"mcp_servers"`
 	}
 	if _, err := toml.Decode(string(data), &cfg); err != nil {
-		return nil
+		return nil, nil
 	}
 	names := make([]string, 0, len(cfg.MCPServers))
 	for name := range cfg.MCPServers {
@@ -42,40 +47,12 @@ func codexMCPOff(env []string) []string {
 	sort.Strings(names)
 	var args []string
 	for _, name := range names {
-		args = append(args, "-c", "mcp_servers."+tomlKey(name)+".enabled=false")
-	}
-	return args
-}
-
-// tomlKey is name as one TOML key segment: bare when it only has A-Z a-z
-// 0-9 _ -, else a basic string with quotes, backslashes and control
-// characters escaped.
-func tomlKey(name string) string {
-	bare := name != ""
-	for _, r := range name {
-		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
-			bare = false
-			break
+		if strings.ContainsAny(name, ".=") {
+			return nil, fmt.Errorf("rename MCP server '%s' (Codex can't disable a dotted name from the command line): a codex dot won't run while it could start that server", textutil.SanitizeModelText(name))
 		}
+		args = append(args, "-c", "mcp_servers."+name+".enabled=false")
 	}
-	if bare {
-		return name
-	}
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range name {
-		switch {
-		case r == '"' || r == '\\':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&b, "\\u%04X", r)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
+	return args, nil
 }
 
 // codexConfigPath is the config.toml a codex child with env reads:

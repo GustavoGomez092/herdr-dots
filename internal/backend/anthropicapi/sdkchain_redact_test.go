@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,25 @@ import (
 	"herdr-dots/internal/config"
 	"herdr-dots/internal/platform"
 )
+
+// The SDK chain also reads a federation identity token and extra headers
+// (which can carry a gateway key); both are handed to Redact by value. A
+// credentials.toml key means the SDK chain is off: only that key is known.
+func TestSDKChainKnownSecretsCoverHeadersAndIdentityToken(t *testing.T) {
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_IDENTITY_TOKEN", "federationidentitytokenzz")
+	t.Setenv("ANTHROPIC_CUSTOM_HEADERS", "X-Gateway-Key: gatewaysecretvaluezz\nX-Team: platform")
+	got := (&Backend{o: backend.Options{SDKCreds: true}}).known("")
+	for _, want := range []string{"federationidentitytokenzz", "gatewaysecretvaluezz"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("known() = %q, lacks %q", got, want)
+		}
+	}
+	if got := (&Backend{o: backend.Options{SDKCreds: true}}).known("credkey123456"); !slices.Equal(got, []string{"credkey123456"}) {
+		t.Errorf("with a credentials key: known() = %q", got)
+	}
+}
 
 // Ruling P10-R7 (S14): with no key in credentials.toml the adapter uses the
 // SDK's own chain (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN). Those values

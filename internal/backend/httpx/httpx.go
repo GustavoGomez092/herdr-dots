@@ -38,7 +38,7 @@ func (e *StatusError) Error() string {
 
 // Client sends JSON requests.
 type Client struct {
-	HTTP    *http.Client      // nil → http.DefaultClient
+	HTTP    *http.Client      // nil → a client that follows redirects only to the same host and scheme (SameHostClient)
 	Headers map[string]string // sent on every request
 	Retries int               // extra attempts on 408/409/429/5xx and network errors
 	Secret  string            // redacted from every error

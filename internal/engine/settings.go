@@ -70,7 +70,7 @@ func (e *Engine) noteDenyConfig(c config.Config) {
 	if !warn {
 		return
 	}
-	msg := fmt.Sprintf("config.toml tool_deny_globs has %d invalid pattern(s) %q: repository tools, drafts and research are off until it is fixed",
+	msg := fmt.Sprintf("config.toml tool_deny_globs has %d invalid pattern(s) %q: API and claude-cli repository tools, drafts, research and commit patches are off until it is fixed (codex dots still read the repository through their sandbox)",
 		len(c.InvalidDenyGlobs), c.InvalidDenyGlobs)
 	e.d.Logf("config: %s", msg)
 	if e.d.Herdr == nil {

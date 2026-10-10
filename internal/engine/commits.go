@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/backend/toolloop"
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/state"
 	"herdr-dots/internal/textutil"
@@ -379,7 +380,7 @@ func (e *Engine) commitContext(cwd, head string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	patch, err := e.commitShow(cwd, head, "--patch")
+	patch, err := e.commitPatch(cwd, head)
 	if err != nil {
 		return "", err
 	}
@@ -388,6 +389,65 @@ func (e *Engine) commitContext(cwd, head string) (string, error) {
 	patch = capRunes(patch, commitPatchChars, "patch")
 	return quoteCommit(textutil.SanitizeModelText(msg + "\n\nFILES CHANGED:\n" + stat + "\n\nPATCH:\n" + patch)), nil
 }
+
+// commitPatch is the commit's patch without the content of any file the deny
+// set covers (toolloop.DefaultDeny, DraftDeny and config tool_deny_globs,
+// case-folded by toolloop.Denied; ruling P10-R9), with a closing line saying
+// how many were left out. The file list (--stat) may still name them.
+//
+// worktree.Git sets GIT_LITERAL_PATHSPECS (no pathspec magic, so no
+// :(exclude)), so a commit with denied files is shown with the other files as
+// literal pathspecs, from the repository's top level (where the paths from
+// --name-only are relative). When those don't fit in commitPathspecBytes
+// (argv is short on Windows), the patch is left out rather than risk a
+// denied file's content. While tool_deny_globs holds an invalid pattern the
+// deny set is unknown, so no patch is sent at all.
+func (e *Engine) commitPatch(cwd, head string) (string, error) {
+	cfg := e.config()
+	if cfg.RepoToolsOff() {
+		return "[patch left out: tool_deny_globs in config.toml has an invalid pattern]", nil
+	}
+	files, err := e.commitFiles(cwd, head)
+	if err != nil {
+		return "", err
+	}
+	deny := append(append(append([]string(nil), toolloop.DefaultDeny...), toolloop.DraftDeny...), cfg.ToolDenyGlobs...)
+	var keep []string
+	denied, size := 0, 0
+	for _, f := range files {
+		if toolloop.Denied(f, deny) {
+			denied++
+			continue
+		}
+		keep = append(keep, f)
+		size += len(f) + 1
+	}
+	if denied == 0 {
+		return e.commitShow(cwd, head, "--patch")
+	}
+	note := fmt.Sprintf("\n[%d denied file(s) left out of this review]", denied)
+	if len(keep) == 0 {
+		return strings.TrimPrefix(note, "\n"), nil
+	}
+	if size > commitPathspecBytes {
+		return fmt.Sprintf("[patch left out: %d denied file(s) among more files than one review can separate]", denied), nil
+	}
+	top, err := e.gitOut(cwd, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	args := []string{"show", "--format=", "--diff-merges=first-parent", "--patch"}
+	args = append(append(args, commitFlags...), "--end-of-options", head, "--")
+	patch, err := e.gitOut(strings.TrimSpace(top), append(args, keep...)...)
+	if err != nil {
+		return "", err
+	}
+	return patch + note, nil
+}
+
+// commitPathspecBytes bounds the literal pathspecs commitPatch passes (well
+// under Windows' 32 KiB command line).
+const commitPathspecBytes = 16 << 10
 
 // capRunes cuts s to n runes and says so. It walks at most n runes of s and
 // never converts the whole text.
