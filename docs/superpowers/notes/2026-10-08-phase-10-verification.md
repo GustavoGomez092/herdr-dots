@@ -111,7 +111,7 @@ The macOS acceptance evidence is in
 [1.0-acceptance.md](1.0-acceptance.md); what the owner still has to do is in
 [ready-to-publish.md](../../release/ready-to-publish.md).
 
-- **Soak.** 8-hour soak, first run (2026-10-09 18:07 → 02:18, commit c1245f9, 8 h busy + 10 min idle): **FAIL** on peak RSS, 579.6 MB against the 80 MB budget. Every other budget passed: idle CPU 0.855% (budget 1%), biggest snapshot 262,144 B (budget 262,144 B), worst burst 8.7 broadcasts a second (cap 10), goroutines 20 -> 21; 138,724 runs, 69,362 cards, at most 210 cards on a pane (189 hidden). Cause, found with a live heap profile: the test's fake Herdr server recorded every request it served, forever. After a GC the engine's whole live heap was 8.8 MB at 8 minutes, about half of it that call log, growing linearly. The engine itself does not leak. With the log off (commit f1fdd30), a 20-minute run peaks at 45.3 MB, against 64.6 MB with it. The soak also polled panes every second, three times the engine's real 3 s default; idle CPU is 1.04% at 1 s and 0.33% at 3 s, so the soak now polls at the real default. Second 8-hour run: running (started 2026-10-10 03:16 on f1fdd30); result recorded when it ends. The longest completed soak
+- **Soak.** 8-hour soak, first run (2026-10-09 18:07 → 02:18, commit c1245f9, 8 h busy + 10 min idle): **FAIL** on peak RSS, 579.6 MB against the 80 MB budget. Every other budget passed: idle CPU 0.855% (budget 1%), biggest snapshot 262,144 B (budget 262,144 B), worst burst 8.7 broadcasts a second (cap 10), goroutines 20 -> 21; 138,724 runs, 69,362 cards, at most 210 cards on a pane (189 hidden). Cause, found with a live heap profile: the test's fake Herdr server recorded every request it served, forever. After a GC the engine's whole live heap was 8.8 MB at 8 minutes, about half of it that call log, growing linearly. The engine itself does not leak. With the log off (commit f1fdd30), a 20-minute run peaks at 45.3 MB, against 64.6 MB with it. The soak also polled panes every second, three times the engine's real 3 s default; idle CPU is 1.04% at 1 s and 0.33% at 3 s, so the soak now polls at the real default. Second run (2026-10-10 03:16 → 11:27, commit f1fdd30, 8 h busy + 10 min idle): **`--- PASS: TestSoak (29430.96s)`**. 124,664 runs, 62,332 cards, at most 138 cards on a pane (117 hidden), 57,052 broadcasts, biggest snapshot 262,142 B (budget 262,144 B), worst burst 8.0 broadcasts a second (cap 10), peak RSS 63.1 MB (budget 80 MB), idle CPU 0.330% (budget 1%), goroutines 20 -> 21. macOS only; the soak on Linux and Windows is part of the three-OS acceptance run. The longest completed soak
   (Task 4, 60 s busy and 30 s idle) passed in 120.12 s: 454 runs, 227 cards,
   117 broadcasts (worst burst 7.1 a second), biggest snapshot 261,793 B
   (budget 262,144 B), peak RSS 33.3 MB, idle CPU 0.443%, goroutines 20 -> 21.
@@ -139,9 +139,9 @@ The macOS acceptance evidence is in
   Low 4 (R8 a follow-up; R9, R10, R11 accepted).
 - **Acceptance run (macOS).** `gofmt`, `go vet`, `go test -race -count=1
   ./...` (48 packages `ok`), `make cross`, the local release end to end and
-  actionlint/shellcheck passed. Of the 41 checklist rows, 34 have macOS
+  actionlint/shellcheck passed. Of the 41 checklist rows, 35 have macOS
   evidence (12 of them with a live or Windows part as a user gate), none
-  fails, 7 wait on user gates or the running soak. Row 13 (memory export,
+  fails, 6 wait on user gates. Row 40 (the 8-hour soak) passed in the second run. Row 13 (memory export,
   import and purge were CLI only) failed in the first run; Task 14 added
   them to the memory screen, and its live popup check is a user gate.
   Linux and Windows columns: user gates.
@@ -160,7 +160,6 @@ User gates that remain (the Blockers of `docs/release/ready-to-publish.md`):
 - License.
 - Name and listing.
 - The acceptance run on Linux and Windows hardware, and on macOS with a real `herdr plugin install`.
-- The 8-hour soak result review.
 - A patched Go in every workflow and a clean govulncheck before any tag (no `toolchain` line in `go.mod`).
 - GitHub Actions pinned by commit SHA.
 - `SECURITY.md` `TODO(publish)` placeholders.
