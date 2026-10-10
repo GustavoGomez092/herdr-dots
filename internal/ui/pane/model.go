@@ -234,6 +234,10 @@ func (m Model) updateEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editing = false
 		return m, nil
 	case "ctrl+s":
+		if !m.connected { // keep the text: it saves once the engine is back
+			m.status = offlineHint
+			return m, nil
+		}
 		m.editing = false
 		return m, m.call(ipc.CmdEdit, ipc.CardArgs{ID: m.editID, Body: m.editor.Value()})
 	}
@@ -248,6 +252,10 @@ func (m Model) updateQuestion(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.asking = false
 		return m, nil
 	case "enter":
+		if !m.connected {
+			m.status = offlineHint
+			return m, nil
+		}
 		m.asking = false
 		m.status = "summoned " + m.askSlug
 		return m, m.call(ipc.CmdSummon, ipc.SummonArgs{PaneID: m.target, Slug: m.askSlug, Question: strings.TrimSpace(m.question.Value())})
@@ -266,6 +274,10 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.remembering, m.reasoning = false, false
 			return m, nil
 		case "enter":
+			if !m.connected {
+				m.status = offlineHint
+				return m, nil
+			}
 			m.remembering, m.reasoning = false, false
 			m.status = "remembered as a rule"
 			return m, m.call(ipc.CmdRemember, ipc.RememberArgs{CardID: m.rememberID, As: "rule", Reason: strings.TrimSpace(m.reason.Value())})
@@ -295,6 +307,10 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		as = "global"
 	default:
+		return m, nil
+	}
+	if !m.connected { // the chooser stays open: it sends once the engine is back
+		m.status = offlineHint
 		return m, nil
 	}
 	m.remembering = false
