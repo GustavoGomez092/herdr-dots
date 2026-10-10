@@ -127,6 +127,11 @@ func TestReadOnlyNoticeNamesTheFiles(t *testing.T) {
 	if !strings.Contains(n, "2 file(s)") || !strings.Contains(n, "queue.json, security.toml") {
 		t.Fatalf("notice %q", n)
 	}
+	// Final review Minor 8: a failed migration is read-only too, so the
+	// toast doesn't blame a newer version alone.
+	if !strings.Contains(n, "written by a newer herdr-dots, or could not be migrated; see engine.log") {
+		t.Fatalf("notice %q must name both reasons and engine.log", n)
+	}
 }
 
 func TestWritingCommandsProtectNewerFiles(t *testing.T) {

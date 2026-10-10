@@ -534,10 +534,10 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) openMemory(dot, name string) tea.Cmd {
 	pv, _ := m.snap.Pane(m.target)
 	target, resolve, st, caller := m.target, m.d.Project, m.d.Memory, m.d.Caller
-	// The memory screen exports into the pane's checkout: the popup's own
-	// working directory is the plugin's install directory, which a
-	// reinstall deletes.
-	root := m.snap.PaneRoots[m.target]
+	// The memory screen exports into the home directory (memui's default),
+	// never the pane's checkout (ruling P10-R13: an export can hold global
+	// and secret-confirmed memory, which `git add -A` would publish) nor
+	// the popup's working directory (the plugin's install directory).
 	return func() tea.Msg {
 		pr := memory.Project{ID: pv.ProjectID, Name: pv.ProjectName}
 		var err error
@@ -562,7 +562,7 @@ func (m Model) openMemory(dot, name string) tea.Cmd {
 			defer cancel()
 			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil)
 		}
-		return memOpenMsg{deps: memui.Deps{Store: st, Project: pr, Dot: dot, DotName: name, Notify: notify, Notice: notice, Cwd: root}}
+		return memOpenMsg{deps: memui.Deps{Store: st, Project: pr, Dot: dot, DotName: name, Notify: notify, Notice: notice}}
 	}
 }
 

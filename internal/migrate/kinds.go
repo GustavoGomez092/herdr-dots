@@ -27,6 +27,13 @@ func siblingLock(file string) string { return file + ".lock" }
 // that compares the old and new file and refuses the upgrade unless every
 // entry's id, order and status and the entry count are unchanged (no entry
 // dropped, no dismissed, archived or forgotten entry made active again).
+//
+// The first migration of any kind: the CLI gate (protectNewerFiles in
+// cmd/herdr-dots, a DryRun) reports files that need a migration as Pending
+// but does not protect them, so until then a writing command could rewrite
+// an older file without its migration and backup. No file can be pending
+// today (every kind is at version 1). Before registering it, make the gate
+// protect that kind's Pending files too, or migrate them first (triage Q16).
 func Default() Set {
 	return Set{Kinds: []Kind{
 		// Config dir (the developer edits these; atomic replace keeps them safe).

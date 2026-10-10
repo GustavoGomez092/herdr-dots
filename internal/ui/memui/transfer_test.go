@@ -15,10 +15,11 @@ import (
 
 var everyStatus = []memory.Status{memory.StatusActive, memory.StatusProposed, memory.StatusArchived}
 
-// openAt opens the memory screen with cwd as its working directory. A zero
+// openAt opens the memory screen with cwd as its home directory (where E
+// exports and relative paths resolve). A zero
 // project opens a dot's global memory only.
 func openAt(st *memory.Store, pr memory.Project, dot, cwd string) tea.Model {
-	m := New(Deps{Store: st, Project: pr, Dot: dot, DotName: "Security", Cwd: cwd})
+	m := New(Deps{Store: st, Project: pr, Dot: dot, DotName: "Security", Home: cwd})
 	return run(m, m.Init())
 }
 
@@ -356,14 +357,70 @@ func fileField(t *testing.T, v string) string {
 	return ""
 }
 
-// Fix round 1: with no working directory given, E defaults to the home
-// directory (the popup's own cwd is the plugin's install directory).
-func TestEmptyCwdDefaultsToHome(t *testing.T) {
+// Ruling P10-R13 (and Task 14 fix round 1): E defaults to the home
+// directory, never the popup's cwd (the install directory) or a checkout.
+func TestExportDefaultsToHome(t *testing.T) {
 	home := fakeHome(t)
 	m := New(Deps{Store: seed(t), Project: herdrDots})
 	v := press(run(m, m.Init()), "E").View()
 	if got := fileField(t, v); !strings.HasPrefix(got, filepath.Join(home, "herdr-dots-memory-herdr-dots-")) {
 		t.Fatalf("the export default %q is not in the home directory %s", got, home)
+	}
+}
+
+// Ruling P10-R13: a relative E path starts in the home directory, never in
+// the popup's working directory (or a repository).
+func TestRelativeExportPathResolvesToHome(t *testing.T) {
+	home := fakeHome(t)
+	m := typePath(press(run(New(Deps{Store: seed(t), Project: herdrDots}), nil), "E"), "out.toml")
+	if _, err := os.Stat(filepath.Join(home, "out.toml")); err != nil {
+		t.Fatalf("a relative export path must land in the home directory: %v (status %q)", err, status(m))
+	}
+}
+
+const wantGitWarning = "this folder is in a git repository; the export may be committed"
+
+// gitRepo makes a temp directory that git would treat as a work tree (a
+// .git entry), with a subdirectory.
+func gitRepo(t *testing.T) (root, sub string) {
+	t.Helper()
+	root = t.TempDir()
+	sub = filepath.Join(root, "notes", "deep")
+	for _, d := range []string{filepath.Join(root, ".git"), sub} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root, sub
+}
+
+// Ruling P10-R13: an export path inside a git work tree shows a warning (the
+// export can hold global and secret-confirmed memory, and `git add -A`
+// would publish it); the developer can still confirm.
+func TestExportPathInAGitRepositoryWarns(t *testing.T) {
+	home := fakeHome(t)
+	root, sub := gitRepo(t)
+	m := press(openAt(seed(t), herdrDots, "", home), "E")
+	if v := ansi.Strip(m.View()); strings.Contains(strings.Join(strings.Fields(v), " "), wantGitWarning) {
+		t.Fatalf("the home default outside a repository must not warn:\n%s", v)
+	}
+	for _, p := range []string{filepath.Join(root, "mem.toml"), filepath.Join(sub, "mem.toml"), filepath.Join(sub, "new-dir", "mem.toml")} {
+		m := press(openAt(seed(t), herdrDots, "", home), "E", "ctrl+u", p)
+		if v := ansi.Strip(m.View()); !strings.Contains(strings.Join(strings.Fields(v), " "), wantGitWarning) {
+			t.Fatalf("%s is in a git work tree; the path screen must warn:\n%s", p, v)
+		}
+	}
+	// A git file (a worktree or submodule checkout) counts too.
+	wt := t.TempDir()
+	writeFile(t, wt, ".git", "gitdir: /elsewhere\n")
+	m = press(openAt(seed(t), herdrDots, "", home), "E", "ctrl+u", filepath.Join(wt, "mem.toml"))
+	if v := ansi.Strip(m.View()); !strings.Contains(strings.Join(strings.Fields(v), " "), wantGitWarning) {
+		t.Fatalf("a checkout with a .git file must warn:\n%s", v)
+	}
+	// Confirming still exports.
+	m = typePath(press(openAt(seed(t), herdrDots, "", home), "E"), filepath.Join(sub, "mem.toml"))
+	if _, err := os.Stat(filepath.Join(sub, "mem.toml")); err != nil {
+		t.Fatalf("enter must still export after the warning: %v (status %q)", err, status(m))
 	}
 }
 

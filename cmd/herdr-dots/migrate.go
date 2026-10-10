@@ -76,7 +76,8 @@ var gateExempt = map[string]string{
 		"kinds are self-guarded (memory.ErrVersion under memory.lock); everything else goes through the engine",
 }
 
-// readOnlyNotice is the toast for files a newer herdr-dots wrote ("" for none).
+// readOnlyNotice is the toast for files kept read-only ("" for none): a
+// newer herdr-dots wrote them, or their migration failed.
 func readOnlyNotice(rep migrate.Report) string {
 	if len(rep.ReadOnly) == 0 {
 		return ""
@@ -85,7 +86,7 @@ func readOnlyNotice(rep migrate.Report) string {
 	for _, f := range rep.ReadOnly {
 		names = append(names, filepath.Base(f))
 	}
-	return fmt.Sprintf("%d file(s) were written by a newer herdr-dots and stay read-only: %s. Update the plugin, or see engine.log.",
+	return fmt.Sprintf("%d file(s) stay read-only (written by a newer herdr-dots, or could not be migrated; see engine.log): %s.",
 		len(names), strings.Join(names, ", "))
 }
 

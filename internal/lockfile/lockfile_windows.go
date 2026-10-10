@@ -5,6 +5,7 @@ package lockfile
 import (
 	"errors"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -27,6 +28,48 @@ func openLockFile(path string) (*os.File, error) {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 	return os.NewFile(uintptr(h), path), nil
+}
+
+// fileAttributeTagInfo is FILE_ATTRIBUTE_TAG_INFO.
+type fileAttributeTagInfo struct {
+	FileAttributes uint32
+	ReparseTag     uint32
+}
+
+// plainLockFile reports whether the open lock file (opened with
+// FILE_FLAG_OPEN_REPARSE_POINT, so a link is the link itself) is a file on
+// disk that names no other path. Go's Stat calls every reparse point but a
+// symlink irregular, which would refuse OneDrive cloud files under a synced
+// profile (triage W7); only name surrogates are refused here.
+func plainLockFile(f *os.File) bool {
+	h := windows.Handle(f.Fd())
+	typ, err := windows.GetFileType(h)
+	if err != nil {
+		return false
+	}
+	var ti fileAttributeTagInfo
+	if err := windows.GetFileInformationByHandleEx(h, windows.FileAttributeTagInfo,
+		(*byte)(unsafe.Pointer(&ti)), uint32(unsafe.Sizeof(ti))); err != nil {
+		return false
+	}
+	return usableLockFile(ti.FileAttributes, ti.ReparseTag, typ)
+}
+
+// usableLockFile: a disk file, not a directory, and no name-surrogate
+// reparse point (IO_REPARSE_TAG_SYMLINK, IO_REPARSE_TAG_MOUNT_POINT for
+// junctions, any tag with the name-surrogate bit). Other reparse tags (cloud
+// files, deduplicated files) hold their own data and are accepted.
+func usableLockFile(attrs, tag, fileType uint32) bool {
+	const nameSurrogate = 0x20000000 // IsReparseTagNameSurrogate
+	switch {
+	case fileType != windows.FILE_TYPE_DISK:
+		return false
+	case attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0:
+		return false
+	case attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 && tag&nameSurrogate != 0:
+		return false
+	}
+	return true
 }
 
 func lockFile(f *os.File) error {

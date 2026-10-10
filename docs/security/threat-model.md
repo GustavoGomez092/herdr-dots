@@ -373,8 +373,8 @@ triage rows (the full reasons are in the triage notes).
   setup-go most likely installs go1.25.0; already go1.25.7 has 24 reachable
   standard-library vulnerabilities. Setting an explicit patched `go-version`
   in every workflow is a user gate [triage X12, review R2]; the release
-  workflow's candidate job runs govulncheck, so a tag with a vulnerable
-  toolchain stops before any checksums are proposed. Actions are
+  workflow's candidate run (started by hand, no tag) runs govulncheck, so a
+  vulnerable toolchain stops it before any checksums are proposed. Actions are
   pinned by tag, not SHA [triage W16]. `release/REPO` and the checksums are empty
   until publishing, so installs build from source today.
 

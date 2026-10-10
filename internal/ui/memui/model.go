@@ -31,7 +31,11 @@ type Deps struct {
 	DotName string
 	Notify  func() // tells the engine memory changed; may be nil
 	Notice  string // shown as the first status line (e.g. why project memory is missing)
-	Cwd     string // where E exports and relative paths resolve; "" uses the home directory (the popup runs in the plugin's install directory)
+	// Home is where E exports and relative E/I paths resolve; "" is the
+	// developer's home directory (tests set it). Never the popup's working
+	// directory (the plugin's install directory) or a pane's checkout:
+	// ruling P10-R13, an export can hold global and secret-confirmed memory.
+	Home string
 }
 
 // errChanged stops approve/pin when the stored text is no longer the text on screen.
@@ -139,6 +143,8 @@ type Model struct {
 	editSeen string          // the text the editor loaded
 	secretOK bool            // the developer confirmed a secret warning
 	path     textinput.Model // export and import paths, the purge answer
+	gitDir   string          // the folder the export path's git check last looked at
+	inGit    bool            // gitDir is inside a git work tree: the export screen warns
 	imp      []memory.Entry  // the parsed file the import preview shows
 	impPath  string
 	impHits  []int // the numbers of the previewed entries that look like secrets
@@ -166,8 +172,8 @@ func New(d Deps) Model {
 	case d.Project.ID != "":
 		views = []scopeView{viewProject, viewAll}
 	}
-	if d.Cwd == "" {
-		d.Cwd, _ = os.UserHomeDir()
+	if d.Home == "" {
+		d.Home, _ = os.UserHomeDir()
 	}
 	m := Model{d: d, views: views, input: textinput.New(), path: textinput.New(), status: d.Notice}
 	m.path.Width = m.pathWidth()
@@ -415,7 +421,7 @@ func (m Model) keysBrowse(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.views) == 0 {
 			return m, nil
 		}
-		return m.startPath(modeExportPath, filepath.Join(m.d.Cwd, m.exportName(time.Now())))
+		return m.startPath(modeExportPath, filepath.Join(m.d.Home, m.exportName(time.Now())))
 	case "I":
 		if len(m.views) == 0 {
 			return m, nil
@@ -716,7 +722,43 @@ func (m Model) startPath(md mode, value string) (tea.Model, tea.Cmd) {
 	m.path.SetValue(value)
 	m.path.CursorEnd()
 	m.path.Focus()
-	return m, textinput.Blink
+	m.gitDir, m.inGit = "", false
+	return m.checkGit(), textinput.Blink
+}
+
+// gitWarning is the export screen's line for a target inside a git work tree.
+const gitWarning = "Warning: this folder is in a git repository; the export may be committed."
+
+// checkGit re-checks, on the export screen, whether the folder the path
+// resolves to is inside a git work tree. It looks again only when that
+// folder changes (a few Lstat calls, not on every key of a file name).
+func (m Model) checkGit() Model {
+	if m.mode != modeExportPath {
+		return m
+	}
+	p := m.resolvePath(m.path.Value())
+	if p == "" {
+		m.gitDir, m.inGit = "", false
+		return m
+	}
+	if dir := filepath.Dir(p); dir != m.gitDir {
+		m.gitDir, m.inGit = dir, inGitWorkTree(dir)
+	}
+	return m
+}
+
+// inGitWorkTree reports whether dir, or a folder above it, holds a .git
+// entry (a directory, or the file of a worktree or submodule checkout).
+// dir need not exist yet.
+func inGitWorkTree(dir string) bool {
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			return true
+		}
+		if filepath.Dir(d) == d {
+			return false
+		}
+	}
 }
 
 // exportName is E's file name: herdr-dots-memory-<project name or
@@ -760,8 +802,8 @@ func (m Model) resolvePath(in string) string {
 			p = filepath.Join(home, p[1:])
 		}
 	}
-	if p != "" && !filepath.IsAbs(p) && m.d.Cwd != "" {
-		p = filepath.Join(m.d.Cwd, p)
+	if p != "" && !filepath.IsAbs(p) && m.d.Home != "" {
+		p = filepath.Join(m.d.Home, p)
 	}
 	return p
 }
@@ -781,6 +823,11 @@ func (m Model) pathScreen(w int) []string {
 	lines = append(lines, m.path.View())
 	if p := m.resolvePath(m.path.Value()); p != "" {
 		lines = append(lines, pathField("file: ", p, w)...)
+	}
+	if m.mode == modeExportPath && m.inGit {
+		for _, l := range wrap(gitWarning, w) {
+			lines = append(lines, style.Err.Render(l))
+		}
 	}
 	return lines
 }
@@ -811,7 +858,7 @@ func (m Model) keysPath(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.path, cmd = m.path.Update(k)
-	return m, cmd
+	return m.checkGit(), cmd
 }
 
 // export writes the entries of the current view, every status, to a new

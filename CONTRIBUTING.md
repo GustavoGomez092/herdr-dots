@@ -45,8 +45,27 @@ Its version is the top-level `version` key; a missing key means 1.
   register a `Migration` from the old version (it must set `version` in its
   output), and add a fixture test. A state-root kind needs a `Lock` before it
   can be migrated.
+- The first migration of a kind: the command-line gate (`protectNewerFiles`,
+  a dry run) only reports files that need a migration as pending, it doesn't
+  keep them read-only. Before registering it, make the gate protect that
+  kind's pending files too (or migrate them first), or a writing command
+  could rewrite an older file without its migration and backup.
 - Append-only JSONL logs (feed, memory ledger, history) only ever gain
   optional fields; a breaking change uses a new file name.
+
+## Releases
+
+`internal/version/VERSION` is the exact version the binaries report. A
+release candidate is a manual run of `.github/workflows/release.yml` on
+`main` (Run workflow, no tag): it tests, fuzzes, runs govulncheck and the
+end-to-end install test, builds the archives and opens a pull request with
+`release/SHA256SUMS` and `release/ASSET_ENV`. Publishing is the tag
+`v<VERSION>` pushed on that pull request's merge commit: the workflow
+rebuilds, refuses archives that differ from the committed checksums, signs
+them and drafts the release (a prerelease for `X.Y.Z-rc.<digits>`).
+`scripts/release-kind.sh` holds the checks; any other VERSION suffix is
+refused. Publishing is the owner's step: see
+`docs/release/ready-to-publish.md`.
 
 ## Commits
 

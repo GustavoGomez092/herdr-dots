@@ -6,12 +6,14 @@ milestones, never released.
 ## 1.0.0-rc.1 (release candidate, not released)
 
 - Schema versions for every persisted file and a migration framework: older files are upgraded with a backup, files from a newer version stay read-only (`herdr-dots migrate`).
-- Prebuilt, checksum-verified binaries for macOS, Linux and Windows (amd64, arm64) with a source-build fallback; `herdr-dots verify-release`; `--version` shows the build source and commit.
+- Prebuilt, checksum-verified binaries once published (user gate) for macOS, Linux and Windows (amd64, arm64), with a source-build fallback; `herdr-dots verify-release`; `--version` shows the build source and commit.
 - `herdr-dots uninstall-extras [--purge]`.
 - Snapshot broadcasts capped at 10 a second and 256 KB; an 8-hour soak test.
 - Fuzz tests for every parser; `govulncheck` in CI.
 - Hardening: secrets split by invisible characters are caught; the memory approve screen refuses when the popup can't show the whole proposal; nested repositories are their own projects; dot names can't escape the dots directory; an old feed file becomes owner-only; two panics are gone; a memory export of an unsaved entry imports again; every git call's repository-program guard is pinned by a test.
 - Codex dot runs disable every MCP server declared in your Codex config and are refused while a server name contains `.` or `=`; commit reviews leave out the content of denied files; an invalid `tool_deny_globs` entry turns repository tools off instead of being dropped; `herdr-dots memory` in an unattached nested repository uses the nested project.
+- `claude-cli` review, ask, memory, council and chair runs ignore the repository's `.claude/settings*.json` (`--setting-sources user`), so a repository can't run a credential helper or redirect a dot; the repository's `CLAUDE.md` probably no longer reaches them either (live check pending).
+- The memory screen exports (`E`, a private file in your home directory, with a warning when the folder you pick is in a git repository), imports (`I`, a preview first, `Y` for secret-looking entries) and purges a project's memory (`P`, type the project id; global memory is kept).
 - Threat model, security review, user guide, `SECURITY.md`, `CONTRIBUTING.md`.
 
 ## 0.9.0
