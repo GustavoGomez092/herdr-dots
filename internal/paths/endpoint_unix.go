@@ -25,19 +25,20 @@ const maxSockPath = 100
 // chown needs root.
 var checkPrivate = platform.CheckPrivate
 
-// defaultRuntimeDir guesses the per-user runtime dir when XDG_RUNTIME_DIR is
-// unset: an MCP client started with a minimal environment (Codex passes no
-// XDG_RUNTIME_DIR) must find the socket an engine started from a full
-// environment made there.
+// defaultRuntimeDir is the per-user runtime dir, /run/user/<uid>.
 var defaultRuntimeDir = func() string { return fmt.Sprintf("/run/user/%d", os.Getuid()) }
 
-// runtimeDir is the per-user runtime dir ($XDG_RUNTIME_DIR, else the
-// /run/user/<uid> guess) when it is an absolute, real directory that only
-// this user owns, with mode 0700; "" otherwise.
+// runtimeDir is /run/user/<uid> when it is an absolute, real directory that
+// only this user owns, with mode 0700; "" otherwise. XDG_RUNTIME_DIR counts
+// only when it is that same dir (R8): every client must compute the same
+// socket path, and an MCP client started with a minimal environment (Codex
+// passes no XDG_RUNTIME_DIR) or from another one (WSLg sets its own) would
+// otherwise look somewhere else than the engine. So an XDG_RUNTIME_DIR set
+// elsewhere, usable or not, gives the path an unset one gives.
 func runtimeDir() string {
-	d := os.Getenv("XDG_RUNTIME_DIR")
-	if d == "" {
-		d = defaultRuntimeDir()
+	d := defaultRuntimeDir()
+	if x := os.Getenv("XDG_RUNTIME_DIR"); x != "" && filepath.Clean(x) == filepath.Clean(d) {
+		d = x
 	}
 	if d == "" || !filepath.IsAbs(d) {
 		return ""
@@ -93,7 +94,7 @@ func (p Paths) ensureSockFallback() error {
 	if err != nil {
 		return fmt.Errorf("engine socket directory %s: %w", dir, err)
 	}
-	const fix = "refusing to use it: remove it, or set XDG_RUNTIME_DIR to a private directory"
+	const fix = "refusing to use it: remove it, and the next start makes it again, private"
 	if !st.IsDir() {
 		return fmt.Errorf("engine socket directory %s is not a directory (a symlink or a file); %s", dir, fix)
 	}
