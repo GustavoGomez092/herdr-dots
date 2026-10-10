@@ -412,7 +412,7 @@ phase's final review or fix wave; "parked" is a "Parked → Phase 10" line;
 | W4 | `CreateFile` without explicit security attributes | P6 T4, P6 NOT in scope | ACCEPTED | inherits the private directory's ACL |
 | W5 | `StartDetached` drops `SysProcAttr.CmdLine`; `ErrUnsafeBatchArg` echoes the argument | P6 T2 | FIXED EARLIER | Phase 6 final fixes 4 and 5 |
 | W6 | Herdr config precedence (XDG before APPDATA) on Windows | P6 T2 | USER GATE | needs Herdr on Windows |
-| W7 | OneDrive placeholder files may be refused (ModeIrregular); 8.3 short names rely on the exact-name check | P6 T3, P6 T8 | USER GATE | needs real Windows |
+| W7 | OneDrive placeholder files may be refused (ModeIrregular); 8.3 short names rely on the exact-name check | P6 T3, P6 T8 | USER GATE | needs real Windows. Phase 10 final fix 7: the engine lock file now refuses only name-surrogate reparse points (symlinks, junctions; still opened as themselves with `FILE_FLAG_OPEN_REPARSE_POINT`) and accepts other tags such as OneDrive cloud files (`TestLockFileAcceptsCloudFilesAndRefusesNameSurrogates`, Windows-only, compile-checked on macOS). Cloud files elsewhere and 8.3 names still need a real Windows run |
 | W8 | No startup sweep of stale `herdr-dots-run-*` directories; comment on inline `--append-system-prompt` | P6 T9, P6 NOT in scope | ACCEPTED | private temp dirs; comment only |
 | W9 | `CodexCLI.Run` lacks `defer Close` | P6 T9 | FIXED EARLIER | Phase 6 final fix 9 |
 | W10 | `TestCallFailsFastWithoutServer` uses a non-pipe path on Windows | P6 T6 | FIXED EARLIER | Phase 6 final fix 7 |

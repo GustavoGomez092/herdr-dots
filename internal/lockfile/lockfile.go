@@ -21,9 +21,9 @@ func TryLock(path string) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Never lock or truncate anything but a regular file (a symlink, a
-	// reparse point, a device): the pid write would land on its target.
-	if st, serr := f.Stat(); serr != nil || !st.Mode().IsRegular() {
+	// Never lock or truncate anything but a plain file (a symlink, a
+	// junction, a device): the pid write would land on its target.
+	if !plainLockFile(f) {
 		f.Close()
 		return nil, fmt.Errorf("lock file %s is not a regular file; refusing to use it", path)
 	}
