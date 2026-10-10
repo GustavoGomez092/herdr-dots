@@ -1263,7 +1263,7 @@ func splitPaths(s string) []string {
 func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc":
-		m.mode = modeBrowse
+		m.mode, m.status = modeBrowse, "" // an editor warning doesn't outlive the editor
 		return m, nil
 	case "tab", "shift+tab":
 		step := 1
@@ -1492,8 +1492,10 @@ func (m Model) View() string {
 	}
 	footer := []string{"a approve  e edit  p pin  x forget  X forget all  n new  E export  I import  P purge  / filter  tab scope  esc back"}
 	switch {
-	case m.status != "":
-		footer = []string{clean(m.status)}
+	case m.status != "" && isWhole: // one line, cut to the popup: approveTail counts it
+		footer = []string{style.Cut(clean(m.status), w)}
+	case m.status != "": // wrapped, so a long error neither overflows nor loses its end
+		footer = wrap(m.status, w)
 	case !isWhole: // a whole-popup screen keeps one line: approveTail counts it
 		footer = helpLines(footer[0], w)
 	}

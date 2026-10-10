@@ -56,7 +56,7 @@ func wantArchived(t *testing.T, m tea.Model, st *memory.Store, verb string) {
 	t.Helper()
 	ref := memory.Ref{Scope: memory.ScopeDot, Dot: "security", ID: "m3"}
 	want := verb + " " + ref.String() + ", then archived: " + archivedNote
-	if v := m.View(); !strings.Contains(v, want) {
+	if v := m.View(); !strings.Contains(flat(v), want) { // the status wraps to the popup
 		t.Fatalf("want %q in:\n%s", want, v)
 	}
 	if e, _ := st.Get(pid, ref); e.Status != memory.StatusArchived {
