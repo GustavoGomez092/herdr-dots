@@ -34,6 +34,12 @@ func validSlug(slug string) bool {
 	return slug != "" && !strings.ContainsAny(slug, "/\\:\x00") && filepath.IsLocal(slug+".toml")
 }
 
+// badSlug is ErrBadSlug naming the refused file (quoted, so a control
+// character in it shows escaped on a status line).
+func badSlug(slug string) error {
+	return fmt.Errorf("%w: %q is not a file name in the dots directory", ErrBadSlug, slug+".toml")
+}
+
 type LoadError struct {
 	File string // base name, e.g. "security.toml"
 	Line int    // 0 when not a parse error
@@ -106,7 +112,7 @@ func LoadAll(dir string) ([]Dot, []LoadError) {
 
 func Load(dir, slug string) (Dot, error) {
 	if !validSlug(slug) {
-		return Dot{}, fmt.Errorf("%w: %q", ErrBadSlug, slug)
+		return Dot{}, badSlug(slug)
 	}
 	d, err := decode(path(dir, slug))
 	if err != nil {
@@ -125,7 +131,7 @@ func Save(dir string, d Dot, create bool) error {
 		d.Slug = Slugify(d.Name)
 	}
 	if !validSlug(d.Slug) {
-		return fmt.Errorf("%w: %q", ErrBadSlug, d.Slug)
+		return badSlug(d.Slug)
 	}
 	p := path(dir, d.Slug)
 	if create {
@@ -293,7 +299,7 @@ func insertPurpose(tomlStr, purpose string) string {
 
 func Delete(dir, slug string) error {
 	if !validSlug(slug) {
-		return fmt.Errorf("%w: %q", ErrBadSlug, slug)
+		return badSlug(slug)
 	}
 	return os.Remove(path(dir, slug))
 }

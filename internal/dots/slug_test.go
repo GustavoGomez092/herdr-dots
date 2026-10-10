@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,10 @@ func TestSlugsThatAreNotFileNamesAreRefused(t *testing.T) {
 		if err := Save(dir, d, false); !errors.Is(err, ErrBadSlug) {
 			t.Errorf("Save with slug %q: %v", slug, err)
 		}
+	}
+	// The error names the file it refused, readable on a status line.
+	if _, err := Load(dir, "../victim"); err == nil || !strings.Contains(err.Error(), `"../victim.toml"`) {
+		t.Errorf("the refusal names the file: %v", err)
 	}
 	if _, err := os.Stat(victim); err != nil {
 		t.Fatal("a file outside the dots directory was touched")
