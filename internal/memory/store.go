@@ -1345,6 +1345,11 @@ func (s *Store) DeleteDot(slug string) (DotDeletion, error) {
 			}
 			return errors.Join(perrs...)
 		}))
+		// A Purge that ran while we waited left nothing; taking the lock
+		// recreated the directory with just memory.lock. Remove it (M36).
+		if ents, err := os.ReadDir(dir); err == nil && len(ents) == 1 && ents[0].Name() == "memory.lock" {
+			removeBareLock(dir, filepath.Join(dir, "memory.lock"))
+		}
 	}
 	return out, errors.Join(errs...)
 }
