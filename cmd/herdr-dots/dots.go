@@ -824,7 +824,22 @@ func (c *dotsCLI) untrustFile(args []string) error {
 	if err != nil {
 		return err
 	}
-	found, err := c.trust.Revoke(pr.ID, filepath.ToSlash(rel))
+	// Revoke this checkout's trust, as the engine does (ruling P9-R13): the
+	// file's current bytes (in every checkout holding those same bytes), else
+	// the entry given at this path (the file changed, is gone or broken),
+	// else every entry of the file (trusted through another path to this
+	// checkout). Another checkout's trust of other content stays (H7).
+	slashRel := filepath.ToSlash(rel)
+	var found bool
+	if _, f, ferr := c.projectFile(abs); ferr == nil {
+		found, err = c.trust.RevokeSum(pr.ID, slashRel, projectdots.Sum(f.Data))
+	}
+	if err == nil && !found {
+		found, err = c.trust.RevokePath(pr.ID, slashRel, filepath.Join(pr.Root, rel))
+	}
+	if err == nil && !found {
+		found, err = c.trust.Revoke(pr.ID, slashRel)
+	}
 	if err != nil {
 		return err
 	}

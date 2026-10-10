@@ -54,7 +54,10 @@ runs only after you **trust** the exact bytes you saw: `T` in the library (or `h
 edit makes the file untrusted again and pauses the dot until you trust it again; an untrusted or
 changed project dot never runs, in the background either. Trust is per project (the repository's
 git root commit): clones share it, but only for byte-identical files, and when trust came from
-another checkout the popup shows "trusted at <path>". Trusted dots still run clamped, with only the
+another checkout the popup shows "trusted at <path>". `herdr-dots dots untrust <file>` revokes
+the trust of that checkout's file: its current bytes (so a clone holding the same bytes loses it
+too), or, when the file changed, is gone or no longer parses, the trust given at that path. Another
+checkout's trust of different bytes stays. Trusted dots still run clamped, with only the
 capabilities you granted. `project_dots_enabled = false` in `config.toml` turns project dots off
 (a malformed `config.toml` does too).
 
