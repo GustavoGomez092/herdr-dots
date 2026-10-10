@@ -50,10 +50,23 @@ const seenHeads = 32
 // holds the last seenHeads HEADs it recorded or reviewed, so going back to
 // one (A, B, then a reset to A) is not a new commit.
 type headSeen struct {
-	head string
-	gen  uint64
-	cwd  string
-	seen []string // oldest first
+	head     string
+	gen      uint64
+	cwd      string
+	seen     []string // oldest first
+	reviewed []string // the HEADs a review started for, oldest first (at most seenHeads)
+}
+
+// reviewedElsewhereLocked names another pane where the dot slug already
+// started a review of head, so one dot on two panes reviews a commit once
+// (R4). Caller holds e.mu.
+func (e *Engine) reviewedElsewhereLocked(k key, head string) string {
+	for k2, h := range e.heads {
+		if k2.slug == k.slug && k2.pane != k.pane && slices.Contains(h.reviewed, head) {
+			return k2.pane
+		}
+	}
+	return ""
 }
 
 // saw records head as the current HEAD and as seen.
@@ -260,6 +273,16 @@ func (e *Engine) reviewCommit(a state.Attachment, gen uint64, head string, ds []
 			skipped = append(skipped, fmt.Sprintf("dot %s: %s not reviewed (%s)", d.Slug, label, dec.Reason))
 			continue
 		}
+		if other := e.reviewedElsewhereLocked(k, head); other != "" {
+			e.releaseLocked(k)
+			skipped = append(skipped, fmt.Sprintf("dot %s: %s already reviewed for pane %s", d.Slug, label, other))
+			continue
+		}
+		h.reviewed = append(h.reviewed, head)
+		if len(h.reviewed) > seenHeads {
+			h.reviewed = slices.Clone(h.reviewed[len(h.reviewed)-seenHeads:])
+		}
+		e.heads[k] = h
 		paneCalls++
 		j := bgJob{kind: state.RunCommit, paneID: a.PaneID, session: cur.SessionValue, project: cur.ProjectID, projectName: cur.ProjectName,
 			cwd: a.Cwd, dot: d, turns: tail(turns, d.Context.Turns), question: question, label: label,
