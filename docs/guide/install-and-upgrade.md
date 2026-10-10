@@ -4,7 +4,7 @@ How to install Herdr Dots, check the install, upgrade it and remove it.
 
 ## From the Herdr marketplace
 
-    herdr plugin install <owner>/herdr-dots
+    herdr plugin install GustavoGomez092/herdr-dots
 
 Herdr clones the repository and runs `scripts/build.sh` (`build.ps1` on
 Windows). The script downloads the prebuilt binary for your OS and CPU from
@@ -13,9 +13,6 @@ installs it in `bin/`. With no release for this version, no network, or a
 checksum that doesn't match, it builds from source with Go 1.25 or newer;
 without Go it stops and says what to do. Nothing half-installed is left
 behind. Set `HERDR_PLUGIN_BUILD_OFFLINE=1` to skip the download.
-
-`<owner>` is a placeholder: the repository is not published yet, so this
-command does not work today.
 
 Check an install: `./bin/herdr-dots --version` says `release` or `source`
 and the commit; `./bin/herdr-dots verify-release` re-checks the kept archive

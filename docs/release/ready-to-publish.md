@@ -7,12 +7,10 @@ tagged, listed or published. The macOS evidence is in
 
 ## Blockers
 
-- [ ] **License.** Choose one (the spec suggested Apache-2.0 for its patent grant, or MIT) and add `LICENSE`. No license means no one may use the code.
-- [ ] **Name and listing.** Keep "Herdr Dots" or rename. OpenAI announced "Dots" (DevDay 2026); a rename later is supported by `internal/migrate` but touches the plugin id, binary and docs. Check the name on GitHub and herdr.dev/plugins.
+- [ ] **Listing.** The name stays "Herdr Dots" (`GustavoGomez092/herdr-dots`, chosen 2026-10-10). After publishing, add the `herdr-plugin` topic and check the listing on herdr.dev/plugins (it refreshes every 30 minutes).
 - [ ] **Acceptance run on three OSes.** Run `docs/superpowers/notes/1.0-acceptance.md` on a Linux machine and on Windows with the Herdr Windows beta, and on macOS with a real `herdr plugin install`; fill the Linux and Windows columns.
 - [ ] **Soak job cost.** Decide whether CI's soak job should run on every push (it costs runner time); Go 1.26.9, the Actions and GoReleaser are now pinned (keep them current: re-run govulncheck and bump the pins before each release).
 - [ ] **The e2e install job on GitHub's ubuntu runner.** `TestLocalReleaseInstallsEndToEnd` passed on Linux in a `golang:1.26.9` container (arm64, 2026-10-10), and the full `go test -race ./...` passes there (48 packages). The release workflow's ubuntu job is still its first run on GitHub's runner (amd64).
-- [ ] **`SECURITY.md` placeholders.** Replace the `TODO(publish)` lines: the private reporting contact and the repository URL.
 - [ ] **Live provider checks.** With Claude Code logged in, run `go test -tags live ./internal/backend/ ./internal/council/` (a small API spend; snapshot `~/.claude/settings.json` before and diff it after: it must not change) and the live smoke in a `herdr --session dots-test` session: attach a Security dot to a Claude Code pane, get a card for an obvious secret, dismiss it, and see `suppressed` in the feed when the same request repeats. Run the API backends' live tests with your keys (`docs/superpowers/notes/2026-10-08-phase-4-verification.md`).
 - [ ] **R1 live check (repository settings never load).** In a scratch repository whose `.claude/settings.json` sets an `apiKeyHelper` that writes a marker file, run one dot review: the marker must not appear. In the same run, note whether the repository's `CLAUDE.md` still reaches the dot (the Claude Code bundle suggests it doesn't under `--setting-sources user`; inferred, not run). Re-check `--restricted` on the Claude Code version you have (triage X8).
 - [ ] **Codex.** Install Codex, log in, run `go test -tags live ./internal/backend/ ./internal/council/` and the Codex rows of the acceptance run.
@@ -60,7 +58,6 @@ USER GATE for all of them.
 | T6-pwsh | PowerShell install tests on a `pwsh` host | Phase 10 ledger (Task 6) | PowerShell install tests |
 | T6-cosign | Real `cosign verify-blob` | Phase 10 ledger (Task 6) | Real cosign |
 | R1 | Repository `.claude/settings.json` must not load (live) | Phase 10 ledger (Task 11), security review | R1 live check |
-| SEC | `SECURITY.md` `TODO(publish)` placeholders | Phase 10 ledger (Task 11) | `SECURITY.md` placeholders |
 | P10-R8 | Codex dots disable bare-named MCP servers, refuse dotted names (live) | Phase 10 ledger (Task 9) | P10-R8 live check |
 | SMOKE | The read-only toast and the memory approve guard in a live Herdr popup | Task 13 smoke (S3, S4) | Popup and pane checks |
 | DOTS-TEST | The `dots-test` session resumes six Claude panes on every start | Task 13 smoke | Decisions: the `dots-test` session |
@@ -77,12 +74,12 @@ publishes a prerelease, `X.Y.Z` the final release, and any other suffix is
 refused.
 
 1. Create the GitHub repository and push `main`. Check that CI is green on macOS, Linux and Windows, including the PowerShell install tests and the fuzz, vulncheck and soak jobs.
-2. If Herdr's clone won't have a GitHub `origin`, put `owner/herdr-dots` in `release/REPO`.
+2. `release/REPO` holds `GustavoGomez092/herdr-dots` (set 2026-10-10), so installs find the repository even when Herdr's clone has no GitHub `origin`.
 3. One-time GitHub setup: in Settings → Actions → General → Workflow permissions, enable "Allow GitHub Actions to create and approve pull requests" (the candidate opens the checksum pull request with `GITHUB_TOKEN`). A pull request opened by `GITHUB_TOKEN` doesn't trigger CI: run the `ci` workflow on its branch by hand (Actions → ci → Run workflow, pick the branch), or give the candidate job a personal access token or GitHub App token instead (your choice).
 4. **Candidate.** With VERSION at `1.0.0-rc.1`, start the release workflow on `main`: Actions → release → Run workflow (or `gh workflow run release.yml --ref main`). It tests on three OSes, fuzzes every target for 10 minutes, runs govulncheck and the end-to-end install test, builds the six archives with `HERDR_DOTS_VERSION=1.0.0-rc.1` and opens a pull request with `release/SHA256SUMS` and `release/ASSET_ENV`. Its body says: "Merge this, then tag `v<VERSION>` on the merge commit".
 5. Run CI on that pull request's branch (step 3), then merge it. Tag `v1.0.0-rc.1` on the merge commit and push the tag. The workflow checks that the tag is `v<VERSION>` and that the committed `ASSET_ENV` and `SHA256SUMS` are for exactly that VERSION, rebuilds, refuses if the archives differ from the committed checksums, signs them with cosign and creates a draft prerelease.
 6. Check the draft (six archives, six `.sigstore.json` bundles, `SHA256SUMS`), then publish it.
-7. Install on a machine without Go: `herdr plugin install <owner>/herdr-dots`; `./bin/herdr-dots --version` must say `release`; `./bin/herdr-dots verify-release` must pass (with cosign installed, the signature too). Repeat on each of the six targets you can reach.
+7. Install on a machine without Go: `herdr plugin install GustavoGomez092/herdr-dots`; `./bin/herdr-dots --version` must say `release`; `./bin/herdr-dots verify-release` must pass (with cosign installed, the signature too). Repeat on each of the six targets you can reach.
 8. **Final.** When the acceptance run passes everywhere, set `internal/version/VERSION` and `herdr-plugin.toml` to `1.0.0`, update `TestVersionIsTheReleaseCandidate` and the CHANGELOG heading, commit to `main`, and repeat steps 4–7 for VERSION `1.0.0`: a new candidate run, merge its checksum pull request, tag `v1.0.0` on the merge commit. This draft is the final release, not a prerelease.
 9. Add the `herdr-plugin` topic to the repository and check the listing on herdr.dev/plugins (it refreshes every 30 minutes).
 10. Only now may the README and CHANGELOG say "released". The roadmap's acceptance checklist is met only when the acceptance run passes on all three OSes.

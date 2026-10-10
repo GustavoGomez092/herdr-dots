@@ -7,6 +7,11 @@ milestones, never released.
 
 Post-rc hardening: about 90 accepted known issues and security findings R2, R3, R5 and R8 are fixed (see the triage notes).
 
+### Changes
+
+- Licensed under the Apache License 2.0 (`LICENSE`).
+- Security reports go through GitHub's private vulnerability reporting (`SECURITY.md`).
+
 ### Security
 
 - Release builds use Go 1.26.9: `govulncheck` reports no vulnerabilities (Go 1.25 had 24 reachable standard-library ones). The workflows also pin their GitHub Actions by commit and GoReleaser at v2.18.3.

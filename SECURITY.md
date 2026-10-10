@@ -6,9 +6,9 @@ Herdr Dots 1.0.0-rc.1 is a release candidate and has not been released.
 
 Please report security problems privately, not in public issues.
 
-- TODO(publish): the private reporting channel. Enable GitHub's "Report a
-  vulnerability" (Security tab) on `<REPOSITORY: set when the repository is
-  published>`, or name a contact: `<SECURITY CONTACT: set before publishing>`.
+- Use GitHub's private vulnerability reporting: open
+  https://github.com/GustavoGomez092/herdr-dots/security/advisories/new (the repository's Security
+  tab, "Report a vulnerability").
 
 Include the version (`herdr-dots --version`), your OS, and steps to
 reproduce. You can expect an acknowledgement within a week.

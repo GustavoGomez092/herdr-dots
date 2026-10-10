@@ -1,7 +1,7 @@
 # Herdr Dots
 
 > **Status: release candidate 1.0.0-rc.1, not released, not done.**
-> Every roadmap phase (1–10) is built and the macOS acceptance run has evidence for every item it can show. Not yet verified on Linux or Windows hardware; live providers, Codex and the Claude settings isolation not live-verified; no license; not published.
+> Every roadmap phase (1–10) is built and the macOS acceptance run has evidence for every item it can show. Not yet verified on Linux or Windows hardware; live providers, Codex and the Claude settings isolation not live-verified; not published.
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**:
 specialist agents (security, frontend, backend, copywriter, ...) that join a
@@ -28,7 +28,7 @@ live provider checks (Claude, API backends, Codex), a license, and publishing ([
 
 ## Install
 
-    herdr plugin install <owner>/herdr-dots
+    herdr plugin install GustavoGomez092/herdr-dots
 
 Details, checks and upgrades: [docs/guide/install-and-upgrade.md](docs/guide/install-and-upgrade.md).
 
@@ -160,4 +160,4 @@ what has not been run live:
 
 ## License
 
-Not chosen yet. Until the owner picks one, no license is granted.
+Apache License 2.0: see [LICENSE](LICENSE).
