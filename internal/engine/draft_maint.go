@@ -57,7 +57,8 @@ func (e *Engine) orphanedPatch(m patchstore.Meta) bool {
 // maintainDrafts removes what interrupted drafts left (a "drafting" record
 // from before this engine started: its worktree, its snapshot ref and the
 // record), expires sent, applied and rejected patches after patchKeep,
-// removes ready patches that lost their card, retries snapshot refs whose
+// removes ready patches that lost their card and patch files that lost (or
+// never got) their record, retries snapshot refs whose
 // drop failed, drops snapshot refs nothing owns (spec X8), and prunes
 // orphaned worktree directories and git's worktree metadata (unlocking stale
 // registrations). Ready patches with a card stay until the user applies,
@@ -67,6 +68,11 @@ func (e *Engine) maintainDrafts() {
 	metas, errs := e.d.Patches.List()
 	for _, err := range errs {
 		e.d.Logf("drafts: %v", err)
+	}
+	if n, err := e.d.Patches.SweepOrphanPatches(); err != nil {
+		e.d.Logf("drafts: remove patch files without a record: %v", err)
+	} else if n > 0 {
+		e.d.Logf("drafts: removed %d patch file(s) without a record", n)
 	}
 	e.mu.Lock()
 	live := map[string]bool{}
