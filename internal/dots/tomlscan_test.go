@@ -139,6 +139,21 @@ func TestPreScanTOMLSkipsStringsAndComments(t *testing.T) {
 	}
 }
 
+// CountKeysAndTables counts '=' and '[' outside comments and all four
+// string kinds (H11).
+func TestCountKeysAndTablesSkipsStringsAndComments(t *testing.T) {
+	data := "a = 1 # x = [y]\n" +
+		`b = "=[\"=[" ` + "\n" +
+		"c = '=['\n" +
+		`d = """` + "\n=[\n" + `"""` + "\n" +
+		"e = '''\n=[\n'''\n" +
+		"[t]\n[[arr]]\nf = [1, 2]\n"
+	keys, tables := CountKeysAndTables([]byte(data))
+	if keys != 6 || tables != 4 {
+		t.Fatalf("keys %d tables %d, want 6 and 4", keys, tables)
+	}
+}
+
 func TestCleanTextBoundsItsOutput(t *testing.T) {
 	got := CleanText(strings.Repeat("\u202e", 1000), 80)
 	if strings.ContainsRune(got, '\u202e') || len([]rune(got)) > 81 {
