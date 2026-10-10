@@ -4,6 +4,7 @@ package style
 import (
 	"os"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
@@ -33,16 +34,16 @@ func Glyph(glyph, color string) string {
 
 // ascii is on when HERDR_DOTS_ASCII=1: for terminals or fonts that show the
 // dot glyphs as empty boxes (some Windows console fonts).
-var ascii = os.Getenv("HERDR_DOTS_ASCII") == "1"
+// It is atomic so SetASCII can't race a View on another goroutine.
+var ascii atomic.Bool
+
+func init() { ascii.Store(os.Getenv("HERDR_DOTS_ASCII") == "1") }
 
 // SetASCII switches ASCII mode and returns the previous setting (tests).
-func SetASCII(on bool) (prev bool) {
-	prev, ascii = ascii, on
-	return prev
-}
+func SetASCII(on bool) (prev bool) { return ascii.Swap(on) }
 
 // ASCII reports whether symbols are drawn as ASCII stand-ins.
-func ASCII() bool { return ascii }
+func ASCII() bool { return ascii.Load() }
 
 // asciiSyms are the stand-ins for the symbols the Dots UIs and the dot
 // templates use.
@@ -53,7 +54,7 @@ var asciiSyms = map[string]string{
 // Sym returns s unchanged, or with ASCII() on its ASCII stand-in: a known
 // symbol's mapping, s itself when it is already ASCII, else "*".
 func Sym(s string) string {
-	if !ascii {
+	if !ASCII() {
 		return s
 	}
 	if a, ok := asciiSyms[s]; ok {

@@ -6,7 +6,7 @@ import (
 )
 
 func TestSymIsIdentityByDefault(t *testing.T) {
-	if ascii {
+	if ASCII() {
 		t.Skip("HERDR_DOTS_ASCII is set in this environment")
 	}
 	for _, s := range []string{"◆", "▲", "✎", "⊕", "◌", "?", "★"} {
@@ -17,9 +17,8 @@ func TestSymIsIdentityByDefault(t *testing.T) {
 }
 
 func TestASCIIModeMapsEveryGlyph(t *testing.T) {
-	old := ascii
-	ascii = true
-	defer func() { ascii = old }()
+	old := SetASCII(true)
+	defer SetASCII(old)
 	if !ASCII() {
 		t.Fatal("ASCII() must report the switch")
 	}
