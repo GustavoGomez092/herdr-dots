@@ -451,11 +451,12 @@ func trunc(s string, n int) string {
 	if ansi.StringWidth(s) <= n {
 		return s
 	}
-	return ansi.Truncate(s, n, "…")
+	return ansi.Truncate(s, n, style.Sym("…"))
 }
 
 func rule(title string, w int) string {
-	return style.Dim.Render("── "+title+" "+strings.Repeat("─", max(0, w-len(title)-4))) + "\n"
+	d := style.Sym("─")
+	return style.Dim.Render(d+d+" "+title+" "+strings.Repeat(d, max(0, w-len(title)-4))) + "\n"
 }
 
 const helpText = `j/k move   tab roster/queue   t next agent
@@ -566,7 +567,7 @@ func (m Model) View() string {
 		sel := m.area == areaQueue && i == m.card
 		marker := " "
 		if sel {
-			marker = "▸"
+			marker = style.Sym("▸")
 		}
 		tags := councilTags(c) + patchTags(c)
 		switch {
@@ -578,9 +579,10 @@ func (m Model) View() string {
 			tags += " [suggestion]"
 		}
 		label := cardLabel(c)
-		room := max(10, w) - lipgloss.Width(marker+c.Glyph+" "+label+"  ")
+		glyph := style.Sym(c.Glyph)
+		room := max(10, w) - lipgloss.Width(marker+glyph+" "+label+"  ")
 		who := trunc(fmt.Sprintf("%s · %s%s", oneLine(c.DotName), cardWhere(c), tags), max(1, room))
-		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", marker, c.Glyph, style.Severity(c.Severity).Render(label), who))
+		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", marker, glyph, style.Severity(c.Severity).Render(label), who))
 		text := patchText(c)
 		if !sel {
 			text = trunc(strings.ReplaceAll(text, "\n", " "), max(20, w*2))

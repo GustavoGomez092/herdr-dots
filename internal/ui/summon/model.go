@@ -156,9 +156,9 @@ func (m Model) viewList() string {
 	if len(m.dots) > 0 {
 		marker := "  "
 		if m.onCouncil {
-			marker = "▸ "
+			marker = style.Sym("▸") + " "
 		}
-		b.WriteString(marker + "⊕ Council (all attached)\n")
+		b.WriteString(marker + style.Sym("⊕") + " Council (all attached)\n")
 	}
 	// Fixed lines: title, blank, council entry, blank, footer, plus the optional
 	// question input and status.
@@ -177,7 +177,7 @@ func (m Model) viewList() string {
 		d := m.dots[i]
 		marker := "  "
 		if i == m.cursor && !m.onCouncil {
-			marker = "▸ "
+			marker = style.Sym("▸") + " "
 		}
 		b.WriteString(fmt.Sprintf("%s%s %s\n", marker, style.Glyph(d.Glyph, d.Color), d.Name))
 	}

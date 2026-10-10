@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -1355,7 +1356,8 @@ func (m Model) keysFilter(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func trunc(s string, n int) string {
 	r := []rune(textutil.SanitizeModelText(s))
 	if len(r) > n {
-		return string(r[:max(1, n-1)]) + "…"
+		ell := style.Sym("…")
+		return string(r[:max(1, n-utf8.RuneCountInString(ell))]) + ell
 	}
 	return string(r)
 }
@@ -1399,13 +1401,14 @@ func (m Model) list(w int) (lines []string, cur int) {
 			if s == 0 {
 				title = fmt.Sprintf("%s (%d)", title, counts[s])
 			}
-			lines = append(lines, style.Dim.Render("── "+title+" "+strings.Repeat("─", max(0, w-len(title)-4))))
+			d := style.Sym("─")
+			lines = append(lines, style.Dim.Render(d+d+" "+title+" "+strings.Repeat(d, max(0, w-len(title)-4))))
 			last = s
 		}
 		line := trunc(m.row(e), max(20, w-2))
 		if i == m.cursor {
 			cur = len(lines)
-			lines = append(lines, style.Selected.Render("▸ "+line))
+			lines = append(lines, style.Selected.Render(style.Sym("▸")+" "+line))
 		} else {
 			lines = append(lines, "  "+line)
 		}
@@ -1445,7 +1448,7 @@ func (m Model) View() string {
 	if m.d.Project.ID != "" {
 		proj = fmt.Sprintf("project %s (%s)", clean(m.d.Project.Name), clean(m.d.Project.ID))
 	}
-	head.WriteString(style.Title.Render(fmt.Sprintf("MEMORY → %s · %s ── %d entries", who, proj, len(m.entries))) + "\n")
+	head.WriteString(style.Title.Render(fmt.Sprintf("MEMORY → %s · %s %s %d entries", who, proj, style.Sym("─")+style.Sym("─"), len(m.entries))) + "\n")
 	filter := ""
 	if m.filter != "" {
 		filter = "/" + clean(m.filter)
@@ -1474,7 +1477,7 @@ func (m Model) View() string {
 		for i, label := range []string{"text ", "kind ", "paths"} {
 			marker := "  "
 			if i == m.field {
-				marker = "▸ "
+				marker = style.Sym("▸") + " "
 			}
 			tail.WriteString(marker + label + " " + m.fields[i].View() + "\n")
 		}

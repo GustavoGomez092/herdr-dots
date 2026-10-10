@@ -776,9 +776,9 @@ func (m Model) View() string {
 		for i, d := range m.templates {
 			marker := "  "
 			if i == m.tcursor {
-				marker = "▸ "
+				marker = style.Sym("▸") + " "
 			}
-			b.WriteString(fmt.Sprintf("%s%s %s\n", marker, d.Glyph, d.Name))
+			b.WriteString(fmt.Sprintf("%s%s %s\n", marker, style.Sym(d.Glyph), d.Name))
 		}
 		b.WriteString("\n" + style.Dim.Render("j/k move · enter use · esc back"))
 		return b.String()
