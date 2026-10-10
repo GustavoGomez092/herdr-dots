@@ -219,18 +219,28 @@ func TestMemoryScreenFromManageScrolls(t *testing.T) {
 	}
 }
 
-// Fix round 1 (Task 14): the memory screen exports into the target pane's
-// checkout, never into the plugin's install directory (the popup's cwd),
-// which a reinstall deletes.
-func TestMemoryScreenExportsIntoThePanesCheckout(t *testing.T) {
+// Ruling P10-R13 (replaces Task 14 fix round 1's pane checkout): the memory
+// screen's export defaults to the home directory, never into the target
+// pane's checkout, where `git add -A` would publish global and
+// secret-confirmed memory (nor into the popup's cwd, the install directory).
+func TestMemoryScreenExportsIntoHomeNotThePanesCheckout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	m, _, _, _ := memSetup(t)
 	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	s := lib()
 	s.PaneRoots = map[string]string{"w1:p1": repo}
 	m, _ = m.Update(SnapshotMsg(s))
 	v := press(m, "P", "E").View()
 	flat := strings.Join(strings.Fields(v), "")
-	if want := strings.Join(strings.Fields(filepath.Join(repo, "herdr-dots-memory-herdr-dots-")), ""); !strings.Contains(flat, want) {
-		t.Fatalf("the export default must be in the pane's checkout %s:\n%s", repo, v)
+	if want := strings.Join(strings.Fields(filepath.Join(home, "herdr-dots-memory-herdr-dots-")), ""); !strings.Contains(flat, want) {
+		t.Fatalf("the export default must be in the home directory %s:\n%s", home, v)
+	}
+	if strings.Contains(flat, strings.Join(strings.Fields(repo), "")) || strings.Contains(v, "git repository") {
+		t.Fatalf("the export default must not be in the pane's checkout %s:\n%s", repo, v)
 	}
 }
