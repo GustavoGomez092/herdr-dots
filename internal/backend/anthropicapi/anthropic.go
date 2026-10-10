@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -83,9 +84,9 @@ func (b *Backend) client() (anthropic.Client, string, error) {
 // key from credentials.toml, or, on the SDK's own chain (key ""), the
 // environment values that chain reads (API key, auth token, federation
 // identity token, custom header values), which may have no key shape Redact
-// knows (ruling P10-R7). They are never the returned key. Tokens the SDK
-// reads from files (an `ant auth` profile, ANTHROPIC_IDENTITY_TOKEN_FILE) or
-// gets by exchange are not covered (a known issue).
+// knows (ruling P10-R7), and the content of ANTHROPIC_IDENTITY_TOKEN_FILE.
+// They are never the returned key. Tokens the SDK reads from an `ant auth`
+// profile or gets by exchange are not covered (a known issue, S23).
 func (b *Backend) known(key string) []string {
 	if key != "" {
 		return []string{key}
@@ -97,6 +98,16 @@ func (b *Backend) known(key string) []string {
 	for _, name := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_IDENTITY_TOKEN"} {
 		if v := os.Getenv(name); v != "" {
 			out = append(out, v)
+		}
+	}
+	// The federation identity token can come from a file instead (S23).
+	if p := os.Getenv("ANTHROPIC_IDENTITY_TOKEN_FILE"); p != "" {
+		if f, err := os.Open(p); err == nil {
+			b, _ := io.ReadAll(io.LimitReader(f, 64<<10))
+			f.Close()
+			if v := strings.TrimSpace(string(b)); v != "" {
+				out = append(out, v)
+			}
 		}
 	}
 	// ANTHROPIC_CUSTOM_HEADERS holds "Name: value" lines; a value can be a

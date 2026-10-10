@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -58,5 +60,27 @@ func TestSDKChainTokensAreRedactedFromErrors(t *testing.T) {
 	}
 	if _, key, cerr := b.client(); cerr != nil || key != "" {
 		t.Fatalf("client() key = %q, %v: the SDK chain's values are never the returned key", key, cerr)
+	}
+}
+
+// S23 (post-rc hardening, the cheap part): the federation identity token can
+// come from a file (ANTHROPIC_IDENTITY_TOKEN_FILE); its content is handed to
+// Redact by value like the environment variable's.
+func TestSDKChainKnownSecretsCoverTheIdentityTokenFile(t *testing.T) {
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_IDENTITY_TOKEN", "")
+	t.Setenv("ANTHROPIC_CUSTOM_HEADERS", "")
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("  identitytokenfromfilezz\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANTHROPIC_IDENTITY_TOKEN_FILE", path)
+	if got := (&Backend{o: backend.Options{SDKCreds: true}}).known(""); !slices.Contains(got, "identitytokenfromfilezz") {
+		t.Fatalf("known() = %q, lacks the token file's content", got)
+	}
+	t.Setenv("ANTHROPIC_IDENTITY_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
+	if got := (&Backend{o: backend.Options{SDKCreds: true}}).known(""); len(got) != 0 {
+		t.Fatalf("a missing token file adds nothing: %q", got)
 	}
 }
