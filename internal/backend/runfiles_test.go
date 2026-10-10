@@ -39,7 +39,8 @@ func TestShortPromptStaysInArgvExactlyAsV1(t *testing.T) {
 	defer cmd.Close()
 	want := []string{"-p", "--output-format", "json", "--no-session-persistence", "--strict-mcp-config",
 		"--settings", `{"disableAllHooks":true}`, "--append-system-prompt", SystemPrompt(r),
-		"--model", "sonnet", "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob"}
+		"--model", "sonnet", "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob",
+		"--setting-sources", "user"} // security review R1: never the repository's settings
 	if !slices.Equal(cmd.Args, want) || cmd.Cleanup != nil {
 		t.Fatalf("args %q cleanup %v", cmd.Args, cmd.Cleanup != nil)
 	}

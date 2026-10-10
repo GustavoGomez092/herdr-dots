@@ -186,6 +186,16 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	default:
 		args = append(args, "--tools", "")
 	}
+	if !WriteMode(r) && !research {
+		// Print mode skips the workspace trust dialog, so claude would load
+		// the repository's .claude/settings.json and settings.local.json:
+		// commands it runs (apiKeyHelper, awsAuthRefresh, ...), env such as
+		// ANTHROPIC_BASE_URL, plugins. A cloned repository is untrusted, so
+		// only the developer's own user settings load (security review R1).
+		// Drafts and research run --restricted, which loads none of them.
+		// Before the dot's args, like the budget cap below.
+		args = append(args, "--setting-sources", "user")
+	}
 	// Denied args (dots.Validate rejects them too) are dropped so they can never
 	// override the flags above.
 	dotArgs := dots.SafeArgs(c.Kind(), r.Args)
