@@ -242,8 +242,11 @@ func (f *scopeFile) find(id string) int {
 	return slices.IndexFunc(f.Entries, func(e Entry) bool { return e.ID == id })
 }
 
+// idNum is the number of a canonical id (validEntryID), else 0: an entry
+// with a hand-edited id ("m+5", "m005") gets a fresh one, like an entry
+// without an id, so no two entries share a number (M20).
 func idNum(id string) int {
-	if !strings.HasPrefix(id, "m") {
+	if !validEntryID(id) {
 		return 0
 	}
 	n, _ := strconv.Atoi(id[1:])
@@ -368,6 +371,9 @@ func (s *Store) prepare(e Entry) (Entry, error) {
 	}
 	if e.Source == "" {
 		e.Source = SourceUser
+	}
+	if !e.Source.Valid() {
+		return e, fmt.Errorf("%w: source %q", ErrInvalid, e.Source)
 	}
 	if e.Scope == ScopeProject && e.Dot != "" && !ValidSlug(e.Dot) {
 		return e, fmt.Errorf("%w: dot %q", ErrInvalid, e.Dot)
