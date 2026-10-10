@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -874,9 +875,12 @@ func TestBudgetResetsOnNewAgentSession(t *testing.T) {
 	eventually(t, "new session reviewed despite the old budget", func() bool {
 		return r.be.n() == 2 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "fresh"
 	})
-	if c := r.usage.Calls(pane, "security"); c != 1 {
-		t.Fatalf("usage after reset + one run = %d, want 1", c)
-	}
+	// The run is charged after the backend returns, not when it is called:
+	// wait for the charge (asserting at once flaked under load).
+	eventuallyWhy(t, "usage after reset + one run is 1", func() (bool, string) {
+		c := r.usage.Calls(pane, "security")
+		return c == 1, fmt.Sprintf("usage %d", c)
+	})
 }
 
 // r (Reset) clears the dot's usage counter, so it runs again.
