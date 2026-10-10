@@ -385,7 +385,7 @@ func (e *Engine) runDraft(ctx context.Context, id string, att state.Attachment, 
 	}
 	e.touchMemory(mem)
 	e.setDraftPhase(id, view.DraftValidating)
-	p, err := worktree.Capture(ctx, g, co, s)
+	p, err := worktree.CaptureMax(ctx, g, co, s, d.Capabilities.MaxPatchBytes) // never buffers a huge draft whole
 	if err != nil {
 		fail(err)
 		return
