@@ -61,6 +61,9 @@ type draftRun struct {
 // or a toast.
 func (e *Engine) Draft(ctx context.Context, paneID, slug, instruction, fromCardID string) (string, error) {
 	cfg := e.config()
+	if cfg.RepoToolsOff() {
+		return "", ErrDenyGlobsInvalid
+	}
 	if !cfg.WriteEnabled {
 		return "", ErrWriteDisabled
 	}

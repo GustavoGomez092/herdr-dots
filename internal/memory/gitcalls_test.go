@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -67,6 +68,12 @@ func TestEveryGitCallDisablesRepositoryPrograms(t *testing.T) {
 		src := string(b)
 		rel, _ := filepath.Rel(root, p)
 		rel = filepath.ToSlash(rel)
+		// A "git" literal anywhere else is a git call this guard doesn't
+		// know (one built through a helper or a variable would slip past
+		// gitExecRe): add the file to gitSites with its pins.
+		if strings.Contains(src, `"git"`) && !slices.Contains(gitSites, rel) {
+			t.Errorf("%s has a \"git\" literal but isn't one of the known git call sites (gitSites)", rel)
+		}
 		inWorktree := strings.HasPrefix(rel, "internal/worktree/") && childRe.MatchString(src)
 		if !gitExecRe.MatchString(src) && !inWorktree {
 			return nil

@@ -45,6 +45,7 @@ type Config struct {
 	SessionBudgetUSD float64                   `toml:"session_budget_usd"` // per pane; 0 = off
 	Providers        map[string]ProviderConfig `toml:"providers"`          // [providers.<name>]
 	ToolDenyGlobs    []string                  `toml:"tool_deny_globs"`    // added to the built-in deny-list
+	InvalidDenyGlobs []string                  `toml:"-"`                  // tool_deny_globs entries that aren't valid globs (RepoToolsOff)
 	PricesFile       string                    `toml:"prices_file"`        // "" = CONFIG_DIR/prices.toml
 
 	ProjectDotsEnabled bool `toml:"project_dots_enabled"` // Phase 9: load trusted .herdr-dots/dots from repositories; false on a malformed file
@@ -184,13 +185,18 @@ func Load(path string) (Config, error) {
 	if math.IsNaN(c.SessionBudgetUSD) || math.IsInf(c.SessionBudgetUSD, 0) || c.SessionBudgetUSD < 0 {
 		c.SessionBudgetUSD = 0
 	}
-	var globs []string
+	// A deny glob that doesn't parse can't deny anything, so it fails closed
+	// (ruling P10-R7): the valid ones are kept, the invalid ones recorded, and
+	// RepoToolsOff turns repository tools, drafts and research off.
+	var globs, invalid []string
 	for _, g := range c.ToolDenyGlobs {
 		if doublestar.ValidatePattern(g) {
 			globs = append(globs, g)
+		} else {
+			invalid = append(invalid, g)
 		}
 	}
-	c.ToolDenyGlobs = globs
+	c.ToolDenyGlobs, c.InvalidDenyGlobs = globs, invalid
 	for name, p := range c.Providers {
 		c.Providers[name] = p.sanitized()
 	}
@@ -227,6 +233,11 @@ func (p ProviderConfig) sanitized() ProviderConfig {
 	}
 	return p
 }
+
+// RepoToolsOff reports a tool_deny_globs entry that isn't a valid glob:
+// until it is fixed, no run reads the repository, and drafts and research
+// are off (the deny list must hold everything the developer listed).
+func (c Config) RepoToolsOff() bool { return len(c.InvalidDenyGlobs) > 0 }
 
 func (c Config) RunTimeout() time.Duration { return time.Duration(c.RunTimeoutSeconds) * time.Second }
 func (c Config) Debounce() time.Duration   { return time.Duration(c.TurnDebounceMs) * time.Millisecond }

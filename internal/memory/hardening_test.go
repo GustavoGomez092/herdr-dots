@@ -34,8 +34,26 @@ func TestInvisibleCharactersDoNotHideASecret(t *testing.T) {
 	}
 }
 
-// A repository's own config can name an fsmonitor hook or a pager; ExecGit
-// must run none of them.
+// Fillers that render as nothing but are letters or symbols, not format
+// characters (Other_Default_Ignorable_Code_Point such as the Hangul fillers,
+// and U+2800 BRAILLE PATTERN BLANK), can't split a key either.
+func TestIgnorableFillersDoNotHideASecret(t *testing.T) {
+	key := "sk-ant-api03-" + strings.Repeat("Ab3d", 6)
+	for name, text := range map[string]string{
+		"hangul filler":           "use " + key[:7] + char(0x3164) + key[7:],
+		"halfwidth hangul filler": "AKIA" + char(0xffa0) + "ABCDEFGHIJKLMNOP",
+		"braille blank":           "ghp_" + strings.Repeat("a1B2", 4) + char(0x2800) + strings.Repeat("c3D4", 6),
+	} {
+		if found, _ := ScanSecrets(text); !found {
+			t.Errorf("%s: %q passed the scanner", name, text)
+		}
+	}
+}
+
+// A repository's own config can name an fsmonitor hook; ExecGit must not run
+// it. (A core.pager is not set up here: git starts a pager only on a
+// terminal, and ExecGit's stdout is a pipe, so such a setup would assert
+// nothing.)
 func TestExecGitRunsNothingTheRepositoryConfigures(t *testing.T) {
 	isolateGit(t)
 	if runtime.GOOS == "windows" {
@@ -48,7 +66,6 @@ func TestExecGitRunsNothingTheRepositoryConfigures(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitT(t, repo, "config", "core.fsmonitor", hook)
-	gitT(t, repo, "config", "core.pager", hook)
 	// Plain git runs the hook, so the test can see the difference.
 	_, _ = exec.Command("git", "-C", repo, "status", "--porcelain").CombinedOutput()
 	if _, err := os.Stat(marker); err != nil {
@@ -176,6 +193,8 @@ func TestInvisibleCharacterStrippingKeepsOrdinaryTextClean(t *testing.T) {
 		"hebrew points":      "שָׁלוֹם עוֹלָם, the greeting stays.",
 		"arabic vowels":      "مَرْحَبًا بِكُمْ in the welcome banner.",
 		"persian zwnj":       "می" + char(0x200c) + "خواهم a short note.",
+		"hangul":             "한국어 문장은 괜찮습니다.",
+		"braille":            "⠓⠑⠇⠇⠕" + char(0x2800) + "⠺⠕⠗⠇⠙ in the docs.",
 		"emoji sequences":    "Family " + char(0x1f468) + char(0x200d) + char(0x1f469) + char(0x200d) + char(0x1f467) + " and flag " + char(0x1f3f3) + char(0xfe0f) + char(0x200d) + char(0x1f308) + ".",
 		"identifiers":        "func scanSecrets(text string) calls stripInvisible" + char(0x200b) + "Text before tokenize" + char(0x00ad) + "Config.",
 	} {

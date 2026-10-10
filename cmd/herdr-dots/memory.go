@@ -179,11 +179,22 @@ func (c *memCLI) project(arg string) (memory.Project, error) {
 	dir := arg
 	if dir == "" {
 		dir = c.cwd
+	} else if !filepath.IsAbs(dir) && c.cwd != "" {
+		dir = filepath.Join(c.cwd, dir)
 	}
-	if m, ok, err := c.store.FindProject(dir); err == nil && ok {
+	// Git first: a repository's g- id is the project, even when it sits inside
+	// another recorded project (a vendored repo or submodule nobody attached
+	// yet) or under a stale deeper path project. The recorded roots are only
+	// asked for a path identity (no repository, git missing), where a recorded
+	// project (say, a moved or not-yet-committed checkout) beats a fresh
+	// path hash.
+	pr, err := c.resolve(dir)
+	if strings.HasPrefix(pr.ID, "g-") {
+		return pr, nil
+	}
+	if m, ok, ferr := c.store.FindProject(dir); ferr == nil && ok {
 		return memory.Project{ID: m.ID, Name: m.Name}, nil
 	}
-	pr, err := c.resolve(dir)
 	if pr.ID == "" {
 		return pr, fmt.Errorf("can't identify the project for %s: %v", dir, err)
 	}

@@ -57,10 +57,12 @@ func Scan(text string) (bool, string) {
 }
 
 // stripInvisible removes format characters (zero-width spaces and joiners,
-// word joiners, BOMs, soft hyphens, bidi controls) and combining marks.
+// word joiners, BOMs, soft hyphens, bidi controls), combining marks, the
+// other default-ignorable code points (Hangul fillers and the like) and
+// U+2800 BRAILLE PATTERN BLANK, which all render as nothing.
 func stripInvisible(s string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.In(r, unicode.Cf, unicode.Mn, unicode.Me) {
+		if r == 0x2800 || unicode.In(r, unicode.Cf, unicode.Mn, unicode.Me, unicode.Other_Default_Ignorable_Code_Point) {
 			return -1
 		}
 		return r

@@ -1,12 +1,22 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 
 	"herdr-dots/internal/config"
 )
+
+// ErrDenyGlobsInvalid refuses a draft while tool_deny_globs holds a pattern
+// that isn't a valid glob (config.RepoToolsOff, ruling P10-R7).
+var ErrDenyGlobsInvalid = errors.New("drafts are off: tool_deny_globs in config.toml has an invalid pattern; fix it to turn them back on")
+
+// researchOffHint is the roster's line for a research dot while
+// config.RepoToolsOff holds.
+const researchOffHint = "research off · fix tool_deny_globs"
 
 // config returns the current settings. config.toml can change at runtime
 // (ReloadConfig), so read it at the point of use instead of caching it.
@@ -44,7 +54,35 @@ func (e *Engine) ReloadConfig() {
 	}
 	e.cfg.Store(&c)
 	e.noteChairConfig(c)
+	e.noteDenyConfig(c)
 	e.broadcast()
+}
+
+// noteDenyConfig logs and toasts once (per stretch of bad settings, not per
+// reload) when tool_deny_globs holds an invalid pattern: repository tools,
+// drafts and research stay off until it is fixed (ruling P10-R7). The roster
+// shows researchOffHint for research dots meanwhile.
+func (e *Engine) noteDenyConfig(c config.Config) {
+	e.cfgMu.Lock()
+	warn := c.RepoToolsOff() && !e.denyWarned
+	e.denyWarned = c.RepoToolsOff()
+	e.cfgMu.Unlock()
+	if !warn {
+		return
+	}
+	msg := fmt.Sprintf("config.toml tool_deny_globs has %d invalid pattern(s) %q: repository tools, drafts and research are off until it is fixed",
+		len(c.InvalidDenyGlobs), c.InvalidDenyGlobs)
+	e.d.Logf("config: %s", msg)
+	if e.d.Herdr == nil {
+		return
+	}
+	e.spawn(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := e.d.Herdr.Notify(ctx, "Herdr Dots", msg); err != nil {
+			e.d.Logf("notify: %v", err)
+		}
+	})
 }
 
 // maybeReloadConfig reloads config.toml when its mtime or size changed,

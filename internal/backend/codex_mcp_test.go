@@ -58,7 +58,7 @@ func TestCodexHomeOverridesHome(t *testing.T) {
 func TestCodexLeavesTheOverrideOutWithoutTheServer(t *testing.T) {
 	for name, cfg := range map[string]string{
 		"no config":       "",
-		"other servers":   "[mcp_servers.docs]\ncommand = \"docs\"\n",
+		"no servers":      "model = \"x\"\n",
 		"malformed":       "[mcp_servers.herdr-dots\ncommand = ",
 		"commented table": "# [mcp_servers.herdr-dots]\n",
 	} {
@@ -85,5 +85,35 @@ func TestCodexUserMCPArgsCannotReplaceTheOverride(t *testing.T) {
 	n := len(args)
 	if args[n-3] != "-c" || args[n-2] != "mcp_servers.herdr-dots.enabled=false" || args[n-1] != "-" {
 		t.Fatalf("override not last: %v", args)
+	}
+}
+
+// Ruling P10-R7: a codex dot run starts none of the developer's MCP servers,
+// not only the Dots one. Every declared server is disabled, in name order,
+// and a name that isn't a bare TOML key (a dot, a space, a quote) is quoted.
+func TestCodexDisablesEveryDeclaredMCPServer(t *testing.T) {
+	cfg := "[mcp_servers.docs]\ncommand = \"docs\"\n\n" +
+		"[mcp_servers.\"acme.search\"]\ncommand = \"s\"\n\n" +
+		"[mcp_servers.'say \"hi\"']\ncommand = \"h\"\n\n" +
+		"[mcp_servers.herdr-dots]\ncommand = \"/bin/herdr-dots\"\n"
+	home := codexHomeWith(t, cfg)
+	args := codexArgs(platform.HomeEnv+"="+home, "PATH=/bin")
+	var got []string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-c" && strings.HasPrefix(args[i+1], "mcp_servers.") {
+			got = append(got, args[i+1])
+		}
+	}
+	want := []string{
+		`mcp_servers."acme.search".enabled=false`,
+		`mcp_servers.docs.enabled=false`,
+		`mcp_servers.herdr-dots.enabled=false`,
+		`mcp_servers."say \"hi\"".enabled=false`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("overrides %q, want %q", got, want)
+	}
+	if args[len(args)-1] != "-" {
+		t.Fatalf("args %v: the stdin marker stays last", args)
 	}
 }
