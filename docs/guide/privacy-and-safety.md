@@ -30,6 +30,11 @@ Every rule about what leaves your machine, what dots may touch and what needs yo
   file, is allowed.) Every draft needs two approvals: one to start, one (with the diff on screen)
   to apply. Applying touches the working tree only; it never stages or commits.
 - Hooks are disabled for dot runs, and Herdr variables are stripped, so dots never affect your panes.
+- `claude-cli` review, ask, memory, council and chair runs ignore the repository's
+  `.claude/settings.json` and `.claude/settings.local.json` (`--setting-sources user`), so a
+  repository can't run a credential helper or redirect a dot; the repository's `CLAUDE.md`
+  probably doesn't reach them either (live check pending; see
+  [Backends](backends.md#claude-cli-dots-ignore-the-repositorys-claude-settings)).
 - Queue mode (you approve) is the default. Inject mode is opt-in per dot and can be turned off for
   all dots with `inject_enabled = false` in `config.toml`.
 - Changes to `config.toml` apply within a few seconds, without a restart (except `max_parallel_runs`, the `memory_*` limits and turning `memory_enabled` back on);

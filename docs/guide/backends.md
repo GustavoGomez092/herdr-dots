@@ -63,6 +63,19 @@ members past their `max_usd_per_session` sit out, and a pane past its dollar bud
 council. An API `chair_backend` without `chair_model` uses that kind's default (`claude-opus-5-5` for
 `anthropic-api`); `openai-api`, `openrouter` and `ollama` chairs need `chair_model`.
 
+## claude-cli dots ignore the repository's Claude settings
+
+`claude -p` skips Claude Code's folder-trust prompt, so a repository's own
+`.claude/settings.json` and `.claude/settings.local.json` could otherwise
+run commands (an `apiKeyHelper`, for example) or redirect a dot. Every
+`claude-cli` review, ask, memory pass, council member and chair run now
+passes `--setting-sources user`: only your own `~/.claude` settings load,
+never the repository's. A side effect: the repository's `CLAUDE.md`
+probably no longer reaches these runs either (inferred from the Claude Code
+bundle; the live check is pending, a user gate). Drafts and research already
+ran with `--restricted`, which ignores both your and the repository's
+settings files.
+
 ## Codex dots and your other MCP servers
 
 A codex dot run switches off every MCP server declared in your Codex
