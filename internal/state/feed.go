@@ -2,6 +2,7 @@ package state
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"strings"
@@ -63,6 +64,7 @@ type Feed struct {
 	path   string
 	mu     sync.Mutex
 	recent map[string][]FeedEntry
+	needNL bool // the file ends in a truncated line: Append starts a new one
 }
 
 // chmod is os.Chmod; tests make it fail.
@@ -94,6 +96,7 @@ func OpenFeedLogged(path string, logf func(format string, args ...any)) (*Feed, 
 	}
 	file, err := os.Open(path)
 	if err == nil {
+		bad := 0
 		sc := bufio.NewScanner(file)
 		sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
 		for sc.Scan() {
@@ -101,11 +104,32 @@ func OpenFeedLogged(path string, logf func(format string, args ...any)) (*Feed, 
 			if json.Unmarshal(sc.Bytes(), &e) == nil {
 				e.Detail = textutil.SanitizeModelText(e.Detail)
 				f.remember(e)
+			} else if len(bytes.TrimSpace(sc.Bytes())) > 0 {
+				bad++
 			}
+		}
+		if logf != nil && bad > 0 {
+			logf("feed: skipped %d unreadable line(s) in %s (a line cut short by a crash?)", bad, path)
+		}
+		if logf != nil && sc.Err() != nil {
+			logf("feed: stopped reading %s early: %v", path, sc.Err())
+		}
+		// A last line without its newline (a crash mid-write): the next
+		// entry starts on a new line instead of being glued onto it.
+		last := make([]byte, 1)
+		if n, _ := file.ReadAt(last, max(sizeOf(file)-1, 0)); n == 1 && last[0] != '\n' {
+			f.needNL = true
 		}
 		file.Close()
 	}
 	return f, nil
+}
+
+func sizeOf(file *os.File) int64 {
+	if st, err := file.Stat(); err == nil {
+		return st.Size()
+	}
+	return 0
 }
 
 // remember keeps e in memory; e.Detail must already be sanitized.
@@ -133,8 +157,14 @@ func (f *Feed) Append(e FeedEntry) error {
 		return err
 	}
 	defer file.Close()
-	_, err = file.Write(append(line, '\n'))
-	return err
+	if f.needNL {
+		line = append([]byte{'\n'}, line...)
+	}
+	if _, err = file.Write(append(line, '\n')); err != nil {
+		return err
+	}
+	f.needNL = false
+	return nil
 }
 
 // Recent returns up to n entries for a pane, oldest first.
