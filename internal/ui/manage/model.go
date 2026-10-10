@@ -660,6 +660,10 @@ func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.form.SetError(err.Error())
 			return m, nil
 		}
+		if m.nameTaken(d) {
+			m.form.SetError(fmt.Sprintf("a dot named %q already exists: pick another name", d.Name))
+			return m, nil
+		}
 		m.form.SetError("")
 		m.saving = true
 		return m, m.save(d, m.form.IsNew())
@@ -668,6 +672,18 @@ func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, m.form.Update(k)
+}
+
+// nameTaken reports another library dot with d's display name (any case):
+// two dots with one name would share one delivery header, which the loop
+// guard tells dots apart by (U10). A new dot's own name clash is ErrExists.
+func (m Model) nameTaken(d dots.Dot) bool {
+	for _, o := range m.snap.Library {
+		if (d.Slug == "" || o.Slug != d.Slug) && strings.EqualFold(strings.TrimSpace(o.Name), strings.TrimSpace(d.Name)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
