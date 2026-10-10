@@ -254,7 +254,10 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 			if resp.StopReason != anthropic.BetaStopReasonPauseTurn {
 				return resp, u, searches, nil
 			}
-			if n == maxPauses || webUsed >= webMaxUses {
+			if webUsed >= webMaxUses {
+				return resp, u, searches, fmt.Errorf("web research used its %d web uses without finishing", webMaxUses)
+			}
+			if n == maxPauses {
 				return resp, u, searches, fmt.Errorf("web research paused %d times without finishing", n+1)
 			}
 		}
