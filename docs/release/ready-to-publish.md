@@ -10,9 +10,7 @@ tagged, listed or published. The macOS evidence is in
 - [ ] **License.** Choose one (the spec suggested Apache-2.0 for its patent grant, or MIT) and add `LICENSE`. No license means no one may use the code.
 - [ ] **Name and listing.** Keep "Herdr Dots" or rename. OpenAI announced "Dots" (DevDay 2026); a rename later is supported by `internal/migrate` but touches the plugin id, binary and docs. Check the name on GitHub and herdr.dev/plugins.
 - [ ] **Acceptance run on three OSes.** Run `docs/superpowers/notes/1.0-acceptance.md` on a Linux machine and on Windows with the Herdr Windows beta, and on macOS with a real `herdr plugin install`; fill the Linux and Windows columns.
-- [ ] **Patched Go in every workflow.** In `.github/workflows/ci.yml` and `release.yml`, replace every `go-version-file: go.mod` with an explicit patched `go-version` (at least the release that fixes the govulncheck findings, e.g. 1.26.9 or later). Then run `make vulncheck` with that Go and get `No vulnerabilities found.` before the first candidate run (on go1.25.7 it found 24 reachable standard-library vulnerabilities, security review R2; the acceptance run's govulncheck couldn't reach its database, so run it with network access). Today every workflow's `setup-go` reads `go-version-file: go.mod`, whose `go 1.25.0` line makes it install exactly go1.25.0. Do not add a `toolchain` line to `go.mod`: under `GOTOOLCHAIN=auto` it would make every source-fallback install download a toolchain, which fails offline and on new hosts.
-- [ ] **Pin GitHub Actions by commit SHA** (`actions/checkout`, `actions/setup-go`, `actions/upload-artifact`, `goreleaser/goreleaser-action`, `sigstore/cosign-installer`), and decide whether the soak job should run on every push (it costs runner time).
-- [ ] **Pin the GoReleaser binary version.** `goreleaser-action` uses `version: "~> v2"`; a GoReleaser release between a candidate run and its publish run can change the archive bytes (the publish diff then fails closed and you need a new candidate). Set an exact version in both release jobs.
+- [ ] **Soak job cost.** Decide whether CI's soak job should run on every push (it costs runner time); Go 1.26.9, the Actions and GoReleaser are now pinned (keep them current: re-run govulncheck and bump the pins before each release).
 - [ ] **The e2e install job on Linux.** `TestLocalReleaseInstallsEndToEnd` has only run on macOS; the release workflow now runs it on ubuntu, so the first candidate run is its first Linux run.
 - [ ] **`SECURITY.md` placeholders.** Replace the `TODO(publish)` lines: the private reporting contact and the repository URL.
 - [ ] **Live provider checks.** With Claude Code logged in, run `go test -tags live ./internal/backend/ ./internal/council/` (a small API spend; snapshot `~/.claude/settings.json` before and diff it after: it must not change) and the live smoke in a `herdr --session dots-test` session: attach a Security dot to a Claude Code pane, get a card for an obvious secret, dismiss it, and see `suppressed` in the feed when the same request repeats. Run the API backends' live tests with your keys (`docs/superpowers/notes/2026-10-08-phase-4-verification.md`).
@@ -50,7 +48,7 @@ USER GATE for all of them.
 | X9 | Read deny vs Grep/Glob and `--restricted` reads outside the working directory | triage; Phase 8 ledger | Live provider checks |
 | X10 | Live `--max-budget-usd` stop behaviour | triage; Phase 8 ledger | Live provider checks |
 | X11 | V3/V5/V6 web paths | triage; Phase 8 ledger | Live provider checks |
-| X12 | Pin GitHub Actions by SHA; pin an exact Go toolchain; soak job cost on every push | triage; Phase 10 Task 5 | Pin actions; patched Go |
+| X12 | Soak job cost on every push (Go, Actions and GoReleaser now pinned) | triage; Phase 10 Task 5 | Soak job cost |
 | X13 | The global Claude model setting after the v1 incident | triage, v1 incident | Decisions: Claude model setting |
 | X14 | Trust entries in `~/.claude.json` for deleted test directories | triage, Phase 8 incident | Decisions: old trust entries |
 | B14 | OpenAI `reasoning.encrypted_content` sent for non-reasoning models | triage; P4 T11 | Live provider checks (OpenAI key) |
@@ -62,7 +60,6 @@ USER GATE for all of them.
 | T6-pwsh | PowerShell install tests on a `pwsh` host | Phase 10 ledger (Task 6) | PowerShell install tests |
 | T6-cosign | Real `cosign verify-blob` | Phase 10 ledger (Task 6) | Real cosign |
 | R1 | Repository `.claude/settings.json` must not load (live) | Phase 10 ledger (Task 11), security review | R1 live check |
-| R2 | Patched Go in the workflows; govulncheck clean before the first candidate run | Phase 10 ledger (Task 11), security review | Patched Go |
 | SEC | `SECURITY.md` `TODO(publish)` placeholders | Phase 10 ledger (Task 11) | `SECURITY.md` placeholders |
 | P10-R8 | Codex dots disable bare-named MCP servers, refuse dotted names (live) | Phase 10 ledger (Task 9) | P10-R8 live check |
 | SMOKE | The read-only toast and the memory approve guard in a live Herdr popup | Task 13 smoke (S3, S4) | Popup and pane checks |

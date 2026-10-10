@@ -48,8 +48,8 @@ what is still open.
   now `FIXED POST-RC`.
 
 **Counts** (rows of the full accounting): FIXED T9: 10 · FIXED T10: 10 ·
-FIXED EARLIER: 62 · FIXED FINAL: 1 · FIXED POST-RC: 71 · PARTLY FIXED POST-RC: 18 ·
-ACCEPTED: 142 · USER GATE: 20 · USER DECISION: 0 · total 334. A row may group several sub-items of one ledger line that share
+FIXED EARLIER: 62 · FIXED FINAL: 1 · FIXED POST-RC: 71 · PARTLY FIXED POST-RC: 19 ·
+ACCEPTED: 142 · USER GATE: 19 · USER DECISION: 0 · total 334. A row may group several sub-items of one ledger line that share
 one status and one reason.
 
 **Corrections to the plan's draft of these notes.** Re-reading the ledgers
@@ -565,7 +565,7 @@ phase's final review or fix wave; "parked" is a "Parked → Phase 10" line;
 | X9 | Read deny vs Grep/Glob and `--restricted` outside-cwd reads | P8 user gates | USER GATE | live Claude Code |
 | X10 | Live `--max-budget-usd` stop behaviour | P8 user gates | USER GATE | live spend |
 | X11 | V3/V5/V6 web paths | P8 user gates | USER GATE | live web search |
-| X12 | Pin GitHub Actions by SHA; pin an exact Go toolchain; soak job cost on every push | P10 carry to Task 13 | USER GATE | the ready-to-publish checklist |
+| X12 | Pin GitHub Actions by SHA; pin an exact Go toolchain; soak job cost on every push | P10 carry to Task 13 | PARTLY FIXED POST-RC | Go 1.26.9 (govulncheck clean), the five Actions by commit SHA and GoReleaser v2.18.3 are pinned in both workflows; the soak job's cost on every push stays a decision on the ready-to-publish checklist |
 | X13 | v1 incident: an E2E agent's `/model haiku` rewrote the global `~/.claude/settings.json` model; restored from an old backup, the true prior value is unknown | v1 incident | USER GATE | the developer confirms their model setting |
 | X14 | Phase 8 incident: accepting Claude's folder-trust prompt added trust entries for `/private/tmp/dots-test-repo` and `/private/tmp/dots-test-repo-p8` to `~/.claude.json` | P8 incident | USER GATE | the developer may remove them; the directories are gone |
 

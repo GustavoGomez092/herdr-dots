@@ -380,7 +380,7 @@ triage rows (the full reasons are in the triage notes).
   Release builds use `go-version-file: go.mod`, which says `go 1.25.0`, so
   setup-go most likely installs go1.25.0; already go1.25.7 has 24 reachable
   standard-library vulnerabilities. Setting an explicit patched `go-version`
-  in every workflow is a user gate [triage X12, review R2]; the release
+  in every workflow is pinned to go1.26.9, which govulncheck reports clean [triage X12, review R2]; the release
   workflow's candidate run (started by hand, no tag) runs govulncheck, so a
   vulnerable toolchain stops it before any checksums are proposed. Actions are
   pinned by tag, not SHA [triage W16]. `release/REPO` and the checksums are empty
@@ -420,4 +420,4 @@ triage rows (the full reasons are in the triage notes).
 - claude-cli review, ask, memory, council and draft runs deny secret files, home secrets and the herdr-dots config directory but can still read other files outside the repository; whether Read deny rules also bind Grep and Glob is unverified (review R3 post-rc status, triage X9).
 - Codex dots may read repository instructions and project config that the plugin doesn't control (review R6, [triage S24]).
 - `--setting-sources user` (T22) is pinned by argv tests and the flag is present in the installed Claude Code 2.1.295, but a live run that shows a repository `apiKeyHelper` is ignored is a user gate, like the `--restricted` re-check [triage X8].
-- Release binaries must be built with a patched Go toolchain: set an explicit `go-version` in every workflow (review R2, [triage X12]).
+- Release binaries are built with a patched Go toolchain: every workflow pins `go-version: "1.26.9"` (govulncheck clean) and pins its Actions by commit SHA (review R2, [triage X12]).

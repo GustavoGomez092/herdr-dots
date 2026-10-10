@@ -5,10 +5,11 @@ milestones, never released.
 
 ## Unreleased (after 1.0.0-rc.1)
 
-Post-rc hardening: about 90 accepted known issues and security findings R3, R5 and R8 are fixed (see the triage notes).
+Post-rc hardening: about 90 accepted known issues and security findings R2, R3, R5 and R8 are fixed (see the triage notes).
 
 ### Security
 
+- Release builds use Go 1.26.9: `govulncheck` reports no vulnerabilities (Go 1.25 had 24 reachable standard-library ones). The workflows also pin their GitHub Actions by commit and GoReleaser at v2.18.3.
 - `claude-cli` runs, drafts included, deny reads of home secrets (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.claude` and the like) and of the herdr-dots config directory. Not live-verified for Grep and Glob.
 - `anthropic-api` research searches the web only; it no longer fetches pages.
 - The MCP `read_memory` tool returns global entries only of dots attached to the pane.

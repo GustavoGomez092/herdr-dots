@@ -46,7 +46,7 @@ jobs:
       mode: ${{ steps.v.outputs.mode }}
       prerelease: ${{ steps.v.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: v
         shell: bash
         run: |
@@ -83,10 +83,10 @@ jobs:
     env:
       CGO_ENABLED: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-file: go.mod
+          go-version: "1.26.9" # patched Go: govulncheck clean (go.mod stays at 1.25.0)
       - run: go vet ./...
       - run: go test -race ./...
 
@@ -112,14 +112,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-file: go.mod
+          go-version: "1.26.9" # patched Go: govulncheck clean (go.mod stays at 1.25.0)
       - run: sh scripts/fuzz.sh 10m ${{ matrix.packages }}
       - name: keep crashers
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-crashers-${{ matrix.group }}
           path: "**/testdata/fuzz/**"
@@ -131,10 +131,10 @@ jobs:
     if: needs.meta.outputs.mode == 'candidate'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-file: go.mod
+          go-version: "1.26.9" # patched Go: govulncheck clean (go.mod stays at 1.25.0)
       - run: go test -run TestLocalReleaseInstallsEndToEnd -v ./scripts/
         env:
           HERDR_DOTS_E2E_RELEASE: "1"
@@ -147,12 +147,12 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-file: go.mod
+          go-version: "1.26.9" # patched Go: govulncheck clean (go.mod stays at 1.25.0)
       # Security review R2: no candidate's checksums are proposed while
       # govulncheck reports a reachable vulnerability (as ci.yml's vulncheck job).
       - name: govulncheck
@@ -169,9 +169,9 @@ jobs:
       # Snapshot mode: a candidate has no tag yet. Every archive name, flag
       # and timestamp comes from release/ASSET_ENV, so the archives don't
       # depend on it, and the publish job runs the same command.
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
-          version: "~> v2"
+          version: "v2.18.3"
           args: release --snapshot --clean --skip=publish,sign
       - name: commit the checksums on a branch and open a pull request
         shell: bash
@@ -189,7 +189,7 @@ jobs:
           git commit -m "release: checksums for v${{ needs.meta.outputs.version }} (candidate run ${{ github.run_id }})"
           git push origin "$branch"
           gh pr create --title "Release checksums for v${{ needs.meta.outputs.version }}" --body "$PR_BODY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: candidate-dist
           path: dist/
@@ -202,24 +202,24 @@ jobs:
       contents: write
       id-token: write # cosign keyless signing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-file: go.mod
+          go-version: "1.26.9" # patched Go: govulncheck clean (go.mod stays at 1.25.0)
       # meta already checked (release-kind.sh publish) that ASSET_ENV and
       # SHA256SUMS are for exactly this VERSION.
       - name: load the pinned build inputs
         shell: bash
         run: cat release/ASSET_ENV >> "$GITHUB_ENV"
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
-          version: "~> v2"
+          version: "v2.18.3"
           args: release --snapshot --clean --skip=publish,sign
       - name: the rebuilt archives must match the committed checksums
         run: diff -u release/SHA256SUMS dist/SHA256SUMS
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
       - name: sign every archive
         shell: bash
         run: |
