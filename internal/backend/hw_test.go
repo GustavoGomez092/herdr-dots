@@ -40,6 +40,21 @@ func TestFinishAPISanitizesTheReply(t *testing.T) {
 	}
 }
 
+// B3 (post-rc hardening): claude can exit 0 with is_error set; that error
+// gets the same actionable hint as a failed exit.
+func TestClaudeIsErrorOnExitZeroGetsTheHint(t *testing.T) {
+	f := &fakeRunner{stdout: `{"is_error":true,"result":"Invalid API key · Please run /login","total_cost_usd":0}`}
+	_, err := ClaudeCLI{Runner: f, Environ: func() []string { return nil }}.Run(context.Background(), req())
+	if err == nil || !strings.Contains(err.Error(), "claude is not logged in") {
+		t.Fatalf("err = %v, want the login hint", err)
+	}
+	f = &fakeRunner{stdout: `{"is_error":true,"result":"Overloaded","total_cost_usd":0.01}`}
+	res, err := ClaudeCLI{Runner: f, Environ: func() []string { return nil }}.Run(context.Background(), req())
+	if err == nil || !strings.Contains(err.Error(), "Overloaded") || !res.CostKnown || res.CostUSD != 0.01 {
+		t.Fatalf("err = %v, res %+v: the error text and the spend stay", err, res)
+	}
+}
+
 // B12 (post-rc hardening): the unknown-kind error names the kinds there are.
 func TestUnknownKindListsTheKinds(t *testing.T) {
 	_, err := NewWith("claude-api", Options{})

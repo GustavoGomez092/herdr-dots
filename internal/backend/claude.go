@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -272,8 +273,15 @@ func (c ClaudeCLI) Run(ctx context.Context, r Request) (Result, error) {
 		// (zero otherwise), so the failed run is still charged.
 		return res, fmt.Errorf("claude failed: %s", Hint(c.Kind(), string(stderr)+"\n"+string(out)))
 	}
+	if errors.Is(perr, errClaudeIsError) {
+		// is_error with exit 0: the same actionable hint (B3).
+		return res, fmt.Errorf("claude failed: %s", Hint(c.Kind(), strings.TrimPrefix(perr.Error(), errClaudeIsError.Error()+": ")))
+	}
 	return res, perr
 }
+
+// errClaudeIsError marks a reply with is_error set.
+var errClaudeIsError = errors.New("claude error")
 
 // ParseClaudeOutput parses a review run's `claude -p --output-format json` output.
 func ParseClaudeOutput(out []byte) (Result, error) { return parseClaude(out, PassReview) }
@@ -303,7 +311,7 @@ func parseClaude(out []byte, pass string) (Result, error) {
 		// A failed run (an API error, or one stopped by --max-budget-usd)
 		// may still have spent money: keep its usage and cost so it is
 		// charged (ruling P8-R15), but no verdict.
-		return res, fmt.Errorf("claude error: %s", o.Result)
+		return res, fmt.Errorf("%w: %s", errClaudeIsError, o.Result)
 	}
 	res.Raw = o.Result
 	return finishResult(res, o.Result, pass)
