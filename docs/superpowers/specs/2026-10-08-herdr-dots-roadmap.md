@@ -23,7 +23,7 @@
 | 7 | 0.7.0 | Write-capable dots in sandboxed worktrees | v1 "Later" | [spec](2026-10-08-herdr-dots-phase-7-write-capable-dots-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-7-write-capable-dots-outline.md) |
 | 8 | 0.8.0 | Proactive dots: background research, schedules, commit triggers | **Proposed by drafter** | [spec](2026-10-08-herdr-dots-phase-8-proactive-dots-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-8-proactive-dots-outline.md) |
 | 9 | 0.9.0 | Dot profiles, history and sharing | **Proposed by drafter** | [spec](2026-10-08-herdr-dots-phase-9-profiles-sharing-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-9-profiles-sharing-outline.md) |
-| 10 | 1.0.0 | Rename, hardening, marketplace release; **feature complete only when the checklist passes** | v1 "Later" (marketplace, rename) + drafter (hardening) | [spec](2026-10-08-herdr-dots-phase-10-release-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-10-release-outline.md) |
+| 10 | 1.0.0-rc.1 (1.0.0 is a user gate) | Release hardening (1.0.0-rc.1 built; 1.0.0 waits on the user gates in docs/release/ready-to-publish.md); **feature complete only when the checklist passes** | v1 "Later" (marketplace, rename) + drafter (hardening) | [spec](2026-10-08-herdr-dots-phase-10-release-design.md) | [outline](../plans/drafts/2026-10-08-herdr-dots-phase-10-release-outline.md) |
 
 Each plan outline lists files, exact interfaces (consumes/produces) and required tests per task. Full step-by-step plans get written with superpowers:writing-plans when each phase starts, against the real code of the phases before it.
 
