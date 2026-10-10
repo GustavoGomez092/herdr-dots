@@ -38,11 +38,11 @@ func TestFromEnvRequiresHerdr(t *testing.T) {
 	if _, err := FromEnv(); err == nil {
 		t.Fatal("want error outside herdr")
 	}
-	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", "/c")
-	t.Setenv("HERDR_PLUGIN_STATE_DIR", "/s")
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", platformtest.Abs("c")) // absolute on every OS
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", platformtest.Abs("s"))
 	t.Setenv("HERDR_SOCKET_PATH", "/sock")
 	p, err := FromEnv()
-	if err != nil || p.ConfigDir != "/c" {
+	if err != nil || p.ConfigDir != platformtest.Abs("c") {
 		t.Fatalf("FromEnv: %v %+v", err, p)
 	}
 }
