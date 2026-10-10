@@ -5,14 +5,13 @@ import "github.com/anthropics/anthropic-sdk-go"
 // Web research (Phase 8).
 const (
 	// WebSearchUSD is one server web search: $10 per 1,000 searches (as of
-	// 2026-10-08). Web fetch adds only the tokens it reads.
+	// 2026-10-08). Research declares no web_fetch (security review R5).
 	WebSearchUSD = 0.01
-	// webMaxUses is the cap on paid web uses (searches + fetches) per research
-	// Run in total, across tool-loop turns and pause_turn resumes (P8-R6).
+	// webMaxUses is the cap on paid web uses per research Run in total,
+	// across tool-loop turns and pause_turn resumes (P8-R6). A fetch the
+	// server still reports is counted too.
 	webMaxUses = 5
 	maxPauses  = 5 // pause_turn resumes per call
-	// webFetchMaxTokens caps what one fetched page adds to the context.
-	webFetchMaxTokens = 8000
 )
 
 // webUses counts the web searches and fetches a response paid for: the larger

@@ -5,8 +5,9 @@ import "errors"
 // WebSupported reports whether a backend kind can give a research pass web
 // tools: the claude CLI (WebSearch only, no page fetching, ruling P8-R14;
 // its research runs --restricted with Read denied for secret files), the
-// Anthropic API (server web search and fetch) and the OpenAI API (hosted web
-// search). Search queries go to the provider. Codex (its
+// Anthropic API (server web search only, no web_fetch: security review R5)
+// and the OpenAI API (hosted web search). Search queries go to the
+// provider. Codex (its
 // web flag is not verified, Phase 8 V3), OpenRouter and Ollama research
 // without the web; the engine logs that and the editor warns.
 func WebSupported(kind string) bool {

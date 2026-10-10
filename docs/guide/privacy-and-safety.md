@@ -69,8 +69,8 @@ Every rule about what leaves your machine, what dots may touch and what needs yo
   when it is read, like the feed.
 - Proactive dots are opt-in per dot and read-only, even when the dot is write-capable: research,
   scheduled runs and commit reviews never draft. With `[research] web = true`, research sends search
-  queries derived from your code to the backend's web search provider. `claude-cli` research uses web
-  search only, with no page fetching, and secret files are denied to its reads. Background spend is capped by
+  queries derived from your code to the backend's web search provider. `claude-cli` and `anthropic-api` research use web
+  search only, with no page fetching, and secret files are denied to their reads. Background spend is capped by
   `daily_budget_usd` (default $1.00) across every Herdr session.
 - Commit reviews never install git hooks; they only read `HEAD` and `git log`/`git show` output, with
   the repository's hooks, fsmonitor, diff drivers and transports disabled.

@@ -63,7 +63,7 @@ func TestWebResearchDeclaresServerToolsWithoutStructuredOutput(t *testing.T) {
 	}
 	body := f.bodies[0]
 	types := strings.Join(toolTypes(body), ",")
-	if !strings.Contains(types, "web_search_20260209") || !strings.Contains(types, "web_fetch_20260209") || strings.Contains(types, "code_execution") {
+	if !strings.Contains(types, "web_search_20260209") || strings.Contains(types, "web_fetch") || strings.Contains(types, "code_execution") {
 		t.Fatalf("tools %s", types)
 	}
 	if oc, ok := body["output_config"].(map[string]any); ok {
@@ -213,9 +213,6 @@ func TestWebUsesAreCappedAcrossPauses(t *testing.T) {
 	if v, ok := maxUsesOf(f.bodies[1], "web_search"); !ok || v != 3 {
 		t.Fatalf("second call max_uses %v (ok %v), want the remaining 3", v, ok)
 	}
-	if v, _ := maxUsesOf(f.bodies[1], "web_fetch"); v != 3 {
-		t.Fatalf("fetch max_uses on the second call %v, want 3", v)
-	}
 	if err == nil || !strings.Contains(err.Error(), "without finishing") {
 		t.Fatalf("err %v", err)
 	}
@@ -251,27 +248,6 @@ func TestWebUsesAreCappedAcrossToolTurns(t *testing.T) {
 	third := toolTypes(f.bodies[2])
 	if len(third) == 0 || strings.Contains(strings.Join(third, ","), "web_") {
 		t.Fatalf("turn 3 tools %v: web dropped, repo tools kept", third)
-	}
-}
-
-func TestWebFetchCarriesContentCap(t *testing.T) {
-	f := &fake{replies: []func(http.ResponseWriter){searchMsg("end_turn", text(verdictPass), 0)}}
-	b, _ := newBackend(t, f)
-	if _, err := b.Run(context.Background(), webReq()); err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, tl := range f.bodies[0]["tools"].([]any) {
-		m := tl.(map[string]any)
-		if strings.HasPrefix(fmt.Sprint(m["type"]), "web_fetch") {
-			found = true
-			if m["max_content_tokens"] != float64(8000) {
-				t.Fatalf("fetch tool %v", m)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no fetch tool")
 	}
 }
 
@@ -331,5 +307,34 @@ func TestUnpricedModelWithSearchesIsUnknownCost(t *testing.T) {
 	}
 	if res.CostKnown || res.CostUSD != 0 {
 		t.Fatalf("cost %v known %v", res.CostUSD, res.CostKnown)
+	}
+}
+
+// Security review R5 (post-rc hardening): research never declares the
+// server-side web_fetch tool, with or without the repository read tools, so
+// an injected page can't pick which URLs the model fetches. It matches
+// claude-cli research (WebSearch only, P8-R14).
+func TestWebResearchNeverDeclaresWebFetch(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "package.json"), []byte(`{}`), 0o600)
+	for name, repo := range map[string]bool{"web only": false, "with repo tools": true} {
+		t.Run(name, func(t *testing.T) {
+			f := &fake{replies: []func(http.ResponseWriter){searchMsg("end_turn", text(verdictPass), 1)}}
+			b, _ := newBackend(t, f)
+			r := webReq()
+			if repo {
+				r.RepoRead, r.Cwd = true, root
+			}
+			if _, err := b.Run(context.Background(), r); err != nil {
+				t.Fatal(err)
+			}
+			types := strings.Join(toolTypes(f.bodies[0]), ",")
+			if !strings.Contains(types, "web_search_20260209") || strings.Contains(types, "web_fetch") {
+				t.Fatalf("tools %s: web_search only, never web_fetch", types)
+			}
+			if n := len(toolTypes(f.bodies[0])); repo && n != 4 {
+				t.Fatalf("tools %s: the three repo tools stay next to web_search", types)
+			}
+		})
 	}
 }

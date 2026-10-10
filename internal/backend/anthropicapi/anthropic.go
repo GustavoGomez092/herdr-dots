@@ -201,14 +201,15 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 	// run: every tool-loop turn and every pause_turn resume (ruling P8-R6).
 	webUsed := 0
 	// declareTools gives each call only what is left of the budget; at zero
-	// the web tools are dropped and the repo tools stay.
+	// the web tool is dropped and the repo tools stay. Research gets
+	// web_search only, never web_fetch (security review R5, as claude-cli
+	// research, P8-R14): with the repo tools in the same run, a fetched URL
+	// chosen by an injected page could carry repository data out.
 	declareTools := func() {
 		params.Tools = repoTools
 		if left := webMaxUses - webUsed; webOn && left > 0 {
 			params.Tools = append(append([]anthropic.BetaToolUnionParam(nil), repoTools...),
 				anthropic.BetaToolUnionParam{OfWebSearchTool20260209: &anthropic.BetaWebSearchTool20260209Param{MaxUses: anthropic.Int(int64(left))}},
-				anthropic.BetaToolUnionParam{OfWebFetchTool20260209: &anthropic.BetaWebFetchTool20260209Param{
-					MaxUses: anthropic.Int(int64(left)), MaxContentTokens: anthropic.Int(webFetchMaxTokens)}},
 			)
 		}
 	}
