@@ -64,7 +64,8 @@ func (c ClaudeCLI) Check(context.Context) error {
 // hooklessSettings disables every hook for a dot run.
 const hooklessSettings = `{"disableAllHooks":true}`
 
-// researchSettings is a research pass's --settings: hooks off, and Read
+// researchSettings is the --settings of a research pass and of every other
+// read-only run that has the read tools (security review R3): hooks off, and Read
 // denied for every secret file the API tools deny (toolloop.DefaultDeny),
 // the agent configuration drafts may not touch (toolloop.DraftDeny),
 // credential files under any name, and the developer's extra globs (config
@@ -117,7 +118,9 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	switch {
 	case WriteMode(r):
 		settings = writeSettings
-	case research:
+	case research, r.RepoRead:
+		// Read deny rules for secret files on every run that has the read
+		// tools (security review R3), not only research.
 		settings = researchSettings(c.Deny)
 	}
 	settingsArg, promptFlag, promptArg := settings, "--append-system-prompt", sys
@@ -185,6 +188,16 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 		args = append(args, "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob")
 	default:
 		args = append(args, "--tools", "")
+	}
+	if !WriteMode(r) && !research {
+		// Print mode skips the workspace trust dialog, so claude would load
+		// the repository's .claude/settings.json and settings.local.json:
+		// commands it runs (apiKeyHelper, awsAuthRefresh, ...), env such as
+		// ANTHROPIC_BASE_URL, plugins. A cloned repository is untrusted, so
+		// only the developer's own user settings load (security review R1).
+		// Drafts and research run --restricted, which loads none of them.
+		// Before the dot's args, like the budget cap below.
+		args = append(args, "--setting-sources", "user")
 	}
 	// Denied args (dots.Validate rejects them too) are dropped so they can never
 	// override the flags above.

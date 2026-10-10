@@ -34,6 +34,7 @@ var deniedArgs = map[string][]argRule{
 		{flag: "--add-dir", takes: true, variadic: true},
 		{flag: "--restricted"},
 		{flag: "--setting-sources", takes: true, variadic: true},
+		{flag: "--managed-settings", takes: true, variadic: true}, // another settings tier (credential helpers, permissions)
 		{flag: "-w", takes: true, variadic: true},
 		{flag: "--worktree", takes: true, variadic: true},
 		{flag: "--plugin-dir", takes: true, variadic: true},

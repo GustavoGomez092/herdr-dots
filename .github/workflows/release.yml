@@ -102,6 +102,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # Security review R2: no candidate's checksums are proposed while
+      # govulncheck reports a reachable vulnerability (as ci.yml's vulncheck job).
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
       - name: pin the build inputs
         shell: bash
         run: |

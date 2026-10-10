@@ -49,7 +49,7 @@ func TestClaudeBuildCmdIsReadOnlyAndHookless(t *testing.T) {
 	if v, _ := argAfter(cmd.Args, "--output-format"); v != "json" {
 		t.Errorf("output-format %q", v)
 	}
-	if v, _ := argAfter(cmd.Args, "--settings"); v != `{"disableAllHooks":true}` {
+	if v, _ := argAfter(cmd.Args, "--settings"); v != researchSettings(nil) {
 		t.Errorf("settings %q", v)
 	}
 	if v, _ := argAfter(cmd.Args, "--tools"); v != "Read,Grep,Glob" {
@@ -95,7 +95,7 @@ func TestClaudeBuildCmdNeverEmitsDeniedArgs(t *testing.T) {
 			t.Errorf("%s must appear exactly once (ours), got %d: %v", ours, n, cmd.Args)
 		}
 	}
-	if v, _ := argAfter(cmd.Args, "--settings"); v != `{"disableAllHooks":true}` || slices.Contains(cmd.Args, "{}") {
+	if v, _ := argAfter(cmd.Args, "--settings"); v != researchSettings(nil) || slices.Contains(cmd.Args, "{}") {
 		t.Errorf("settings overridden: %v", cmd.Args)
 	}
 	if !slices.Contains(cmd.Args, "--verbose") {
