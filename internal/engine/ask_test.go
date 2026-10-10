@@ -51,7 +51,11 @@ func mcpDotStatus(r *rig, slug string) string {
 }
 
 func TestAskReturnsTheVerdictWithoutACard(t *testing.T) {
-	r := newRig(t, dot("Security", dots.ModeQueue))
+	sec := dot("Security", dots.ModeQueue)
+	// Only the ask may make the dot busy: a catch-up turn review racing it
+	// would refuse the ask as "already answering".
+	sec.Trigger.OnTurn = false
+	r := newRig(t, sec)
 	r.attach(t, "security")
 	r.readers["s1"].add(transcript.Turn{User: "store the token in localStorage"})
 	r.be.set(critical)
