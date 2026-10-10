@@ -71,19 +71,27 @@ func (s *Store) RecordOutcome(p string, o Outcome) error {
 		}
 	}
 	o.Body, o.Edited = clipRunes(o.Body, 300), clipRunes(o.Edited, 300)
-	if err := s.withLock(s.dirFor(p, ScopeProject), func() error { return s.appendLedgerLocked(p, o) }); err != nil {
-		return err
-	}
-	if secret {
-		s.logf("memory: card %s looked like it quoted a secret; no memory entry created", o.Card)
-		return nil
-	}
-	if text == "" {
-		return nil
-	}
-	_, err := s.Add(p, Entry{Scope: ScopeDot, Dot: o.Dot, Kind: kind, Text: text, Source: SourceOutcome,
-		Evidence: Evidence{Session: o.Session, Pane: o.Pane, Turn: o.Turn, Card: o.Card}})
-	return err
+	// The ledger line and its entry are written under one hold of the
+	// project lock (the dot file lives in the project directory), so no
+	// other writer runs between them (M25).
+	return s.withLock(s.dirFor(p, ScopeProject), func() error {
+		if err := s.appendLedgerLocked(p, o); err != nil {
+			return err
+		}
+		if secret {
+			s.logf("memory: card %s looked like it quoted a secret; no memory entry created", o.Card)
+			return nil
+		}
+		if text == "" {
+			return nil
+		}
+		e := Entry{Scope: ScopeDot, Dot: o.Dot, Kind: kind, Text: text, Source: SourceOutcome,
+			Evidence: Evidence{Session: o.Session, Pane: o.Pane, Turn: o.Turn, Card: o.Card}}
+		return s.mutateLocked(p, ScopeDot, o.Dot, func(f *scopeFile) error {
+			_, _, err := s.insert(f, e)
+			return err
+		})
+	})
 }
 
 // RememberInput is the Dots pane's "remember this card" request.
