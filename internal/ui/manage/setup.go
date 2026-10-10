@@ -144,6 +144,8 @@ func (m Model) keysSetup(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "k" { // before the pager: k toggles here, ↑ scrolls up
 		if st.scr.KeysPending() && !tooNarrow {
 			st.scr.IncludeKeys = !st.scr.IncludeKeys
+			// The text changed: every line must be on screen again before y.
+			st.pg.offset, st.pg.seenEnd = 0, false
 			st.pg.fit(len(m.setupLines()), m.bodyHeight(), m.measured())
 		}
 		return m, nil

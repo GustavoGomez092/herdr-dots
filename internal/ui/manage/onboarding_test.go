@@ -264,3 +264,25 @@ func TestSWithoutSetupSaysSo(t *testing.T) {
 		t.Fatalf("view:\n%s", v)
 	}
 }
+
+// Toggling the keybindings changes the screen's text: every line must be on
+// screen again before y installs, so the pager starts over at the top.
+func TestKTogglingStartsThePagerOverBeforeY(t *testing.T) {
+	f := &setupFakes{}
+	m := boot(t, f, 96, 32)
+	for i := 0; i < 40; i++ {
+		m = press(m, " ")
+	}
+	m = press(m, "k")
+	m = press(m, "y")
+	if f.applyArgs != [2]bool{} {
+		t.Fatalf("y applied %v right after k changed the screen; every line must be seen again", f.applyArgs)
+	}
+	for i := 0; i < 40; i++ {
+		m = press(m, " ")
+	}
+	press(m, "y")
+	if f.applyArgs != [2]bool{true, false} {
+		t.Fatalf("after scrolling to the end again, y must install the MCP server only: %v", f.applyArgs)
+	}
+}
