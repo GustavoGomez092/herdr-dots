@@ -254,6 +254,9 @@ func (c ClaudeCLI) Run(ctx context.Context, r Request) (Result, error) {
 	if err := checkResearchNotWrite(r); err != nil {
 		return Result{}, err
 	}
+	if c.Runner == nil {
+		return Result{}, ErrNoRunner
+	}
 	cmd := c.BuildCmd(r)
 	defer cmd.Close()
 	out, stderr, err := c.Runner.Run(ctx, cmd)

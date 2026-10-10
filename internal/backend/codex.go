@@ -75,6 +75,9 @@ func (c CodexCLI) Run(ctx context.Context, r Request) (Result, error) {
 	if _, err := codexMCPOff(CleanEnv(c.environ())); err != nil {
 		return Result{}, err
 	}
+	if c.Runner == nil {
+		return Result{}, ErrNoRunner
+	}
 	cmd := c.BuildCmd(r)
 	defer cmd.Close()
 	out, stderr, err := c.Runner.Run(ctx, cmd)

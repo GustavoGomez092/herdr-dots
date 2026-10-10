@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"herdr-dots/internal/config"
@@ -81,7 +82,7 @@ func NewWith(kind string, o Options) (Backend, error) {
 	f := factories[kind]
 	regMu.RUnlock()
 	if f == nil {
-		return nil, fmt.Errorf("unknown backend %q", kind)
+		return nil, fmt.Errorf("unknown backend %q (known: %s)", kind, strings.Join(Kinds(), ", "))
 	}
 	return f(o)
 }
