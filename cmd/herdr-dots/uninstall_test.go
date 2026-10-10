@@ -327,6 +327,9 @@ func TestPurgeRefusesUnreadableStateDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory modes")
 	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-0 directory anyway")
+	}
 	r := newUninstallRig(t, purgeConfirm+"\n")
 	if err := os.Chmod(r.p.StateDir, 0); err != nil {
 		t.Fatal(err)

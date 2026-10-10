@@ -87,7 +87,7 @@ func TestMemoryEditRemovesItsTempDirectory(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "record")
 	script := filepath.Join(t.TempDir(), "editor.sh")
 	body := "#!/bin/sh\nd=$(dirname \"$1\")\necho \"$d\" > " + record + "\n" +
-		"(stat -f %Lp \"$d\" 2>/dev/null || stat -c %a \"$d\") >> " + record + "\n" +
+		"(stat -c %a \"$d\" 2>/dev/null || stat -f %Lp \"$d\") >> " + record + "\n" +
 		"touch \"$d/.swp-leftover\"\nsed -i.bak 's/zod/valibot/' \"$1\"\n"
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)

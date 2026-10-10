@@ -16,8 +16,8 @@ import (
 func TestADraftWhoseRecordCantNameItsCardFailsVisibly(t *testing.T) {
 	r := newDraftRig(t, draftOpts{}, writeDot("Security"))
 	r.dr.set(fixJWT, nil)
-	r.attach(t, "security")
 	var patchID string
+	// Set before attach: attach starts a catch-up review that reads the hook.
 	r.e.testHook = func(point string) {
 		if point != "draft-carded" {
 			return
@@ -36,6 +36,7 @@ func TestADraftWhoseRecordCantNameItsCardFailsVisibly(t *testing.T) {
 			t.Error(err)
 		}
 	}
+	r.attach(t, "security")
 	if _, err := r.e.Draft(context.Background(), pane, "security", "fix", ""); err != nil {
 		t.Fatal(err)
 	}
