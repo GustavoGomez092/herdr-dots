@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -50,8 +51,21 @@ type memCLI struct {
 }
 
 func runMemory(args []string) error {
+	// Help needs no plugin dirs (L17): print it before discovering them.
+	if len(args) == 0 {
+		return errors.New(memUsage)
+	}
+	switch args[0] {
+	case "help", "-h", "--help":
+		fmt.Fprintln(os.Stdout, memUsage)
+		return nil
+	}
 	p, err := paths.Discover()
 	if err != nil {
+		if slices.Contains(args, "-h") || slices.Contains(args, "--help") { // memory <sub> -h
+			fmt.Fprintln(os.Stdout, memUsage)
+			return nil
+		}
 		return err
 	}
 	cfg, cerr := config.Load(p.ConfigFile())
