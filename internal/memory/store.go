@@ -1451,11 +1451,20 @@ func (s *Store) appendLedgerLocked(p string, o Outcome) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.ledgerPath(p), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(s.ledgerPath(p), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
-	_, werr := f.Write(append(line, '\n'))
+	buf := append(line, '\n')
+	// A crash can leave a half-written last line; start on a fresh line so
+	// the new line is not glued to it and lost with it (M19).
+	if st, err := f.Stat(); err == nil && st.Size() > 0 {
+		var last [1]byte
+		if _, err := f.ReadAt(last[:], st.Size()-1); err == nil && last[0] != '\n' {
+			buf = append([]byte{'\n'}, buf...)
+		}
+	}
+	_, werr := f.Write(buf)
 	return errors.Join(werr, f.Close())
 }
 
