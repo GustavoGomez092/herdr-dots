@@ -1132,9 +1132,14 @@ func (e *Engine) chargeLocked(paneID, slug string, d state.Delta) {
 	_ = e.d.Usage.Add(paneID, slug, d)
 }
 
+// setStatus sets a dot's status on a pane, unless the pane closed meanwhile
+// (a run ending after dropPane): a reused pane id must not inherit it. The
+// check shares e.mu with dropPane's delete (e.mu -> stores).
 func (e *Engine) setStatus(k key, s string) {
 	e.mu.Lock()
-	e.status[k] = s
+	if _, ok := e.d.Attachments.Get(k.pane); ok {
+		e.status[k] = s
+	}
 	e.mu.Unlock()
 	e.broadcast()
 }
