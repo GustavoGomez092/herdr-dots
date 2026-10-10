@@ -92,7 +92,9 @@ func OpenFeedLogged(path string, logf func(format string, args ...any)) (*Feed, 
 		logf("feed: could not make the feed owner-only: %s", strings.Join(loose, "; "))
 	}
 	if st, err := os.Stat(path); err == nil && st.Size() > feedRotateBytes {
-		_ = os.Rename(path, path+".1")
+		if err := os.Rename(path, path+".1"); err != nil && logf != nil {
+			logf("feed: could not rotate %s (%v); appending to it", path, err)
+		}
 	}
 	file, err := os.Open(path)
 	if err == nil {

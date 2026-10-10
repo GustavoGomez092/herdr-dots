@@ -39,6 +39,26 @@ func TestFeedLogsATruncatedLastLineAndAppendsAfterIt(t *testing.T) {
 	}
 }
 
+// Q6: a rotation that fails is logged; the feed keeps appending to the
+// current file.
+func TestFeedRotationFailureIsLogged(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "feed.jsonl")
+	if err := os.WriteFile(p, make([]byte, feedRotateBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory where the rotated file goes: the rename fails.
+	if err := os.MkdirAll(filepath.Join(p+".1", "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var logs []string
+	if _, err := OpenFeedLogged(p, func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) == 0 || !strings.Contains(strings.Join(logs, "\n"), "rotate") {
+		t.Fatalf("logs = %q, want the failed rotation", logs)
+	}
+}
+
 func TestFeedLoadOfAWholeFileLogsNothing(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "feed.jsonl")
 	if err := os.WriteFile(p, []byte(`{"pane_id":"w1:p1","dot":"a","outcome":"pass"}`+"\n"), 0o600); err != nil {
