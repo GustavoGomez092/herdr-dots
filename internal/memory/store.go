@@ -1536,11 +1536,25 @@ func (s *Store) scrubLedgerLocked(p string, e Entry) (int, error) {
 		if err != nil {
 			return err
 		}
+		// An "Applied patch: …" finding merged every card that applied the
+		// same patch; compare those cards' bodies with the text after the
+		// prefix so the earlier cards' lines go too (M17).
+		text := e.Text
+		if t, ok := strings.CutPrefix(e.Text, appliedPrefix); ok && e.Scope == ScopeDot {
+			text = t
+		}
+		says := func(body string) bool {
+			return body != "" && (SuppressScore(body, e.Text) >= 0.8 || SuppressScore(body, text) >= 0.8)
+		}
 		kept := all[:0]
 		for _, o := range all {
 			sameDot := e.Scope == ScopeProject || o.Dot == e.Dot
-			hit := sameDot && ((e.Evidence.Card != "" && o.Card == e.Evidence.Card) ||
-				SuppressScore(o.Body, e.Text) >= 0.8 || (o.Edited != "" && SuppressScore(o.Edited, e.Text) >= 0.8))
+			// Card ids restart in every Herdr session: a card id names the
+			// entry's own card only in its session, and only on its dot's
+			// lines when a dot proposed the entry (M17).
+			ownCard := e.Evidence.Card != "" && o.Card == e.Evidence.Card && o.Session == e.Evidence.Session &&
+				(e.Dot == "" || o.Dot == e.Dot)
+			hit := sameDot && (ownCard || says(o.Body) || says(o.Edited))
 			if hit {
 				n++
 				continue

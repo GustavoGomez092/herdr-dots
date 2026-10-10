@@ -10,6 +10,9 @@ import (
 // redacted replaces ledger text that looked like it held a secret.
 const redacted = "[possible secret removed]"
 
+// appliedPrefix starts the finding an applied patch card leaves.
+const appliedPrefix = "Applied patch: "
+
 // Patch card outcomes (Phase 7).
 const (
 	OutcomeApplied   = "applied"   // applied to the working tree: a finding "Applied patch: …"
@@ -45,7 +48,7 @@ func (s *Store) RecordOutcome(p string, o Outcome) error {
 	case OutcomeApplied:
 		kind = KindFinding
 		if text != "" {
-			text = clipRunes("Applied patch: "+text, 300)
+			text = clipRunes(appliedPrefix+text, 300)
 		}
 	case OutcomeDiscarded:
 		text = "" // ledger only
