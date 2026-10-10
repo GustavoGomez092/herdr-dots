@@ -6,7 +6,7 @@ milestones, never released.
 ## 1.0.0-rc.1 (release candidate, not released)
 
 - Schema versions for every persisted file and a migration framework: older files are upgraded with a backup, files from a newer version stay read-only (`herdr-dots migrate`).
-- Prebuilt, checksum-verified binaries for macOS, Linux and Windows (amd64, arm64) with a source-build fallback; `herdr-dots verify-release`; `--version` shows the build source and commit.
+- Prebuilt, checksum-verified binaries once published (user gate) for macOS, Linux and Windows (amd64, arm64), with a source-build fallback; `herdr-dots verify-release`; `--version` shows the build source and commit.
 - `herdr-dots uninstall-extras [--purge]`.
 - Snapshot broadcasts capped at 10 a second and 256 KB; an 8-hour soak test.
 - Fuzz tests for every parser; `govulncheck` in CI.

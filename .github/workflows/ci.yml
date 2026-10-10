@@ -6,6 +6,9 @@ name: ci
 on:
   push:
   pull_request:
+  # By hand on the release checksum pull request's branch: a pull request
+  # opened by the workflow token doesn't trigger CI.
+  workflow_dispatch:
   schedule:
     - cron: "17 3 * * *" # nightly: the long soak
 
@@ -56,6 +59,8 @@ jobs:
 
   vulncheck:
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

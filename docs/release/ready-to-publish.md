@@ -11,7 +11,7 @@ tagged, listed or published. The macOS evidence is in
 - [ ] **Name and listing.** Keep "Herdr Dots" or rename. OpenAI announced "Dots" (DevDay 2026); a rename later is supported by `internal/migrate` but touches the plugin id, binary and docs. Check the name on GitHub and herdr.dev/plugins.
 - [ ] **Acceptance run on three OSes.** Run `docs/superpowers/notes/1.0-acceptance.md` on a Linux machine and on Windows with the Herdr Windows beta, and on macOS with a real `herdr plugin install`; fill the Linux and Windows columns.
 - [ ] **8-hour soak result.** The 8-hour soak is running (started 2026-10-09 18:07 on c1245f9); the controller records the result when it ends. Review it: `--- PASS: TestSoak` and its log line (peak RSS, idle CPU, biggest snapshot) must meet the budgets. If it failed, rerun `make soak SOAK_DURATION=8h` after the fix.
-- [ ] **Patched Go in every workflow.** In `.github/workflows/ci.yml` and `release.yml`, replace every `go-version-file: go.mod` with an explicit patched `go-version` (at least the release that fixes the govulncheck findings, e.g. 1.26.9 or later). Then run `make vulncheck` with that Go and get `No vulnerabilities found.` before any tag (on go1.25.7 it found 24 reachable standard-library vulnerabilities, security review R2; the acceptance run's govulncheck couldn't reach its database, so run it with network access). Do not add a `toolchain` line to `go.mod`: under `GOTOOLCHAIN=auto` it would make every source-fallback install download a toolchain, which fails offline and on new hosts.
+- [ ] **Patched Go in every workflow.** In `.github/workflows/ci.yml` and `release.yml`, replace every `go-version-file: go.mod` with an explicit patched `go-version` (at least the release that fixes the govulncheck findings, e.g. 1.26.9 or later). Then run `make vulncheck` with that Go and get `No vulnerabilities found.` before the first candidate run (on go1.25.7 it found 24 reachable standard-library vulnerabilities, security review R2; the acceptance run's govulncheck couldn't reach its database, so run it with network access). Today every workflow's `setup-go` reads `go-version-file: go.mod`, whose `go 1.25.0` line makes it install exactly go1.25.0. Do not add a `toolchain` line to `go.mod`: under `GOTOOLCHAIN=auto` it would make every source-fallback install download a toolchain, which fails offline and on new hosts.
 - [ ] **Pin GitHub Actions by commit SHA** (`actions/checkout`, `actions/setup-go`, `actions/upload-artifact`, `goreleaser/goreleaser-action`, `sigstore/cosign-installer`), and decide whether the soak job should run on every push (it costs runner time).
 - [ ] **`SECURITY.md` placeholders.** Replace the `TODO(publish)` lines: the private reporting contact and the repository URL.
 - [ ] **Live provider checks.** With Claude Code logged in, run `go test -tags live ./internal/backend/ ./internal/council/` (a small API spend; snapshot `~/.claude/settings.json` before and diff it after: it must not change) and the live smoke in a `herdr --session dots-test` session: attach a Security dot to a Claude Code pane, get a card for an obvious secret, dismiss it, and see `suppressed` in the feed when the same request repeats. Run the API backends' live tests with your keys (`docs/superpowers/notes/2026-10-08-phase-4-verification.md`).
@@ -63,7 +63,7 @@ USER GATE for all of them.
 | T6-pwsh | PowerShell install tests on a `pwsh` host | Phase 10 ledger (Task 6) | PowerShell install tests |
 | T6-cosign | Real `cosign verify-blob` | Phase 10 ledger (Task 6) | Real cosign |
 | R1 | Repository `.claude/settings.json` must not load (live) | Phase 10 ledger (Task 11), security review | R1 live check |
-| R2 | Patched Go in the workflows; govulncheck clean before a tag | Phase 10 ledger (Task 11), security review | Patched Go |
+| R2 | Patched Go in the workflows; govulncheck clean before the first candidate run | Phase 10 ledger (Task 11), security review | Patched Go |
 | SEC | `SECURITY.md` `TODO(publish)` placeholders | Phase 10 ledger (Task 11) | `SECURITY.md` placeholders |
 | P10-R8 | Codex dots disable bare-named MCP servers, refuse dotted names (live) | Phase 10 ledger (Task 9) | P10-R8 live check |
 | SOAK | 8-hour soak result | Phase 10 ledger, Task 13 | 8-hour soak result |
@@ -73,15 +73,24 @@ USER GATE for all of them.
 
 ## Publishing steps (in order)
 
+`internal/version/VERSION` is the exact version the binaries report
+(`1.0.0-rc.1` now). A release candidate is a manual run of the release
+workflow on `main`, with no tag; publishing is the tag `v<VERSION>` on the
+merge commit of that run's checksum pull request (controller ruling P10-R12,
+checked by `scripts/release-kind.sh`). A VERSION ending in `-rc.<digits>`
+publishes a prerelease, `X.Y.Z` the final release, and any other suffix is
+refused.
+
 1. Create the GitHub repository and push `main`. Check that CI is green on macOS, Linux and Windows, including the PowerShell install tests and the fuzz, vulncheck and soak jobs.
 2. If Herdr's clone won't have a GitHub `origin`, put `owner/herdr-dots` in `release/REPO`.
-3. When the acceptance run passes everywhere, set `internal/version/VERSION` and `herdr-plugin.toml` to `1.0.0`, update `TestVersionIsTheReleaseCandidate` and the CHANGELOG heading, commit, push.
-4. Tag `v1.0.0-rc.1` (or the next rc) on that commit and push the tag. The release workflow tests, fuzzes, runs govulncheck, builds the six archives and opens a pull request with `release/SHA256SUMS` and `release/ASSET_ENV`.
-5. Merge that pull request. Tag `v1.0.0` on the merge commit and push the tag. The workflow rebuilds, refuses if the archives differ from the committed checksums, signs them with cosign and creates a draft release.
+3. One-time GitHub setup: in Settings → Actions → General → Workflow permissions, enable "Allow GitHub Actions to create and approve pull requests" (the candidate opens the checksum pull request with `GITHUB_TOKEN`). A pull request opened by `GITHUB_TOKEN` doesn't trigger CI: run the `ci` workflow on its branch by hand (Actions → ci → Run workflow, pick the branch), or give the candidate job a personal access token or GitHub App token instead (your choice).
+4. **Candidate.** With VERSION at `1.0.0-rc.1`, start the release workflow on `main`: Actions → release → Run workflow (or `gh workflow run release.yml --ref main`). It tests on three OSes, fuzzes every target for 10 minutes, runs govulncheck and the end-to-end install test, builds the six archives with `HERDR_DOTS_VERSION=1.0.0-rc.1` and opens a pull request with `release/SHA256SUMS` and `release/ASSET_ENV`. Its body says: "Merge this, then tag `v<VERSION>` on the merge commit".
+5. Run CI on that pull request's branch (step 3), then merge it. Tag `v1.0.0-rc.1` on the merge commit and push the tag. The workflow checks that the tag is `v<VERSION>` and that the committed `ASSET_ENV` and `SHA256SUMS` are for exactly that VERSION, rebuilds, refuses if the archives differ from the committed checksums, signs them with cosign and creates a draft prerelease.
 6. Check the draft (six archives, six `.sigstore.json` bundles, `SHA256SUMS`), then publish it.
 7. Install on a machine without Go: `herdr plugin install <owner>/herdr-dots`; `./bin/herdr-dots --version` must say `release`; `./bin/herdr-dots verify-release` must pass (with cosign installed, the signature too). Repeat on each of the six targets you can reach.
-8. Add the `herdr-plugin` topic to the repository and check the listing on herdr.dev/plugins (it refreshes every 30 minutes).
-9. Only now may the README and CHANGELOG say "released". The roadmap's acceptance checklist is met only when the acceptance run passes on all three OSes.
+8. **Final.** When the acceptance run passes everywhere, set `internal/version/VERSION` and `herdr-plugin.toml` to `1.0.0`, update `TestVersionIsTheReleaseCandidate` and the CHANGELOG heading, commit to `main`, and repeat steps 4–7 for VERSION `1.0.0`: a new candidate run, merge its checksum pull request, tag `v1.0.0` on the merge commit. This draft is the final release, not a prerelease.
+9. Add the `herdr-plugin` topic to the repository and check the listing on herdr.dev/plugins (it refreshes every 30 minutes).
+10. Only now may the README and CHANGELOG say "released". The roadmap's acceptance checklist is met only when the acceptance run passes on all three OSes.
 
 ## What Phase 10 prepared
 
