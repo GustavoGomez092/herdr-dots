@@ -289,7 +289,8 @@ func (s *Store) Trim(slug string) error {
 }
 
 // quarantineLocked moves a file with no readable record at all aside to
-// <file>.corrupt-<time>, so a damaged file never blocks the dot. Only writers
+// <file>.corrupt-<time>, so a damaged file doesn't block the dot; if the move
+// fails the error is returned and the file stays. Only writers
 // (Append, Trim) do this; readers never change the file.
 func (s *Store) quarantineLocked(path string) error {
 	data, err := os.ReadFile(path)
@@ -303,10 +304,9 @@ func (s *Store) quarantineLocked(path string) error {
 		return nil // something is readable, if only records a newer version added
 	}
 	aside := fmt.Sprintf("%s.corrupt-%d", path, s.now().UnixNano())
-	if err := os.Rename(path, aside); err != nil {
-		return os.Remove(path)
-	}
-	return nil
+	// A failed move is reported and the file is kept: history is never deleted
+	// to get past a damaged file.
+	return os.Rename(path, aside)
 }
 
 func (s *Store) trimLocked(path string) error {
