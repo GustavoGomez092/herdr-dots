@@ -149,7 +149,7 @@ func TestClaudeNonResearchPassUnchanged(t *testing.T) {
 		r := req()
 		r.Pass, r.Web = pass, true
 		args := c.BuildCmd(r).Args
-		if v, _ := argAfter(args, "--settings"); v != researchSettings(nil) {
+		if v, _ := argAfter(args, "--settings"); v != researchSettings(nil, "") {
 			t.Errorf("pass %q: settings %q", pass, v)
 		}
 		if slices.Contains(args, "--restricted") {

@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"sync"
 
@@ -90,6 +91,14 @@ func NewWith(kind string, o Options) (Backend, error) {
 func New(kind string, r Runner) (Backend, error) { return NewWith(kind, Options{Runner: r}) }
 
 func init() {
-	Register(KindClaudeCLI, func(o Options) (Backend, error) { return ClaudeCLI{Runner: o.Runner, Deny: o.Deny}, nil })
+	Register(KindClaudeCLI, func(o Options) (Backend, error) {
+		// The config dir is the one that holds the credentials file the
+		// engine passes (paths.CredentialsFile): its Read is denied (R3).
+		var dir string
+		if f, ok := o.Creds.(credentials.File); ok && f.Path != "" {
+			dir = filepath.Dir(f.Path)
+		}
+		return ClaudeCLI{Runner: o.Runner, Deny: o.Deny, ConfigDir: dir}, nil
+	})
 	Register(KindCodexCLI, func(o Options) (Backend, error) { return CodexCLI{Runner: o.Runner}, nil })
 }

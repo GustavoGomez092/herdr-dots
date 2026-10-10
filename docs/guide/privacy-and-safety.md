@@ -35,6 +35,9 @@ Every rule about what leaves your machine, what dots may touch and what needs yo
   repository can't run a credential helper or redirect a dot; the repository's `CLAUDE.md`
   probably doesn't reach them either (live check pending; see
   [Backends](backends.md#claude-cli-dots-ignore-the-repositorys-claude-settings)).
+- `claude-cli` runs that read files are denied secret files in the repository and your home
+  secrets outside it (`~/.ssh`, `~/.aws`, `~/.claude`, the herdr-dots config directory with
+  `credentials.toml`, and more; see [Backends](backends.md#claude-cli-dots-are-denied-your-home-secrets)).
 - Queue mode (you approve) is the default. Inject mode is opt-in per dot and can be turned off for
   all dots with `inject_enabled = false` in `config.toml`.
 - Changes to `config.toml` apply within a few seconds, without a restart (except `max_parallel_runs`, the `memory_*` limits and turning `memory_enabled` back on);

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -32,10 +33,11 @@ const (
 const writeSettings = `{"disableAllHooks":true,"permissions":{"deny":["Edit(.git)","Write(.git)","Edit(.git/**)","Write(.git/**)","Edit(.claude/**)","Write(.claude/**)","Edit(**/.git)","Write(**/.git)","Edit(**/.claude/**)","Write(**/.claude/**)"]}}`
 
 type ClaudeCLI struct {
-	Runner  Runner
-	Bin     string          // default "claude"
-	Environ func() []string // default os.Environ
-	Deny    []string        // extra deny globs (config tool_deny_globs) for research runs
+	Runner    Runner
+	Bin       string          // default "claude"
+	Environ   func() []string // default os.Environ
+	Deny      []string        // extra deny globs (config tool_deny_globs) for research runs
+	ConfigDir string          // the herdr-dots config dir (holds credentials.toml): Read is denied there
 }
 
 func (c ClaudeCLI) Kind() string { return "claude-cli" }
@@ -70,8 +72,11 @@ const hooklessSettings = `{"disableAllHooks":true}`
 // the agent configuration drafts may not touch (toolloop.DraftDeny),
 // credential files under any name, and the developer's extra globs (config
 // tool_deny_globs, ruling P10-R7). Each glob is denied at the root and at
-// any depth, like toolloop.Denied.
-func researchSettings(extra []string) string {
+// any depth, like toolloop.Denied. Paths outside the repository are denied
+// too (post-rc hardening, R3): the developer's home secrets (homeDeny,
+// Claude Code's `~/` rules) and configDir, the herdr-dots config directory
+// that holds credentials.toml, as an absolute `//` rule ("" adds none).
+func researchSettings(extra []string, configDir string) string {
 	globs := append(append([]string(nil), toolloop.DefaultDeny...), toolloop.DraftDeny...)
 	globs = append(globs, "credentials*")
 	globs = append(globs, extra...)
@@ -89,6 +94,15 @@ func researchSettings(extra []string) string {
 			add("**/" + g)
 		}
 	}
+	for _, g := range homeDeny {
+		add(g)
+	}
+	if configDir != "" {
+		add(absRule(configDir))
+		if real, err := filepath.EvalSymlinks(configDir); err == nil {
+			add(absRule(real)) // macOS: /var is /private/var
+		}
+	}
 	type perms struct {
 		Deny []string `json:"deny"`
 	}
@@ -100,6 +114,24 @@ func researchSettings(extra []string) string {
 		panic(err) // strings only: never fails
 	}
 	return string(b)
+}
+
+// homeDeny are the developer's home secrets no read tool may open, whatever
+// the run's working directory (Claude Code expands `~/` to the home dir).
+var homeDeny = []string{
+	"~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.config/gh/**", "~/.netrc",
+	"~/.docker/config.json", "~/.kube/**", "~/.claude.json", "~/.claude/**", "~/.codex/**",
+}
+
+// absRule is the glob for everything under dir, an absolute path. Claude
+// Code reads a rule path that starts with `//` from the filesystem root and
+// matches a Windows drive path in its POSIX form (C:\x is /c/x).
+func absRule(dir string) string {
+	p := filepath.ToSlash(filepath.Clean(dir))
+	if vol := filepath.VolumeName(dir); len(vol) == 2 && vol[1] == ':' {
+		p = "/" + strings.ToLower(vol[:1]) + p[2:]
+	}
+	return "/" + strings.TrimSuffix(p, "/") + "/**"
 }
 
 // BuildCmd: print mode, JSON output, no saved session, no MCP servers, hooks
@@ -121,7 +153,7 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	case research, r.RepoRead:
 		// Read deny rules for secret files on every run that has the read
 		// tools (security review R3), not only research.
-		settings = researchSettings(c.Deny)
+		settings = researchSettings(c.Deny, c.ConfigDir)
 	}
 	settingsArg, promptFlag, promptArg := settings, "--append-system-prompt", sys
 	shim := false
