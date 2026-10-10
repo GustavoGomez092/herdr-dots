@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -37,6 +38,14 @@ func FromEnv() (Paths, error) {
 	h := os.Getenv("HERDR_SOCKET_PATH")
 	if c == "" || s == "" || h == "" {
 		return Paths{}, errors.New("HERDR_PLUGIN_CONFIG_DIR, HERDR_PLUGIN_STATE_DIR and HERDR_SOCKET_PATH must be set; are you running inside herdr?")
+	}
+	// A relative directory would put dots, keys and memory under whatever
+	// directory the command happens to run in.
+	if !filepath.IsAbs(c) {
+		return Paths{}, fmt.Errorf("HERDR_PLUGIN_CONFIG_DIR is not absolute: %s", c)
+	}
+	if !filepath.IsAbs(s) {
+		return Paths{}, fmt.Errorf("HERDR_PLUGIN_STATE_DIR is not absolute: %s", s)
 	}
 	return New(c, s, h), nil
 }

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -1262,7 +1263,7 @@ func splitPaths(s string) []string {
 func (m Model) keysEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc":
-		m.mode = modeBrowse
+		m.mode, m.status = modeBrowse, "" // an editor warning doesn't outlive the editor
 		return m, nil
 	case "tab", "shift+tab":
 		step := 1
@@ -1355,7 +1356,8 @@ func (m Model) keysFilter(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func trunc(s string, n int) string {
 	r := []rune(textutil.SanitizeModelText(s))
 	if len(r) > n {
-		return string(r[:max(1, n-1)]) + "…"
+		ell := style.Sym("…")
+		return string(r[:max(1, n-utf8.RuneCountInString(ell))]) + ell
 	}
 	return string(r)
 }
@@ -1399,13 +1401,14 @@ func (m Model) list(w int) (lines []string, cur int) {
 			if s == 0 {
 				title = fmt.Sprintf("%s (%d)", title, counts[s])
 			}
-			lines = append(lines, style.Dim.Render("── "+title+" "+strings.Repeat("─", max(0, w-len(title)-4))))
+			d := style.Sym("─")
+			lines = append(lines, style.Dim.Render(d+d+" "+title+" "+strings.Repeat(d, max(0, w-len(title)-4))))
 			last = s
 		}
 		line := trunc(m.row(e), max(20, w-2))
 		if i == m.cursor {
 			cur = len(lines)
-			lines = append(lines, style.Selected.Render("▸ "+line))
+			lines = append(lines, style.Selected.Render(style.Sym("▸")+" "+line))
 		} else {
 			lines = append(lines, "  "+line)
 		}
@@ -1445,7 +1448,7 @@ func (m Model) View() string {
 	if m.d.Project.ID != "" {
 		proj = fmt.Sprintf("project %s (%s)", clean(m.d.Project.Name), clean(m.d.Project.ID))
 	}
-	head.WriteString(style.Title.Render(fmt.Sprintf("MEMORY → %s · %s ── %d entries", who, proj, len(m.entries))) + "\n")
+	head.WriteString(style.Title.Render(fmt.Sprintf("MEMORY → %s · %s %s %d entries", who, proj, style.Sym("─")+style.Sym("─"), len(m.entries))) + "\n")
 	filter := ""
 	if m.filter != "" {
 		filter = "/" + clean(m.filter)
@@ -1474,7 +1477,7 @@ func (m Model) View() string {
 		for i, label := range []string{"text ", "kind ", "paths"} {
 			marker := "  "
 			if i == m.field {
-				marker = "▸ "
+				marker = style.Sym("▸") + " "
 			}
 			tail.WriteString(marker + label + " " + m.fields[i].View() + "\n")
 		}
@@ -1489,8 +1492,10 @@ func (m Model) View() string {
 	}
 	footer := []string{"a approve  e edit  p pin  x forget  X forget all  n new  E export  I import  P purge  / filter  tab scope  esc back"}
 	switch {
-	case m.status != "":
-		footer = []string{clean(m.status)}
+	case m.status != "" && isWhole: // one line, cut to the popup: approveTail counts it
+		footer = []string{style.Cut(clean(m.status), w)}
+	case m.status != "": // wrapped, so a long error neither overflows nor loses its end
+		footer = wrap(m.status, w)
 	case !isWhole: // a whole-popup screen keeps one line: approveTail counts it
 		footer = helpLines(footer[0], w)
 	}

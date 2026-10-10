@@ -79,6 +79,15 @@ func choiceField(label string, choices []string, v string) field {
 	return field{label: label, kind: kChoice, choices: choices, idx: max(0, slices.Index(choices, v))}
 }
 
+// colorChoices are the palette, plus a color the dot file names that the
+// palette lacks, so an edit never silently rewrites it (U11).
+func colorChoices(cur string) []string {
+	if cur == "" || slices.Contains(dots.Colors, cur) {
+		return dots.Colors
+	}
+	return append(slices.Clone(dots.Colors), cur)
+}
+
 func NewForm(d dots.Dot, isNew bool) *Form {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
@@ -93,7 +102,7 @@ func NewForm(d dots.Dot, isNew bool) *Form {
 	f := &Form{orig: d, isNew: isNew, fields: []field{
 		textField("Name", d.Name),
 		textField("Glyph", d.Glyph),
-		choiceField("Color", dots.Colors, d.Color),
+		choiceField("Color", colorChoices(d.Color), d.Color),
 		{label: "Purpose", kind: kArea, area: ta},
 		choiceField("Backend", dots.BackendKinds, d.Backend.Kind),
 		textField("Model", d.Backend.Model),
@@ -428,7 +437,7 @@ func (f *Form) View(width int) string {
 		var v string
 		switch fl.kind {
 		case kChoice:
-			v = "‹ " + fl.choices[fl.idx] + " ›"
+			v = "‹ " + style.Clean(fl.choices[fl.idx]) + " ›" // a kept file color is the file's text
 		case kBool:
 			v = "[ ]"
 			if fl.on {

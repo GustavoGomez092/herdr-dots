@@ -15,7 +15,8 @@ Dots pane keys: `⏎` send card · `a` send all · `e` edit · `x` dismiss · `s
 ## Keybindings
 
 Run `./bin/herdr-dots setup-keys` from a shell inside Herdr. It shows what it will add, skips keys
-that are already taken, backs up your config, and reloads Herdr. Or paste this into
+that are already taken and actions you already bound to another key, backs up your config (a new
+`config.toml.bak-<time>` file each run; none when there was no config yet), and reloads Herdr. Or paste this into
 `~/.config/herdr/config.toml` yourself and run `herdr server reload-config`:
 
 ```toml
@@ -49,7 +50,9 @@ All actions also work from Herdr's action menu without any binding.
 ## Files
 
 - Dots: `$(herdr plugin config-dir herdr-dots)/dots/<slug>.toml` (hand-editable)
-- Settings: `$(herdr plugin config-dir herdr-dots)/config.toml`
+- Settings: `$(herdr plugin config-dir herdr-dots)/config.toml`. A key no setting reads (a typo)
+  or a `[providers.<name>]` table for a provider that doesn't exist is ignored, and `engine.log`
+  names it once, when a dot next runs.
 - Runtime state and `engine.log`: the plugin state dir, under a per-session folder
 - Memory: the plugin state dir, under `memory/<project-id>/` (shared by every Herdr session; `0600` files)
 - `daily.json` in the plugin state dir: today's background runs and cost, shared by every session (proactive dots).
@@ -73,6 +76,6 @@ rather than the whole text.
 ## Deleting a dot
 
 Deleting a dot in the manage popup then asks "Also delete its memory in all
-projects? (Y/n)". At the moment `enter` answers yes (forgetting is real), so a
-reflexive `enter` deletes that dot's memory with no undo. This default is the
-developer's decision and is still open; press `n` to keep the memory.
+projects? (y/N)". The default keeps the memory: `enter`, `n`, `esc` and any
+other key keep it, and only `y` deletes it in every project, with no undo. A
+kept memory comes back if you re-create a dot with the same name.

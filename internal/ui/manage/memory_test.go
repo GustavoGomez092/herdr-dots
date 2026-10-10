@@ -96,7 +96,7 @@ func TestDeleteDotAsksAboutMemoryAndNKeepsIt(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "backend.toml")); !os.IsNotExist(err) {
 		t.Fatal("the dot file is deleted on y")
 	}
-	if !strings.Contains(m.View(), "Also delete its memory in all projects? (Y/n)") {
+	if !strings.Contains(m.View(), "Also delete its memory in all projects? (y/N)") {
 		t.Fatalf("memory question:\n%s", m.View())
 	}
 	m = press(m, "n")

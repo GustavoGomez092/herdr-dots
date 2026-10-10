@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"herdr-dots/internal/backend"
@@ -52,10 +53,13 @@ func newBackendSet(p paths.Paths, cfg func() config.Config, logf func(string, ..
 func configLoader(path string) func() config.Config { return configLoaderLogged(path, nil) }
 
 // configLoaderLogged also logs one line (never the file's content) when
-// config.toml is malformed and defaults are used.
+// config.toml is malformed and defaults are used, and one line naming the
+// keys no setting reads (L4: a typo is otherwise silent) each time that set
+// of keys changes.
 func configLoaderLogged(path string, logf func(string, ...any)) func() config.Config {
 	var mu sync.Mutex
 	logged := false // one line per bad stretch, not one per run
+	unknown := ""   // the unknown keys last warned about
 	return func() config.Config {
 		c, err := config.Load(path)
 		mu.Lock()
@@ -65,6 +69,12 @@ func configLoaderLogged(path string, logf func(string, ...any)) func() config.Co
 		} else if !logged && logf != nil {
 			logged = true
 			logf("config.toml is malformed: provider settings fell back to defaults")
+		}
+		if keys := strings.Join(c.UnknownKeys, "\n"); keys != unknown {
+			unknown = keys
+			if keys != "" && logf != nil {
+				logf("config.toml: unknown key(s) %q ignored (a typo?); the other settings apply", c.UnknownKeys)
+			}
 		}
 		return c
 	}

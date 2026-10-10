@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -16,6 +17,9 @@ func runSetupKeys(args []string) error {
 	fs := flag.NewFlagSet("setup-keys", flag.ContinueOnError)
 	yes := fs.Bool("yes", false, "append without asking")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) { // -h: the flag set printed its usage
+			return nil
+		}
 		return err
 	}
 	home, _ := os.UserHomeDir()
@@ -52,7 +56,7 @@ func runSetupKeys(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Appended. Backup: %s\n", backup)
+	fmt.Println(appendedLine(backup))
 	bin := os.Getenv("HERDR_BIN_PATH")
 	if bin == "" {
 		bin = "herdr"
@@ -63,6 +67,15 @@ func runSetupKeys(args []string) error {
 		fmt.Println("Herdr config reloaded.")
 	}
 	return nil
+}
+
+// appendedLine reports where the original config was saved ("" when there
+// was no config yet, so nothing to back up).
+func appendedLine(backup string) string {
+	if backup == "" {
+		return "Appended. There was no config to back up."
+	}
+	return "Appended. Backup: " + backup
 }
 
 // reloadHerdrConfig runs `<bin> server reload-config` with the child

@@ -105,11 +105,11 @@ type Model struct {
 	d         Deps
 	target    string
 	snap      view.Snapshot
-	loaded    bool
 	scr       screen
 	cursor    int
 	tcursor   int
 	selected  map[string]bool
+	touched   map[string]bool // boxes the developer set here; the rest follow the pane
 	attached  map[string]bool
 	templates []dots.Dot
 	form      *Form
@@ -131,7 +131,7 @@ type Model struct {
 }
 
 func New(target string, d Deps) Model {
-	m := Model{d: d, target: target, selected: map[string]bool{}, attached: map[string]bool{}, templates: dots.Templates(), prov: newProviders()}
+	m := Model{d: d, target: target, selected: map[string]bool{}, touched: map[string]bool{}, attached: map[string]bool{}, templates: dots.Templates(), prov: newProviders()}
 	if d.MCPStatus != nil {
 		m.mcpStatus = d.MCPStatus()
 	}
@@ -305,7 +305,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.target != "" {
 			// Like a new dot: pre-checked, so enter attaches it (clamped,
 			// as the preview showed).
-			m.selected[msg.slug] = true
+			m.selected[msg.slug], m.touched[msg.slug] = true, true
 		}
 		return m, m.reload()
 	case exportedMsg:
@@ -348,11 +348,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.attached[d.Slug] = true
 			}
 		}
-		if !m.loaded {
-			for s := range m.attached {
+		// Every box the developer hasn't toggled here follows the pane, so a
+		// dot attached or detached elsewhere meanwhile shows as it is and
+		// apply never undoes it (U13).
+		for s := range m.selected {
+			if !m.touched[s] && !m.attached[s] {
+				delete(m.selected, s)
+			}
+		}
+		for s := range m.attached {
+			if !m.touched[s] {
 				m.selected[s] = true
 			}
-			m.loaded = true
 		}
 		m.cursor = max(0, min(m.cursor, len(m.library())-1))
 	case errMsg:
@@ -371,7 +378,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.target != "" && msg.isNew {
 			// Pre-check a dot just created here; an edited dot keeps its state,
 			// so ⏎ never attaches something the user only edited.
-			m.selected[msg.slug] = true
+			m.selected[msg.slug], m.touched[msg.slug] = true, true
 		}
 		return m, m.reload()
 	case deletedMsg:
@@ -449,7 +456,7 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.status = style.Sym("⚠") + " " + style.Clean(d.Name) + " is an untrusted project dot: press T to review it"
 				return m, nil
 			}
-			m.selected[d.Slug] = !m.selected[d.Slug]
+			m.selected[d.Slug], m.touched[d.Slug] = !m.selected[d.Slug], true
 		}
 	case "enter":
 		if m.target == "" {
@@ -519,6 +526,7 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if d, ok := m.current(); ok {
 			return m, m.openMemory(d.Slug, d.Name)
 		}
+		m.status = "no dot selected · P project memory"
 	case "P":
 		if m.d.Memory == nil {
 			m.status = "memory is turned off (memory_enabled = false)"
@@ -652,6 +660,10 @@ func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.form.SetError(err.Error())
 			return m, nil
 		}
+		if m.nameTaken(d) {
+			m.form.SetError(fmt.Sprintf("a dot named %q already exists: pick another name", d.Name))
+			return m, nil
+		}
 		m.form.SetError("")
 		m.saving = true
 		return m, m.save(d, m.form.IsNew())
@@ -660,6 +672,18 @@ func (m Model) keysEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, m.form.Update(k)
+}
+
+// nameTaken reports another library dot with d's display name (any case):
+// two dots with one name would share one delivery header, which the loop
+// guard tells dots apart by (U10). A new dot's own name clash is ErrExists.
+func (m Model) nameTaken(d dots.Dot) bool {
+	for _, o := range m.snap.Library {
+		if (d.Slug == "" || o.Slug != d.Slug) && strings.EqualFold(strings.TrimSpace(o.Name), strings.TrimSpace(d.Name)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) save(d dots.Dot, isNew bool) tea.Cmd {
@@ -711,28 +735,26 @@ func (m Model) keysConfirm(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// keysConfirmMemory answers "Also delete its memory in all projects? (Y/n)".
+// keysConfirmMemory answers "Also delete its memory in all projects? (y/N)".
+// Memory is kept by default (U22, the developer's decision): only y deletes
+// it; enter, n, esc and every other key keep it.
 func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	slug, name, st, caller := m.delSlug, m.delName, m.d.Memory, m.d.Caller
-	switch k.String() {
-	case "n", "N", "esc":
-		m.scr = scrLibrary
+	m.scr = scrLibrary
+	if s := k.String(); s != "y" && s != "Y" {
 		m.status = "deleted " + name + " (memory kept)"
 		return m, nil
-	case "y", "Y", "enter":
-		m.scr = scrLibrary
-		return m, func() tea.Msg {
-			del, err := st.DeleteDot(slug)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil) // part of it may be gone even on an error
-			if err != nil {
-				return errMsg{err}
-			}
-			return memDeletedMsg{name: name, del: del}
-		}
 	}
-	return m, nil
+	return m, func() tea.Msg {
+		del, err := st.DeleteDot(slug)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil) // part of it may be gone even on an error
+		if err != nil {
+			return errMsg{err}
+		}
+		return memDeletedMsg{name: name, del: del}
+	}
 }
 
 // badge marks where a library dot comes from.
@@ -778,17 +800,17 @@ func (m Model) View() string {
 		for i, d := range m.templates {
 			marker := "  "
 			if i == m.tcursor {
-				marker = "▸ "
+				marker = style.Sym("▸") + " "
 			}
-			b.WriteString(fmt.Sprintf("%s%s %s\n", marker, d.Glyph, d.Name))
+			b.WriteString(fmt.Sprintf("%s%s %s\n", marker, style.Sym(d.Glyph), d.Name))
 		}
 		b.WriteString("\n" + style.Dim.Render("j/k move · enter use · esc back"))
 		return b.String()
 	case scrConfirm:
 		return style.Title.Render(fmt.Sprintf("Delete %s?", m.delName)) + "\n\n" + style.Dim.Render("y delete · any other key cancels")
 	case scrConfirmMemory:
-		return style.Title.Render(fmt.Sprintf("Deleted %s.", m.delName)) + "\nAlso delete its memory in all projects? (Y/n)\n\n" +
-			style.Dim.Render("y/enter delete memory · n keep it (re-creating the dot picks it back up)")
+		return style.Title.Render(fmt.Sprintf("Deleted %s.", m.delName)) + "\nAlso delete its memory in all projects? (y/N)\n\n" +
+			style.Dim.Render("y delete memory · enter or any other key keeps it (re-creating the dot picks it back up)")
 	case scrMemory:
 		if m.mem != nil {
 			return m.mem.View()

@@ -234,6 +234,10 @@ func (m Model) updateEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editing = false
 		return m, nil
 	case "ctrl+s":
+		if !m.connected { // keep the text: it saves once the engine is back
+			m.status = offlineHint
+			return m, nil
+		}
 		m.editing = false
 		return m, m.call(ipc.CmdEdit, ipc.CardArgs{ID: m.editID, Body: m.editor.Value()})
 	}
@@ -248,6 +252,10 @@ func (m Model) updateQuestion(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.asking = false
 		return m, nil
 	case "enter":
+		if !m.connected {
+			m.status = offlineHint
+			return m, nil
+		}
 		m.asking = false
 		m.status = "summoned " + m.askSlug
 		return m, m.call(ipc.CmdSummon, ipc.SummonArgs{PaneID: m.target, Slug: m.askSlug, Question: strings.TrimSpace(m.question.Value())})
@@ -266,6 +274,10 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.remembering, m.reasoning = false, false
 			return m, nil
 		case "enter":
+			if !m.connected {
+				m.status = offlineHint
+				return m, nil
+			}
 			m.remembering, m.reasoning = false, false
 			m.status = "remembered as a rule"
 			return m, m.call(ipc.CmdRemember, ipc.RememberArgs{CardID: m.rememberID, As: "rule", Reason: strings.TrimSpace(m.reason.Value())})
@@ -295,6 +307,10 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		as = "global"
 	default:
+		return m, nil
+	}
+	if !m.connected { // the chooser stays open: it sends once the engine is back
+		m.status = offlineHint
 		return m, nil
 	}
 	m.remembering = false
@@ -451,11 +467,12 @@ func trunc(s string, n int) string {
 	if ansi.StringWidth(s) <= n {
 		return s
 	}
-	return ansi.Truncate(s, n, "…")
+	return ansi.Truncate(s, n, style.Sym("…"))
 }
 
 func rule(title string, w int) string {
-	return style.Dim.Render("── "+title+" "+strings.Repeat("─", max(0, w-len(title)-4))) + "\n"
+	d := style.Sym("─")
+	return style.Dim.Render(trunc(d+d+" "+title+" "+strings.Repeat(d, max(0, w-len(title)-4)), w)) + "\n"
 }
 
 const helpText = `j/k move   tab roster/queue   t next agent
@@ -566,7 +583,7 @@ func (m Model) View() string {
 		sel := m.area == areaQueue && i == m.card
 		marker := " "
 		if sel {
-			marker = "▸"
+			marker = style.Sym("▸")
 		}
 		tags := councilTags(c) + patchTags(c)
 		switch {
@@ -578,9 +595,10 @@ func (m Model) View() string {
 			tags += " [suggestion]"
 		}
 		label := cardLabel(c)
-		room := max(10, w) - lipgloss.Width(marker+c.Glyph+" "+label+"  ")
+		glyph := style.Sym(c.Glyph)
+		room := max(10, w) - lipgloss.Width(marker+glyph+" "+label+"  ")
 		who := trunc(fmt.Sprintf("%s · %s%s", oneLine(c.DotName), cardWhere(c), tags), max(1, room))
-		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", marker, c.Glyph, style.Severity(c.Severity).Render(label), who))
+		b.WriteString(trunc(fmt.Sprintf("%s%s %s  %s", marker, glyph, style.Severity(c.Severity).Render(label), who), w) + "\n")
 		text := patchText(c)
 		if !sel {
 			text = trunc(strings.ReplaceAll(text, "\n", " "), max(20, w*2))

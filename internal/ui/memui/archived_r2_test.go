@@ -18,7 +18,7 @@ func TestUnpinOfArchivedResearchSaysResearchGivesWay(t *testing.T) {
 	m := selectRow(t, open(st, "security", &n), "Research on caching")
 	v := press(m, "p").View()
 	want := "unpinned d:m3, then archived: this dot's memory is full and research notes give way first"
-	if !strings.Contains(v, want) || strings.Contains(v, "imports") {
+	if !strings.Contains(flat(v), want) || strings.Contains(v, "imports") { // the status wraps to the popup
 		t.Fatalf("want %q in:\n%s", want, v)
 	}
 }

@@ -16,10 +16,11 @@ import (
 )
 
 type claudeRecord struct {
-	Type        string `json:"type"`
-	IsSidechain bool   `json:"isSidechain"`
-	IsMeta      bool   `json:"isMeta"`
-	Message     struct {
+	Type             string `json:"type"`
+	IsSidechain      bool   `json:"isSidechain"`
+	IsMeta           bool   `json:"isMeta"`
+	IsCompactSummary bool   `json:"isCompactSummary"` // the summary /compact writes: not a prompt
+	Message          struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
@@ -52,7 +53,7 @@ func ParseClaude(r io.Reader) ([]Turn, error) {
 
 func applyClaude(turns []Turn, line []byte) []Turn {
 	var rec claudeRecord
-	if json.Unmarshal(line, &rec) != nil || rec.IsSidechain || rec.IsMeta {
+	if json.Unmarshal(line, &rec) != nil || rec.IsSidechain || rec.IsMeta || rec.IsCompactSummary {
 		return turns
 	}
 	switch rec.Type {
@@ -85,8 +86,15 @@ func applyClaude(turns []Turn, line []byte) []Turn {
 	return turns
 }
 
-// userPrompt returns the text of a real prompt. Tool results and interrupt
-// markers are not prompts.
+// commandOutput reports a built-in slash command's output echo, which Claude
+// Code records as a user message.
+func commandOutput(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "<local-command-stdout>") || strings.HasPrefix(s, "<local-command-stderr>")
+}
+
+// userPrompt returns the text of a real prompt. Tool results, interrupt
+// markers and slash-command output are not prompts.
 func userPrompt(raw json.RawMessage) (string, bool) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -94,7 +102,7 @@ func userPrompt(raw json.RawMessage) (string, bool) {
 	}
 	if raw[0] == '"' {
 		var s string
-		if json.Unmarshal(raw, &s) != nil || strings.TrimSpace(s) == "" {
+		if json.Unmarshal(raw, &s) != nil || strings.TrimSpace(s) == "" || commandOutput(s) {
 			return "", false
 		}
 		return s, true
@@ -105,7 +113,7 @@ func userPrompt(raw json.RawMessage) (string, bool) {
 		case "tool_result":
 			return "", false
 		case "text":
-			if strings.HasPrefix(b.Text, "[Request interrupted") {
+			if strings.HasPrefix(b.Text, "[Request interrupted") || commandOutput(b.Text) {
 				return "", false
 			}
 			parts = append(parts, b.Text)
@@ -143,7 +151,10 @@ type ClaudeReader struct{ Path string }
 
 func (r ClaudeReader) Source() string { return SourceClaude }
 
-func (r ClaudeReader) Turns(context.Context) ([]Turn, error) {
+func (r ClaudeReader) Turns(ctx context.Context) ([]Turn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(r.Path)
 	if err != nil {
 		return nil, err
@@ -159,19 +170,29 @@ func (r ClaudeReader) Turns(context.Context) ([]Turn, error) {
 func ResolveClaudePath(home, kind, value string) (string, error) {
 	switch kind {
 	case "path":
-		if _, err := os.Stat(value); err != nil {
+		st, err := os.Stat(value)
+		if err != nil {
 			return "", err
+		}
+		if st.IsDir() {
+			return "", fmt.Errorf("claude session path %s is a directory", value)
 		}
 		return value, nil
 	case "id":
 		if value == "" || strings.ContainsAny(value, `/\*?[]`) || strings.Contains(value, "..") {
 			return "", fmt.Errorf("invalid claude session id %q", value)
 		}
-		matches, _ := filepath.Glob(filepath.Join(platform.ClaudeProjectsDir(home), "*", value+".jsonl"))
-		if len(matches) == 0 {
-			return "", fmt.Errorf("no transcript for claude session %s", value)
+		// Each project folder is listed rather than globbed, so a glob
+		// metacharacter in the home path can't make the lookup miss.
+		root := platform.ClaudeProjectsDir(home)
+		dirs, _ := os.ReadDir(root) // sorted by name, like a glob's matches
+		for _, d := range dirs {
+			p := filepath.Join(root, d.Name(), value+".jsonl")
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return p, nil
+			}
 		}
-		return matches[0], nil
+		return "", fmt.Errorf("no transcript for claude session %s", value)
 	}
 	return "", fmt.Errorf("unknown session kind %q", kind)
 }

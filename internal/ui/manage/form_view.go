@@ -84,7 +84,7 @@ func clipLines(s string, width int) string {
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
 		if ansi.StringWidth(l) > width {
-			lines[i] = ansi.Truncate(l, width, "…")
+			lines[i] = ansi.Truncate(l, width, style.Sym("…"))
 		}
 	}
 	return strings.Join(lines, "\n")

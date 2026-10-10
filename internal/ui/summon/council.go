@@ -205,7 +205,7 @@ func (m Model) viewCouncil() string {
 		d := f.dots[i]
 		marker := "  "
 		if f.onList && i == f.cursor {
-			marker = "▸ "
+			marker = style.Sym("▸") + " "
 		}
 		box := "[ ]"
 		if f.selected[d.Slug] && f.eligible(d.Slug) {
@@ -294,7 +294,7 @@ func clampWidth(s string, width int) string {
 	}
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
-		lines[i] = ansi.Truncate(l, width, "…")
+		lines[i] = ansi.Truncate(l, width, style.Sym("…"))
 	}
 	return strings.Join(lines, "\n")
 }

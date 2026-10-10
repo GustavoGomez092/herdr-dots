@@ -162,6 +162,21 @@ func childGuard(t *testing.T, rel, src string, allow map[string]string) []string
 		id, ok := s.X.(*ast.Ident)
 		return ok && id.Name == pkg && slices.Contains(names, s.Sel.Name)
 	}
+	// The name os/exec goes by in this file: an alias must not hide
+	// exec.Command, and a dot import would hide it entirely (W13).
+	execName := "exec"
+	for _, imp := range f.Imports {
+		if imp.Path.Value != `"os/exec"` || imp.Name == nil {
+			continue
+		}
+		switch imp.Name.Name {
+		case ".":
+			report(imp.Pos(), "<imports>", "dot import of os/exec hides exec.Command from this guard")
+		case "_":
+		default:
+			execName = imp.Name.Name
+		}
+	}
 	isChildEnv := func(e ast.Expr) bool {
 		c, ok := e.(*ast.CallExpr)
 		return ok && isSel(c.Fun, "platform", "ChildEnv")
@@ -178,7 +193,7 @@ func childGuard(t *testing.T, rel, src string, allow map[string]string) []string
 					return false
 				}
 			case *ast.CallExpr:
-				if isSel(n.Fun, "exec", "Command", "CommandContext") {
+				if isSel(n.Fun, execName, "Command", "CommandContext") {
 					if _, ok := allow[rel+":"+fn]; !ok {
 						report(n.Pos(), fn, "exec."+n.Fun.(*ast.SelectorExpr).Sel.Name+" is not on the allowlist (use platform.Command / CommandContext)")
 					}
@@ -188,7 +203,7 @@ func childGuard(t *testing.T, rel, src string, allow map[string]string) []string
 					starts = append(starts, n.Pos())
 				}
 			case *ast.CompositeLit:
-				if isSel(n.Type, "exec", "Cmd") {
+				if isSel(n.Type, execName, "Cmd") {
 					if _, ok := allow[rel+":"+fn]; !ok {
 						report(n.Pos(), fn, "exec.Cmd is not on the allowlist (use platform.Command / CommandContext)")
 					}
@@ -305,6 +320,17 @@ func lit() { cmd := &exec.Cmd{Path: "x"}; cmd.Env = platform.ChildEnv(nil) }`, [
 		{"closure is its own scope", `package p
 func outer() { cmd, _ := platform.Command("a", nil); cmd.Env = platform.ChildEnv(nil); f := func() { c, _ := platform.Command("b", nil); c.Run() }; f() }`,
 			[]string{"outer: starts a child without platform.ChildEnv"}},
+		// W13 (post-rc hardening): an aliased or dot import of os/exec
+		// doesn't slip past the guard.
+		{"aliased os/exec", `package p
+import x "os/exec"
+func aliased() { cmd := x.Command("y"); cmd.Env = platform.ChildEnv(nil) }`, []string{"aliased: exec.Command is not on the allowlist"}},
+		{"aliased exec.Cmd literal", `package p
+import x "os/exec"
+func aliasedLit() { cmd := &x.Cmd{Path: "y"}; cmd.Env = platform.ChildEnv(nil) }`, []string{"aliasedLit: exec.Cmd is not on the allowlist"}},
+		{"dot import of os/exec", `package p
+import . "os/exec"
+func dotted() { cmd := Command("y"); cmd.Env = platform.ChildEnv(nil) }`, []string{"dot import of os/exec"}},
 		{"multi-assign Env", `package p
 func multi() { cmd, _ := platform.Command("a", nil); cmd.Dir, cmd.Env = "", os.Environ() }`,
 			[]string{"multi: .Env = without platform.ChildEnv", "multi: starts a child without platform.ChildEnv"}},
