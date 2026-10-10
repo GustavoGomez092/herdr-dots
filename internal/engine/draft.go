@@ -605,8 +605,20 @@ func (e *Engine) DiscardPatch(cardID string) error {
 	// A patch already applied (an apply interrupted after the patch landed,
 	// before the card was marked) is never discarded: memory would record
 	// "discarded" after "applied". The reservation keeps an apply out.
+	// The card is marked applied instead (D8), so it doesn't stay on screen
+	// with no way to dismiss it.
 	m, merr := e.d.Patches.Get(c.PatchID)
 	if merr == nil && m.Status == patchstore.StatusApplied {
+		if c.Status == queue.StatusPending || c.Status == queue.StatusOrphaned {
+			e.dmu.Lock()
+			err := e.d.Queue.SetStatusNote(cardID, queue.StatusApplied, "applied to your working tree (not staged)")
+			e.dmu.Unlock()
+			if err != nil {
+				e.d.Logf("card %s: %v", cardID, err)
+			}
+			e.reportPending(c.PaneID)
+			e.broadcast()
+		}
 		return fmt.Errorf("patch %s was already applied to your working tree", c.PatchID)
 	}
 	// The status changes under dmu, like Dismiss of any card, so it never
