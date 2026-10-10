@@ -1,9 +1,12 @@
 package transcript
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // T2 (post-rc hardening): a glob metacharacter in the home path ("[" in a
@@ -37,5 +40,31 @@ func TestSelectWithoutAPaneReaderDoesNotPanic(t *testing.T) {
 	r := Select(SelectOptions{Agent: "claude"})
 	if _, err := r.Turns(t.Context()); err == nil {
 		t.Fatal("a scrollback reader without a pane must fail, not succeed")
+	}
+}
+
+// T3 (post-rc hardening): a cancelled pass doesn't read the transcript.
+func TestClaudeReaderHonoursACancelledContext(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(f, []byte(claudeSample), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if turns, err := (ClaudeReader{Path: f}).Turns(ctx); err == nil || turns != nil {
+		t.Fatalf("cancelled: %d turns, err %v", len(turns), err)
+	}
+}
+
+// T4 (post-rc hardening): clipping never splits a multi-byte rune, from the
+// start or from the end.
+func TestFormatClipsNonASCIIOnRuneBoundaries(t *testing.T) {
+	long := strings.Repeat("é日🙂", MaxFieldChars)
+	out := Format([]Turn{{Index: 1, User: long, Assistant: long}})
+	if !utf8.ValidString(out) {
+		t.Fatal("clipped output is not valid UTF-8")
+	}
+	if !strings.Contains(out, "…") {
+		t.Fatal("not clipped")
 	}
 }

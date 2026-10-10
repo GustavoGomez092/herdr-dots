@@ -151,7 +151,10 @@ type ClaudeReader struct{ Path string }
 
 func (r ClaudeReader) Source() string { return SourceClaude }
 
-func (r ClaudeReader) Turns(context.Context) ([]Turn, error) {
+func (r ClaudeReader) Turns(ctx context.Context) ([]Turn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(r.Path)
 	if err != nil {
 		return nil, err
