@@ -753,7 +753,7 @@ func (c *dotsCLI) trustFile(args []string) error {
 	if err != nil {
 		return errors.New(one(err.Error()))
 	}
-	d, err := dots.DecodeProject(f, pr.ID)
+	d, err := projectdots.Decode(f, pr.ID)
 	if err != nil {
 		return fmt.Errorf("%s: %s", one(f.Rel), one(err.Error()))
 	}

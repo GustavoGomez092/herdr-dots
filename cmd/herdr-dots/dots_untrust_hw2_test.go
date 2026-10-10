@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"herdr-dots/internal/projectdots"
@@ -59,5 +60,22 @@ func TestUntrustFileFallsBackToEveryEntryWhenNoneIsAtThisPath(t *testing.T) {
 	r.run(t, "untrust", file)
 	if es, _ := r.c.trust.List(); len(es) != 0 {
 		t.Fatalf("entries left: %+v", es)
+	}
+}
+
+// H11: `dots trust` refuses a file over the key and table cap, as the scan
+// does, so nothing is trusted that the library would never load.
+func TestTrustRefusesAFileOverTheKeyAndTableCap(t *testing.T) {
+	r := newDotsCLI(t)
+	file := projectDotFile(t, r)
+	data, _ := os.ReadFile(file)
+	data = append(data, []byte(strings.Repeat("[t]\n", projectdots.MaxKeysAndTables))...)
+	os.WriteFile(file, data, 0o644)
+	err := r.c.run([]string{"trust", file, "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "keys or tables") {
+		t.Fatalf("err %v", err)
+	}
+	if es, _ := r.c.trust.List(); len(es) != 0 {
+		t.Fatalf("trusted: %+v", es)
 	}
 }

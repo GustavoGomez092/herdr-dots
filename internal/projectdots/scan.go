@@ -1,6 +1,7 @@
 package projectdots
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -83,7 +84,7 @@ func ScanProject(root, projectID string, ts *TrustStore) Scan {
 		s.Invalid = append(s.Invalid, le)
 	}
 	for _, f := range files {
-		d, err := dots.DecodeProject(f, projectID)
+		d, err := Decode(f, projectID)
 		if err != nil {
 			le := dots.LoadError{File: f.Rel, Err: err}
 			var pe toml.ParseError
@@ -138,4 +139,29 @@ func stampOf(files []dots.ProjectFile, bad []dots.LoadError, haveStore bool, sto
 		b.WriteString("|" + storeStamp)
 	}
 	return b.String()
+}
+
+// MaxKeysAndTables caps the keys and tables of one project dot file (H11).
+// dots.PreScanTOML bounds nesting and key paths, not how many there are; no
+// dot needs more than a few dozen. CheckCounts counts every '=' and '['
+// byte, strings included: an upper bound on keys plus tables that costs one
+// pass and never parses.
+const MaxKeysAndTables = 2048
+
+// CheckCounts refuses a file with more than MaxKeysAndTables '=' and '['
+// bytes. Run it before decoding a project dot file.
+func CheckCounts(data []byte) error {
+	if n := bytes.Count(data, []byte("=")) + bytes.Count(data, []byte("[")); n > MaxKeysAndTables {
+		return fmt.Errorf("too many keys or tables (more than %d '=' and '[' characters)", MaxKeysAndTables)
+	}
+	return nil
+}
+
+// Decode is dots.DecodeProject behind CheckCounts: every project dot file is
+// decoded through it (the scan and `dots trust`).
+func Decode(f dots.ProjectFile, projectID string) (dots.Dot, error) {
+	if err := CheckCounts(f.Data); err != nil {
+		return dots.Dot{}, err
+	}
+	return dots.DecodeProject(f, projectID)
 }
