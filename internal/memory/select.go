@@ -122,7 +122,25 @@ func Select(entries []Entry, q Query, budget int) []Entry {
 			cs = append(cs, cand{e, scoreWith(e, q, qt)})
 		}
 	}
-	sort.SliceStable(cs, func(i, j int) bool { return cs[i].score > cs[j].score })
+	// Ties are broken by scope, dot and id, never by the store's order, so
+	// the same memory renders the same block (prompt caching, M15).
+	scopeRank := map[Scope]int{ScopeProject: 0, ScopeDot: 1, ScopeGlobal: 2}
+	sort.SliceStable(cs, func(i, j int) bool {
+		a, b := cs[i], cs[j]
+		if a.score != b.score {
+			return a.score > b.score
+		}
+		if ra, rb := scopeRank[a.e.Scope], scopeRank[b.e.Scope]; ra != rb {
+			return ra < rb
+		}
+		if a.e.Dot != b.e.Dot {
+			return a.e.Dot < b.e.Dot
+		}
+		if na, nb := idNum(a.e.ID), idNum(b.e.ID); na != nb {
+			return na < nb
+		}
+		return a.e.ID < b.e.ID
+	})
 	perEntry := min(500, max(80, budget/3))
 	var sel []Entry
 	for _, c := range cs {
