@@ -218,3 +218,19 @@ func TestMemoryScreenFromManageScrolls(t *testing.T) {
 		t.Fatalf("after a resize to 7 lines:\n%s", v)
 	}
 }
+
+// Fix round 1 (Task 14): the memory screen exports into the target pane's
+// checkout, never into the plugin's install directory (the popup's cwd),
+// which a reinstall deletes.
+func TestMemoryScreenExportsIntoThePanesCheckout(t *testing.T) {
+	m, _, _, _ := memSetup(t)
+	repo := t.TempDir()
+	s := lib()
+	s.PaneRoots = map[string]string{"w1:p1": repo}
+	m, _ = m.Update(SnapshotMsg(s))
+	v := press(m, "P", "E").View()
+	flat := strings.Join(strings.Fields(v), "")
+	if want := strings.Join(strings.Fields(filepath.Join(repo, "herdr-dots-memory-herdr-dots-")), ""); !strings.Contains(flat, want) {
+		t.Fatalf("the export default must be in the pane's checkout %s:\n%s", repo, v)
+	}
+}

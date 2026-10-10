@@ -2,7 +2,6 @@
 
 > **Status: release candidate 1.0.0-rc.1, not released, not done.**
 > Every roadmap phase (1–10) is built and the macOS acceptance run has evidence for every item it can show. Not yet verified on Linux or Windows hardware; live providers, Codex and the Claude settings isolation not live-verified; no license; not published.
-> One macOS item fails: memory export, import and purge are in the CLI but not in the manage popup; see [Status](#status).
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**:
 specialist agents (security, frontend, backend, copywriter, ...) that join a
@@ -18,11 +17,8 @@ you're away, and can be shared with your team.
 Every roadmap phase (1–10) is built, and on macOS the acceptance checklist
 has evidence for every item that doesn't need publishing, a license, a live
 model provider or another OS ([notes](docs/superpowers/notes/1.0-acceptance.md)).
-One of those items fails: memory export, import and purge exist in the
-`herdr-dots memory` CLI but not in the manage popup.
-Open before 1.0.0: that item, the acceptance run on Linux and Windows
-hardware, the live provider checks (Claude, API backends, Codex), a license,
-and publishing ([checklist](docs/release/ready-to-publish.md)).
+Open before 1.0.0: the acceptance run on Linux and Windows hardware, the
+live provider checks (Claude, API backends, Codex), a license, and publishing ([checklist](docs/release/ready-to-publish.md)).
 
 ## Requirements
 
