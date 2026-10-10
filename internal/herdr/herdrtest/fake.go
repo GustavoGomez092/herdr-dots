@@ -27,6 +27,7 @@ type Server struct {
 	panes     map[string]herdr.PaneInfo
 	reads     map[string]string
 	calls     []Call
+	noRecord  bool // DiscardCalls: long runs keep no call log
 	subs      map[string][]*json.Encoder
 	promptErr string
 	ln        net.Listener
@@ -77,6 +78,14 @@ func (s *Server) Push(id string, st herdr.AgentStatus) {
 			"data":  map[string]any{"type": "pane_agent_status_changed", "pane_id": id, "workspace_id": "w1", "agent_status": st, "agent": p.Agent},
 		})
 	}
+}
+
+// DiscardCalls stops recording calls, so a long run (the soak) doesn't grow
+// the test's memory with every request it serves; Calls then returns nothing.
+func (s *Server) DiscardCalls() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noRecord, s.calls = true, nil
 }
 
 func (s *Server) Calls(method string) []Call {
@@ -130,7 +139,9 @@ func (s *Server) serve(c net.Conn) {
 		return
 	}
 	s.mu.Lock()
-	s.calls = append(s.calls, Call{Method: r.Method, Params: r.Params})
+	if !s.noRecord {
+		s.calls = append(s.calls, Call{Method: r.Method, Params: r.Params})
+	}
 	s.mu.Unlock()
 
 	ok := func(result any) { _ = enc.Encode(map[string]any{"id": r.ID, "result": result}) }

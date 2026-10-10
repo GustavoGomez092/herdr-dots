@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -99,9 +100,10 @@ func TestSoak(t *testing.T) {
 	r := newRigWith(t, func(d *Deps) {
 		d.Config.SessionBudgetCalls = 1 << 30
 		d.Config.MaxParallelRuns = 3
-		d.PollInterval = time.Second
+		d.PollInterval = soakEnv("SOAK_POLL", 0) // 0: the engine's own default (3 s), as in production
 		d.Backend = func(string) (backend.Backend, error) { return be, nil }
 	}, ds...)
+	r.srv.DiscardCalls() // the fake Herdr's call log would grow the test's memory, not the engine's
 	panes := make([]string, soakPanes)
 	for i := range panes {
 		panes[i] = fmt.Sprintf("w1:p%d", i+1)
@@ -196,6 +198,16 @@ func TestSoak(t *testing.T) {
 	}
 
 	time.Sleep(30 * time.Second) // let the last runs finish
+	// SOAK_HEAPPROFILE=FILE writes the live heap here, while the engine still
+	// runs (a -memprofile is written after teardown and shows nothing held).
+	if hp := os.Getenv("SOAK_HEAPPROFILE"); hp != "" {
+		runtime.GC()
+		if f, err := os.Create(hp); err == nil {
+			_ = pprof.WriteHeapProfile(f)
+			f.Close()
+		}
+		t.Logf("heap profile written to %s (queue holds %d cards)", hp, len(r.q.All()))
+	}
 	cpu0, wall0 := cpuTime(), time.Now()
 	time.Sleep(idle)
 	idleCPU := float64(cpuTime()-cpu0) / float64(time.Since(wall0))
