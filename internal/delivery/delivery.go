@@ -79,6 +79,9 @@ func TruncateRunes(s string, n int) string {
 	if len(r) <= n {
 		return s
 	}
+	if n <= 0 {
+		return ""
+	}
 	return string(r[:n-1]) + "…"
 }
 

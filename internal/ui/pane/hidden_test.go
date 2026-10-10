@@ -1,6 +1,7 @@
 package pane
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -17,5 +18,16 @@ func TestQueueSaysHowManyCardsAreNotShown(t *testing.T) {
 	}
 	if v := ready(&fakeCaller{}).View(); strings.Contains(v, "not shown") {
 		t.Fatalf("nothing hidden, yet:\n%s", v)
+	}
+}
+
+// The QUEUE header counts every queued card, the trimmed ones too.
+func TestQueueHeaderCountsHiddenCards(t *testing.T) {
+	s := snap()
+	shown := len(s.Panes[0].Cards)
+	s.Panes[0].HiddenCards = 37
+	m, _ := New("w1:p1", &fakeCaller{}).Update(SnapshotMsg(s))
+	if want := fmt.Sprintf("QUEUE (%d)", shown+37); !strings.Contains(m.View(), want) {
+		t.Fatalf("want %q:\n%s", want, m.View())
 	}
 }

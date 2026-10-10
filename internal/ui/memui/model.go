@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/textutil"
@@ -379,6 +380,10 @@ func (m Model) keysConfirmApprove(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "not approved"
 		return m, nil
 	}
+	if !m.approveFits() {
+		m.status = "not approved: the popup is too small to show the whole proposal"
+		return m, nil
+	}
 	e := m.approve
 	ref, pid, seen := e.Ref(), m.pidOf(e), e.Text
 	return m, m.mutateSaying(func(st *memory.Store) (string, error) {
@@ -414,32 +419,99 @@ func archivedSay(status string, got memory.Entry, was bool) string {
 	return status + ", then archived: " + whose + " memory is full and imports give way to your own entries"
 }
 
-// wrap breaks clean(s) into lines of at most w runes, on spaces where it can.
+// wrap breaks clean(s) into lines of at most w display cells (a CJK rune
+// takes two), on spaces where it can.
 func wrap(s string, w int) []string {
 	w = max(w, 10)
 	var lines []string
-	var cur []rune
+	cur, curW := "", 0
 	for _, word := range strings.Fields(clean(s)) {
-		r := []rune(word)
-		for len(r) > w { // a word longer than a line is cut
-			if len(cur) > 0 {
-				lines, cur = append(lines, string(cur)), nil
+		ww := ansi.StringWidth(word)
+		for ww > w { // a word longer than a line is cut, at a rune boundary
+			if cur != "" {
+				lines, cur, curW = append(lines, cur), "", 0
 			}
-			lines, r = append(lines, string(r[:w])), r[w:]
+			head, rest, used := word, "", 0
+			for i, r := range word {
+				rw := ansi.StringWidth(string(r))
+				if used+rw > w && i > 0 { // i > 0: always make progress
+					head, rest = word[:i], word[i:]
+					break
+				}
+				used += rw
+			}
+			// Per-rune widths can differ from a grapheme cluster's (an emoji
+			// with VS16): a head still too wide is kept whole, and
+			// approveFits, which measures lines, refuses it.
+			lines, word = append(lines, head), rest
+			ww = ansi.StringWidth(word)
 		}
 		switch {
-		case len(cur) == 0:
-			cur = r
-		case len(cur)+1+len(r) <= w:
-			cur = append(append(cur, ' '), r...)
+		case word == "": // cut to the end
+		case cur == "":
+			cur, curW = word, ww
+		case curW+1+ww <= w:
+			cur, curW = cur+" "+word, curW+1+ww
 		default:
-			lines, cur = append(lines, string(cur)), r
+			lines, cur, curW = append(lines, cur), word, ww
 		}
 	}
-	if len(cur) > 0 {
-		lines = append(lines, string(cur))
+	if cur != "" {
+		lines = append(lines, cur)
 	}
 	return lines
+}
+
+// field is a labelled approve-screen value wrapped to w cells, its
+// continuation lines under the value.
+func field(label, value string, w int) []string {
+	pad := strings.Repeat(" ", ansi.StringWidth(label))
+	var lines []string
+	for i, l := range wrap(value, w-len(pad)) {
+		if i == 0 {
+			lines = append(lines, label+l)
+		} else {
+			lines = append(lines, pad+l)
+		}
+	}
+	if len(lines) == 0 {
+		lines = []string{label}
+	}
+	return lines
+}
+
+// approveTail is the lines View adds under the approve screen: a blank line,
+// the y prompt and the footer.
+const approveTail = 3
+
+// screenWidth is the width View lays out for.
+func (m Model) screenWidth() int {
+	if m.width <= 0 {
+		return 80
+	}
+	return m.width
+}
+
+// approveMinWidth is the narrowest popup the approve screen is laid out in.
+const approveMinWidth = 24
+
+// approveFits reports whether the whole approve screen fits the popup. A
+// taller view would have its top lines (who proposed it, the kind, the
+// paths) cut by the terminal, and a line wider than the popup loses its
+// right end, so approving is refused until every cell fits. An unknown
+// height (no WindowSizeMsg yet) fits.
+func (m Model) approveFits() bool {
+	w := m.screenWidth()
+	if w < approveMinWidth {
+		return false
+	}
+	lines := m.approveScreen(w)
+	for _, l := range lines {
+		if ansi.StringWidth(l) > w {
+			return false
+		}
+	}
+	return m.height <= 0 || len(lines)+approveTail <= m.height
 }
 
 // approveScreen is the full proposal: who proposed it, its kind, its paths
@@ -463,15 +535,13 @@ func (m Model) approveScreen(w int) []string {
 	if paths == "" {
 		paths = "(none)"
 	}
-	lines := []string{style.Title.Render("APPROVE " + clean(e.Ref().String()) + "?"),
-		"proposed by: " + by, "kind:        " + clean(string(e.Kind))}
-	for i, l := range wrap(paths, w-13) {
-		if i == 0 {
-			lines = append(lines, "paths:       "+l)
-		} else {
-			lines = append(lines, "             "+l)
-		}
+	var lines []string
+	for _, l := range wrap("APPROVE "+clean(e.Ref().String())+"?", w) {
+		lines = append(lines, style.Title.Render(l))
 	}
+	lines = append(lines, field("proposed by: ", by, w)...)
+	lines = append(lines, field("kind:        ", clean(string(e.Kind)), w)...)
+	lines = append(lines, field("paths:       ", paths, w)...)
 	lines = append(lines, "text:")
 	for _, l := range wrap(e.Text, w-2) {
 		lines = append(lines, "  "+l)
@@ -728,10 +798,7 @@ func (m Model) list(w int) (lines []string, cur int) {
 }
 
 func (m Model) View() string {
-	w := m.width
-	if w <= 0 {
-		w = 80
-	}
+	w := m.screenWidth()
 	var head strings.Builder
 	who := clean(m.d.DotName)
 	if who == "" {
@@ -762,7 +829,11 @@ func (m Model) View() string {
 		sc, _, _, want := m.forgetAllTarget()
 		tail.WriteString(fmt.Sprintf("\n%s Type %q and press enter:\n%s\n", style.Title.Render("Forget ALL "+string(sc)+" memory?"), want, m.input.View()))
 	case modeConfirmApprove:
-		tail.WriteString("\ny approve · any other key cancels\n")
+		if m.approveFits() {
+			tail.WriteString("\ny approve · any other key cancels\n")
+		} else {
+			tail.WriteString("\nany key cancels\n")
+		}
 	case modeFilter:
 		tail.WriteString("\n/" + m.input.View() + "\n")
 	case modeEdit:
@@ -788,7 +859,18 @@ func (m Model) View() string {
 
 	lines, cur := m.list(w)
 	if m.mode == modeConfirmApprove {
+		// The approve screen replaces the header: it has its own title, and
+		// every line of the popup is needed for the proposal.
+		head.Reset()
 		lines, cur = m.approveScreen(w), 0
+		if !m.approveFits() {
+			why := fmt.Sprintf("needs %d lines, has %d", len(lines)+approveTail, m.height)
+			if w < approveMinWidth {
+				why = fmt.Sprintf("needs %d columns, has %d", approveMinWidth, w)
+			}
+			lines = append([]string{style.Title.Render("APPROVE " + clean(m.approve.Ref().String()) + "?")},
+				wrap("Too small to show the whole proposal ("+why+"). Enlarge the popup to approve.", w)...)
+		}
 	} else if len(m.rows) == 0 && m.loadErr == "" {
 		lines = []string{style.Dim.Render("No memory here yet. Press n to add an entry.")}
 	}

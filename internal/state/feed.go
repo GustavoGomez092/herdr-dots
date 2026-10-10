@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,8 +65,30 @@ type Feed struct {
 	recent map[string][]FeedEntry
 }
 
-func OpenFeed(path string) (*Feed, error) {
+// chmod is os.Chmod; tests make it fail.
+var chmod = os.Chmod
+
+func OpenFeed(path string) (*Feed, error) { return OpenFeedLogged(path, nil) }
+
+// OpenFeedLogged is OpenFeed that logs (once) a feed it could not make
+// owner-only; logf nil = silent.
+func OpenFeedLogged(path string, logf func(format string, args ...any)) (*Feed, error) {
 	f := &Feed{path: path, recent: map[string][]FeedEntry{}}
+	// The feed quotes model output: an older file made with a looser mode
+	// becomes owner-only (O_CREATE's 0600 only applies to new files). This
+	// runs before the rotation, so a rotated feed is owner-only too, and it
+	// covers a feed.jsonl.1 rotated by an older version.
+	var loose []string
+	for _, p := range []string{path, path + ".1"} {
+		if st, err := os.Stat(p); err == nil && st.Mode().Perm()&0o077 != 0 {
+			if err := chmod(p, 0o600); err != nil {
+				loose = append(loose, err.Error())
+			}
+		}
+	}
+	if len(loose) > 0 && logf != nil {
+		logf("feed: could not make the feed owner-only: %s", strings.Join(loose, "; "))
+	}
 	if st, err := os.Stat(path); err == nil && st.Size() > feedRotateBytes {
 		_ = os.Rename(path, path+".1")
 	}
@@ -116,6 +139,9 @@ func (f *Feed) Append(e FeedEntry) error {
 
 // Recent returns up to n entries for a pane, oldest first.
 func (f *Feed) Recent(paneID string, n int) []FeedEntry {
+	if n <= 0 {
+		return nil
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	list := f.recent[paneID]

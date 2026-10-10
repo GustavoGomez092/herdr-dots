@@ -182,7 +182,7 @@ func engineDeps(p paths.Paths, hc herdr.Client, cfg config.Config, logf func(str
 	if err != nil {
 		return engine.Deps{}, err
 	}
-	feed, err := state.OpenFeed(p.FeedFile())
+	feed, err := state.OpenFeedLogged(p.FeedFile(), logf)
 	if err != nil {
 		return engine.Deps{}, err
 	}

@@ -544,7 +544,7 @@ func (m Model) View() string {
 		}
 		roster = append(roster, line+"\n")
 	}
-	queueRule := rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)), w)
+	queueRule := rule(fmt.Sprintf("QUEUE (%d)", len(p.Cards)+p.HiddenCards), w) // trimmed cards count too
 	if p.Council != nil {
 		// The progress line rides with the queue rule, so the roster cut
 		// (fitRoster) counts it and it never scrolls away.

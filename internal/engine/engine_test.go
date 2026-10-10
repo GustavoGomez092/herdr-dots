@@ -190,16 +190,39 @@ func newRigFull(t *testing.T, opt func(*Deps), eng func(*Engine), ds ...dots.Dot
 	return r
 }
 
+// eventually waits for cond. The deadline is generous because drafts and
+// proactive runs shell out to git, which is slow on a loaded machine (the
+// Phase 7 draft tests timed out under load at 3 s); a passing test never
+// waits for it.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	eventuallyWhy(t, what, func() (bool, string) { return cond(), "" })
+}
+
+// eventuallyWhy is eventually for a condition that also says why it is not
+// met yet; a timeout reports the last reason.
+func eventuallyWhy(t *testing.T, what string, cond func() (bool, string)) {
+	t.Helper()
+	waitFor(t, 15*time.Second, what, cond)
+}
+
+func waitFor(tb testing.TB, d time.Duration, what string, cond func() (bool, string)) {
+	tb.Helper()
+	deadline := time.Now().Add(d)
+	last := ""
 	for time.Now().Before(deadline) {
-		if cond() {
+		ok, why := cond()
+		if ok {
 			return
 		}
+		last = why
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for: %s", what)
+	if last != "" {
+		tb.Fatalf("timed out waiting for: %s (last: %s)", what, last)
+		return
+	}
+	tb.Fatalf("timed out waiting for: %s", what)
 }
 
 func (r *rig) attach(t *testing.T, slugs ...string) {

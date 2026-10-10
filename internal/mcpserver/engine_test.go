@@ -37,6 +37,11 @@ func shortSock(t *testing.T) string {
 	return platformtest.Endpoint(t)
 }
 
+// startStub serves a stub engine at path. Its stop function returns only
+// once Serve has returned, so the old listener is closed (and, on Unix, its
+// socket file unlinked) before the test goes on: a listener closed late
+// would unlink the socket of the engine started after it (the flake seen in
+// Phases 6 and 8).
 func startStub(t *testing.T, path string) context.CancelFunc {
 	t.Helper()
 	ln, err := ipc.Listen(path)
@@ -44,8 +49,9 @@ func startStub(t *testing.T, path string) context.CancelFunc {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go ipc.Serve(ctx, ln, stubEngine{pane: "w1:p1"})
-	return cancel
+	done := make(chan struct{})
+	go func() { _ = ipc.Serve(ctx, ln, stubEngine{pane: "w1:p1"}); close(done) }()
+	return func() { cancel(); <-done }
 }
 
 // Review Focus 3: the engine isn't running when the agent first calls a tool.

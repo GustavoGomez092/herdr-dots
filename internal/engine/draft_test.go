@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"herdr-dots/internal/backend"
 	"herdr-dots/internal/config"
@@ -101,14 +103,27 @@ func gitTestEnv(t *testing.T) []string {
 
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	out, err := gitTry(t, dir, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// gitTry is gitT for a wait condition that polls while the engine runs git
+// in the same repository: `git worktree list` fails while a concurrent
+// `git worktree prune` removes .git/worktrees ("Invalid path"), which only
+// means "not yet".
+func gitTry(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false",
 		"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "init.defaultBranch=main"}, args...)...)
 	cmd.Env = gitTestEnv(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
+		return "", fmt.Errorf("git %v: %v\n%s", args, err, out)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
 func writeT(t *testing.T, path, body string) {
@@ -576,10 +591,43 @@ func TestEngineStartCleansUpAnInterruptedDraft(t *testing.T) {
 		_, derr := os.Stat(dir)
 		return errors.Is(merr, patchstore.ErrNotFound) && os.IsNotExist(derr)
 	})
-	eventually(t, "ref and worktree metadata gone", func() bool {
-		return r.refs(t) == "" && strings.Count(gitT(t, r.repo, "worktree", "list", "--porcelain"), "worktree ") == 1
+	// The record and directory go first; the ref drop and `git worktree
+	// prune` follow, so git is polled without failing on a list that races
+	// the prune.
+	eventuallyWhy(t, "ref and worktree metadata gone", func() (bool, string) {
+		list, err := gitTry(t, r.repo, "worktree", "list", "--porcelain")
+		if err != nil {
+			return false, err.Error()
+		}
+		refs, err := gitTry(t, r.repo, "for-each-ref", "--format=%(refname)", worktree.RefPrefix)
+		if err != nil {
+			return false, err.Error()
+		}
+		if refs != "" || strings.Count(list, "worktree ") != 1 {
+			return false, "refs: " + refs + "\n" + list
+		}
+		return true, ""
 	})
 }
+
+// Fix round 1: a wait that times out says what it last saw (the draft
+// cleanup wait: the last git error).
+func TestWaitForReportsTheLastReason(t *testing.T) {
+	ftb := &fatalTB{TB: t}
+	waitFor(ftb, 30*time.Millisecond, "metadata gone", func() (bool, string) { return false, "git [worktree list]: exit status 128" })
+	if !strings.Contains(ftb.msg, "metadata gone") || !strings.Contains(ftb.msg, "exit status 128") {
+		t.Fatalf("timeout message %q", ftb.msg)
+	}
+}
+
+// fatalTB records Fatalf instead of failing the test.
+type fatalTB struct {
+	testing.TB
+	msg string
+}
+
+func (f *fatalTB) Helper()                        {}
+func (f *fatalTB) Fatalf(format string, a ...any) { f.msg = fmt.Sprintf(format, a...) }
 
 // A write-capable dot asked through MCP (ask_dot, ask_council), summoned, or
 // seated in a council runs read-only like any dot: no write tools, no

@@ -364,6 +364,7 @@ func (e *Engine) panesIn(root string) []string {
 // meanwhile (the dot lost its trust, changed, or lost the inject grant).
 // Callers hold no lock.
 func (e *Engine) requeueAuto(panes []string, slug string) {
+	e.hook("requeue")
 	e.dmu.Lock()
 	defer e.dmu.Unlock()
 	for _, p := range panes {
@@ -515,13 +516,21 @@ func (e *Engine) trustAt(ctx context.Context, paneID, root, slug, sumHex string,
 	if err := e.d.Trust.Trust(pr.ID, it.Rel, itemPath(pr.Root, it.Rel), it.Sum, grant); err != nil {
 		return err
 	}
-	e.rescanProject(pr)
+	roots := e.rescanProject(pr)
+	// The same bytes re-trusted without inject: a poll's rescan may have
+	// installed the narrowed grant first and still be on its way to
+	// requeueAuto. Requeue here too (as untrustAt does), so the dot's waiting
+	// inject cards are back in the queue when Trust returns.
+	if it.Trusted && slices.Contains(it.Granted, dots.CapInject) && !slices.Contains(grant, dots.CapInject) {
+		e.requeueWhereNotInjecting(roots, slug)
+	}
 	return nil
 }
 
 // rescanProject rescans every known checkout of pr's project after a trust
-// change (identical bytes are trusted in all of them), pr's first.
-func (e *Engine) rescanProject(pr memory.Project) {
+// change (identical bytes are trusted in all of them), pr's first, and
+// returns the checkouts it rescanned.
+func (e *Engine) rescanProject(pr memory.Project) []string {
 	e.scanRoot(pr)
 	e.mu.Lock()
 	var others []memory.Project
@@ -531,10 +540,37 @@ func (e *Engine) rescanProject(pr memory.Project) {
 		}
 	}
 	e.mu.Unlock()
+	roots := []string{pr.Root}
 	for _, o := range others {
 		e.scanRoot(o)
+		roots = append(roots, o.Root)
 	}
 	e.broadcast()
+	return roots
+}
+
+// requeueWhereNotInjecting requeues slug's waiting inject cards on the panes
+// of each checkout in roots where slug no longer runs as an inject dot
+// (untrusted, changed, or trusted without inject). A checkout whose own
+// bytes still inject keeps its cards. It runs after rescanProject, whose
+// scans (or newer ones) are installed by then. Callers hold no lock.
+func (e *Engine) requeueWhereNotInjecting(roots []string, slug string) {
+	e.mu.Lock()
+	var panes []string
+	for _, root := range roots {
+		if ps := e.projects[root]; e.projOn && ps != nil {
+			if d, ok := ps.runnable[slug]; ok && d.Delivery.Mode == dots.ModeInject {
+				continue
+			}
+		}
+		for p, r := range e.paneRoots {
+			if r == root {
+				panes = append(panes, p)
+			}
+		}
+	}
+	e.mu.Unlock()
+	e.requeueAuto(panes, slug)
 }
 
 // Untrust forgets a project dot's trust in paneID's checkout; attached
@@ -570,12 +606,12 @@ func (e *Engine) untrustAt(ctx context.Context, paneID, root, slug string) error
 	if !found {
 		return fmt.Errorf("%s was not trusted", dots.DisplaySlug(slug))
 	}
-	e.rescanProject(pr)
+	roots := e.rescanProject(pr)
 	// A poll's rescan may have seen the revoke first: it then owns the
 	// revoked list and may still be on its way to requeueAuto. Requeue here
-	// too (idempotent), so the dot's waiting inject cards are back in the
-	// queue when Untrust returns.
-	e.requeueAuto(e.panesIn(pr.Root), slug)
+	// too (idempotent), in every checkout the revoke reached, so the dot's
+	// waiting inject cards are back in the queue when Untrust returns.
+	e.requeueWhereNotInjecting(roots, slug)
 	return nil
 }
 
