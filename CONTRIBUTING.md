@@ -45,6 +45,11 @@ Its version is the top-level `version` key; a missing key means 1.
   register a `Migration` from the old version (it must set `version` in its
   output), and add a fixture test. A state-root kind needs a `Lock` before it
   can be migrated.
+- The first migration of a kind: the command-line gate (`protectNewerFiles`,
+  a dry run) only reports files that need a migration as pending, it doesn't
+  keep them read-only. Before registering it, make the gate protect that
+  kind's pending files too (or migrate them first), or a writing command
+  could rewrite an older file without its migration and backup.
 - Append-only JSONL logs (feed, memory ledger, history) only ever gain
   optional fields; a breaking change uses a new file name.
 
