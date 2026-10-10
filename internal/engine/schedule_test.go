@@ -184,7 +184,10 @@ func TestWakeAfterSleepRunsOnlyTheLatestSlot(t *testing.T) {
 	root := t.TempDir()
 	r := newProRig(t, proOpts{cwd: root}, scheduledDot("Security", "0 * * * *"))
 	r.attach(t, "security")
-	time.Sleep(60 * time.Millisecond)
+	// Planned before the clock moves (not a fixed sleep: slow on Windows CI).
+	// A first plan made after the move would take 15:00 for a schedule that
+	// never ran and record it without running it (TestNewScheduleDoesNotCatchUp).
+	eventually(t, "planned", func() bool { return r.dotState("security").Next == "scheduled Wed 11:00" })
 	r.clock.Add(5*time.Hour + 10*time.Minute) // 10:00 -> 15:10, slots 11:00 ... 15:00 passed
 	eventually(t, "one run", func() bool { return len(scheduledRuns(r)) == 1 })
 	time.Sleep(150 * time.Millisecond)

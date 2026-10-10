@@ -25,6 +25,7 @@ func TestClaudeThroughACmdShimKeepsThePromptOffTheCommandLine(t *testing.T) {
 	resolveBin = platform.LookPath
 	defer func() { resolveBin = old }()
 	r := req()
+	r.Cwd = dir // req's "/repo" doesn't exist here: CreateProcess fails with "The directory name is invalid"
 	r.Purpose = `Flag "quotes" & pipes | 100% %PATH% carets ^ and <angle> brackets! & echo INJECTED`
 	cmd := ClaudeCLI{Environ: os.Environ}.BuildCmd(r)
 	defer cmd.Close()

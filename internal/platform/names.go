@@ -33,3 +33,18 @@ func windowsReservedName(rel string) bool {
 	}
 	return false
 }
+
+// windowsRootRelative is RootRelative's Windows rule for a path that is not
+// absolute, kept OS-neutral so every OS can test it: rooted without a drive
+// (\x or /x: the root of the process's current drive) or drive-relative
+// (C:x: drive C's current directory).
+func windowsRootRelative(p string) bool {
+	if p == "" {
+		return false
+	}
+	if p[0] == '/' || p[0] == '\\' {
+		return true
+	}
+	c := p[0] | 0x20 // ASCII lower case
+	return len(p) >= 2 && p[1] == ':' && c >= 'a' && c <= 'z'
+}

@@ -6,12 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"herdr-dots/internal/backend"
+	"herdr-dots/internal/platform"
 )
 
 func TestResearchKindsOnlyInResearchPasses(t *testing.T) {
@@ -151,7 +153,13 @@ func TestClaimScheduleConcurrentClaimsOneWinner(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("%d winners, want 1", wins)
 	}
-	if fi, err := os.Stat(filepath.Join(dir, pid, "schedule.json")); err != nil || fi.Mode().Perm() != 0o600 {
+	// Private to the user: mode 0600 on Unix; on Windows, where Go reports
+	// every writable file as 0666, the owner-only DACL (platform.CheckPrivate).
+	sched := filepath.Join(dir, pid, "schedule.json")
+	if err := platform.CheckPrivate(sched); err != nil {
+		t.Fatalf("schedule.json is not private: %v", err)
+	}
+	if fi, err := os.Stat(sched); runtime.GOOS != "windows" && (err != nil || fi.Mode().Perm() != 0o600) {
 		t.Fatalf("schedule.json mode: %v %v", fi, err)
 	}
 }

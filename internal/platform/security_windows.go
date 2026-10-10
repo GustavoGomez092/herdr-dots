@@ -5,6 +5,7 @@ package platform
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -259,3 +260,9 @@ func IsVolumeRoot(p string) bool { return volumeRoot(p) }
 // ".env::$DATA"), a device (CON, NUL, COM1, ...), or a name Windows silently
 // rewrites (a trailing dot or space).
 func ReservedPathName(rel string) bool { return windowsReservedName(rel) }
+
+// RootRelative reports whether a tool's path is rooted without a drive
+// ("/etc/passwd", `\x`: the current drive's root) or drive-relative ("C:x").
+// Neither is absolute (filepath.IsAbs), so filepath.Join would put it under
+// a project root; both name places outside it.
+func RootRelative(p string) bool { return !filepath.IsAbs(p) && windowsRootRelative(p) }

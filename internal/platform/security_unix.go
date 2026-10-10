@@ -68,3 +68,8 @@ func IsVolumeRoot(string) bool { return false }
 // ReservedPathName reports whether a project-relative path names something
 // other than a plain file. Unix has no such names.
 func ReservedPathName(string) bool { return false }
+
+// RootRelative reports whether a path is rooted or drive-relative without
+// being absolute, which only Windows has: on Unix "/x" is absolute and "C:x"
+// an ordinary name.
+func RootRelative(string) bool { return false }

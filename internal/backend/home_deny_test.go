@@ -29,11 +29,13 @@ func TestClaudeRepoReadRunsDenyHomeSecretsAndTheConfigDir(t *testing.T) {
 		"Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.gnupg/**)", "Read(~/.config/gh/**)",
 		"Read(~/.netrc)", "Read(~/.docker/config.json)", "Read(~/.kube/**)",
 		"Read(~/.claude.json)", "Read(~/.claude/**)", "Read(~/.codex/**)",
-		"Read(/" + filepath.ToSlash(dir) + "/**)",
+		absDeny(dir),
 	}
 	if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
-		// macOS: /var is /private/var; the resolved form is denied too.
-		want = append(want, "Read(/"+filepath.ToSlash(real)+"/**)")
+		// macOS: /var is /private/var; Windows: the temp dir's 8.3 short name
+		// (C:\Users\RUNNER~1) is the long one (runneradmin). The resolved
+		// form is denied too.
+		want = append(want, absDeny(real))
 	}
 
 	review := req()
@@ -64,6 +66,18 @@ func TestClaudeRepoReadRunsDenyHomeSecretsAndTheConfigDir(t *testing.T) {
 			}
 		})
 	}
+}
+
+// absDeny is the Read deny rule for everything under the absolute path p, in
+// the form Claude Code matches: `//` then the path, with a Windows drive
+// path in its POSIX form (C:\Users\alice is //c/Users/alice; see "Read and
+// Edit" in Claude Code's permissions docs).
+func absDeny(p string) string {
+	s := filepath.ToSlash(p)
+	if v := filepath.VolumeName(p); len(v) == 2 && v[1] == ':' {
+		s = strings.ToLower(v[:1]) + s[2:]
+	}
+	return "Read(//" + strings.TrimPrefix(s, "/") + "/**)"
 }
 
 // Without a credentials path (tests, v1's New) the home rules still apply and

@@ -10,9 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -66,10 +68,45 @@ func TestSecureFileReplacesAPermissiveDACL(t *testing.T) {
 	if err := CheckPrivate(p); err != nil {
 		t.Fatalf("after SecureFile: %v", err)
 	}
-	d := daclString(t, p)
-	if !strings.Contains(d, "D:P") || !strings.Contains(d, mySID(t)) || strings.Contains(d, ";WD)") {
-		t.Fatalf("DACL %s: want protected, owner-only", d)
+	// Compared by SID, not in the SDDL text: SDDL writes a well-known
+	// account by its alias, and CI's runneradmin is the built-in
+	// Administrator account, rendered "LA" instead of its S-1-5-21-...-500.
+	protected, allowed := daclAllows(t, p)
+	want := []string{mySID(t), sidSystem, sidAdministrators} // privateDACL (ruling P6-R2: files keep Administrators)
+	slices.Sort(allowed)
+	slices.Sort(want)
+	if !protected || !slices.Equal(allowed, want) {
+		t.Fatalf("DACL %s (allows %v): want protected, allowing only %v", daclString(t, p), allowed, want)
 	}
+}
+
+// daclAllows reports whether path's DACL is protected (no inheritance) and
+// the SIDs its allow entries grant, in S-1-... form.
+func daclAllows(t *testing.T, path string) (protected bool, sids []string) {
+	t.Helper()
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, _, err := sd.Control()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		t.Fatalf("DACL: %v (nil %v)", err, dacl == nil)
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			t.Fatalf("entry %d has type %d, want only allow entries", i, ace.Header.AceType)
+		}
+		sids = append(sids, (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String())
+	}
+	return control&windows.SE_DACL_PROTECTED != 0, sids
 }
 
 func TestCheckPrivateRefusesReadAccessForOthers(t *testing.T) {
@@ -261,5 +298,15 @@ func TestPipeRoundTripOwnerCheckAndNoSecondListener(t *testing.T) {
 	buf := make([]byte, 5)
 	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ping\n" {
 		t.Fatalf("echo %q %v", buf, err)
+	}
+}
+
+// An absolute path is never RootRelative; a rooted or drive-relative one is.
+func TestRootRelativeOnWindows(t *testing.T) {
+	for p, want := range map[string]bool{`C:\x`: false, `c:/x`: false, `\\server\share\x`: false, `\\?\C:\x`: false,
+		`/etc/passwd`: true, `\etc`: true, `C:x`: true, `main.go`: false} {
+		if got := RootRelative(p); got != want {
+			t.Errorf("RootRelative(%q) = %v, want %v", p, got, want)
+		}
 	}
 }

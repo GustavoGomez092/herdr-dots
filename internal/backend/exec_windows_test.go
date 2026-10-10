@@ -79,7 +79,10 @@ func TestExecRunnerNeverRunsARepoLocalNodeThroughAShim(t *testing.T) {
 			if _, serr := os.Stat(planted); serr == nil {
 				t.Fatalf("the repo-local node ran (out %q)", out)
 			}
-			if err != nil || !strings.Contains(string(out), "real-node hi") {
+			// ExecRunner quotes every shim argument (platform.BatchCmdLine) and
+			// the shim's %* passes them on as written: the real node.exe gets
+			// argv "hi"; this node.cmd echoes the quoted form.
+			if err != nil || !strings.Contains(string(out), `real-node "hi"`) {
 				t.Fatalf("out %q stderr %q err %v", out, stderr, err)
 			}
 		})

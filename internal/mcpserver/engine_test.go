@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -82,6 +85,39 @@ func TestIPCEngineStartsTheEngineLazilyAndAgainWhenItDies(t *testing.T) {
 		t.Fatalf("after the engine died: %v (ensures %d)", err, ensures)
 	}
 	stop()
+}
+
+// CI (windows-latest): a named-pipe dial (go-winio) fails with
+// *os.PathError{Op: "open"}, not the *net.OpError{Op: "dial"} of a unix
+// socket, so a dead engine was never restarted and its raw error came back
+// instead of ErrEngineDown. Both shapes are a failed dial, on every OS.
+func TestDialFailedKnowsUnixAndWindowsDials(t *testing.T) {
+	ctx := context.Background()
+	pipe := &os.PathError{Op: "open", Path: `\\.\pipe\herdr-dots-x`, Err: syscall.ENOENT}
+	for name, err := range map[string]error{
+		"unix socket": &net.OpError{Op: "dial", Net: "unix", Err: syscall.ECONNREFUSED},
+		"named pipe":  pipe,
+		"wrapped":     fmt.Errorf("query: %w", pipe),
+	} {
+		if !dialFailed(ctx, err) {
+			t.Errorf("%s: dialFailed = false for %v", name, err)
+		}
+	}
+	for name, err := range map[string]error{
+		"nil":          nil,
+		"engine reply": errors.New("unknown dot"),
+		"read":         &net.OpError{Op: "read", Net: "unix", Err: syscall.ECONNRESET},
+		"other file":   &os.PathError{Op: "read", Path: `\\.\pipe\herdr-dots-x`, Err: syscall.EIO},
+	} {
+		if dialFailed(ctx, err) {
+			t.Errorf("%s: dialFailed = true for %v", name, err)
+		}
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if dialFailed(cancelled, pipe) {
+		t.Error("a dial that failed because the caller's context ended says nothing about the engine")
+	}
 }
 
 // A caller's cancel is not "the engine is down".

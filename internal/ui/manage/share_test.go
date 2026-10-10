@@ -2,6 +2,7 @@ package manage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -162,7 +163,7 @@ func TestTrustPreviewNeedsTheWholeFileAndSendsTheHash(t *testing.T) {
 	}
 	m = press(m, "y")
 	sum := projectdots.Hex(projectdots.Sum([]byte(shareHelperTOML)))
-	want := ipc.CmdTrust + `{"pane_id":"w1:p1","root":"` + repo + `","slug":"proj--helper--9f2c1a7b","sha256":"` + sum + `","capabilities":["inject"]}`
+	want := ipc.CmdTrust + `{"pane_id":"w1:p1","root":` + jsonString(t, repo) + `,"slug":"proj--helper--9f2c1a7b","sha256":"` + sum + `","capabilities":["inject"]}`
 	if len(fc.calls) != 1 || strings.ReplaceAll(fc.calls[0], " ", "") != strings.ReplaceAll(want, " ", "") {
 		t.Fatalf("trust call:\n%v\nwant\n%s", fc.calls, want)
 	}
@@ -190,7 +191,7 @@ func TestTrustPreviewShowsHiddenCharactersAndHashesTheBytesRead(t *testing.T) {
 	fc.calls = nil
 	press(m, "y")
 	sum := projectdots.Hex(projectdots.Sum([]byte(body)))
-	if len(fc.calls) != 1 || !strings.Contains(fc.calls[0], sum) || !strings.Contains(fc.calls[0], repo) {
+	if len(fc.calls) != 1 || !strings.Contains(fc.calls[0], sum) || !strings.Contains(fc.calls[0], `"root":`+jsonString(t, repo)) {
 		t.Fatalf("trust call %v, want sum %s", fc.calls, sum)
 	}
 }
@@ -227,13 +228,24 @@ func TestTrustedElsewhereAndUntrustSendsTheCheckout(t *testing.T) {
 	}
 	fc.calls = nil
 	m = press(m, "u")
-	want := ipc.CmdUntrust + ` {"pane_id":"w1:p1","root":"` + repo + `","slug":"proj--helper--9f2c1a7b","sha256":""}`
+	want := ipc.CmdUntrust + ` {"pane_id":"w1:p1","root":` + jsonString(t, repo) + `,"slug":"proj--helper--9f2c1a7b","sha256":""}`
 	if len(fc.calls) != 1 || fc.calls[0] != want {
 		t.Fatalf("untrust call:\n%v\nwant\n%s", fc.calls, want)
 	}
 	if !strings.Contains(m.View(), "untrusted Helper") {
 		t.Fatalf("status:\n%s", m.View())
 	}
+}
+
+// jsonString is s as a JSON string, quotes included: a Windows path's
+// backslashes are escaped in the call's arguments (C:\\Users\\...).
+func jsonString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func TestProjectDotsCantBeEditedOrDeletedHere(t *testing.T) {

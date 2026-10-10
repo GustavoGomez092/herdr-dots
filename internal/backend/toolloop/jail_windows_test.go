@@ -67,3 +67,29 @@ func TestDriveRootsAreUnavailable(t *testing.T) {
 		}
 	}
 }
+
+// CI (windows-latest): "/etc/passwd" has no drive, so filepath.IsAbs is false
+// and the jail joined it under the root. A rooted or drive-relative path is
+// refused as outside the root, for reads and for writes, even when the same
+// path exists inside the root.
+func TestRootedAndDriveRelativePathsAreOutsideTheRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "passwd"), []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vol := filepath.VolumeName(root) // "C:" or "D:"
+	for _, p := range []string{"/etc/passwd", `\etc\passwd`, "/", vol + "etc", vol + `..\x`, vol} {
+		if _, _, err := ResolveInRoot(root, p, DefaultDeny); !errors.Is(err, ErrOutsideRoot) {
+			t.Errorf("ResolveInRoot(%q) err = %v, want ErrOutsideRoot", p, err)
+		}
+		if _, _, _, err := resolveForWrite(root, p, DefaultDeny); !errors.Is(err, ErrOutsideRoot) {
+			t.Errorf("resolveForWrite(%q) err = %v, want ErrOutsideRoot", p, err)
+		}
+	}
+	if _, rel, err := ResolveInRoot(root, `etc\passwd`, DefaultDeny); err != nil || rel != "etc/passwd" {
+		t.Fatalf("the relative spelling must still resolve: %q %v", rel, err)
+	}
+}

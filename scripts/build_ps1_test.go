@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -59,12 +60,37 @@ func psRoot(t *testing.T, sums string) string {
 	return root
 }
 
+// psPath is a PATH for build.ps1 with PowerShell and no Go: a fresh dir
+// holding only a link to ps on macOS and Linux (CI's ubuntu runner has pwsh
+// and a go side by side in /usr/bin), and ps's own install dir on Windows
+// (symlinks need a privilege there), checked to hold no go.
+func psPath(t *testing.T, ps string) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		dir := t.TempDir()
+		if err := os.Symlink(ps, filepath.Join(dir, filepath.Base(ps))); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	dir := filepath.Dir(ps)
+	for _, n := range []string{"go.exe", "go.cmd", "go.bat"} {
+		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
+			t.Fatalf("%s sits beside %s: the PowerShell tests need a PATH without Go", n, ps)
+		}
+	}
+	return dir
+}
+
 func runPS(t *testing.T, ps, root, base string, extra ...string) (string, error) {
 	t.Helper()
 	cmd := exec.Command(ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", filepath.Join("scripts", "build.ps1"))
 	cmd.Dir = root
-	cmd.Env = append([]string{"PATH=" + filepath.Dir(ps), "HOME=" + t.TempDir(), "USERPROFILE=" + t.TempDir(),
-		"SystemRoot=" + os.Getenv("SystemRoot"), "HERDR_DOTS_PLATFORM=windows_amd64", "HERDR_DOTS_RELEASE_BASE=" + base}, extra...)
+	// GOTOOLCHAIN=local: a go that did get in never downloads a toolchain
+	// into HOME (read-only files there fail the temp dir's cleanup).
+	cmd.Env = append([]string{"PATH=" + psPath(t, ps), "HOME=" + t.TempDir(), "USERPROFILE=" + t.TempDir(),
+		"SystemRoot=" + os.Getenv("SystemRoot"), "GOTOOLCHAIN=local",
+		"HERDR_DOTS_PLATFORM=windows_amd64", "HERDR_DOTS_RELEASE_BASE=" + base}, extra...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()

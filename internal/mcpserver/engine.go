@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"sync"
 
 	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/platform"
 )
 
 // ErrEngineDown: the engine can't be reached even after starting it.
@@ -92,13 +95,21 @@ func (e *ipcEngine) query(ctx context.Context, cmd string, args, out any) error 
 }
 
 // dialFailed reports a failed dial. A dial that failed because the caller's
-// own context ended says nothing about the engine.
+// own context ended says nothing about the engine. A unix socket dial fails
+// with *net.OpError{Op: "dial"}; the Windows engine endpoint is a named pipe,
+// whose dial (go-winio, ipc.Dial) fails with *os.PathError{Op: "open"} on the
+// pipe's path (no such pipe: the engine is gone). A pipe that opened but
+// belongs to someone else (platform.ErrNotOwner) is not a failed dial.
 func dialFailed(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
 	}
 	var op *net.OpError
-	return errors.As(err, &op) && op.Op == "dial"
+	if errors.As(err, &op) && op.Op == "dial" {
+		return true
+	}
+	var pe *os.PathError
+	return errors.As(err, &pe) && pe.Op == "open" && strings.HasPrefix(strings.ToLower(pe.Path), platform.PipePrefix)
 }
 
 func (e *ipcEngine) ListDots(ctx context.Context) (ipc.DotsResult, error) {

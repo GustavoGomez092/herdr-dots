@@ -222,7 +222,9 @@ func (r *resolver) homeRel(dir string) (string, bool) {
 // to it (an absolute p is taken as is, and one under the root as the pane
 // reports it, through a symlink such as /var for /private/var, is mapped onto
 // rr). lexRel is the lexical path relative to rr; a path outside rr is
-// ErrOutsideRoot.
+// ErrOutsideRoot, and so is a Windows rooted or drive-relative path
+// (platform.RootRelative): "/etc/passwd" has no drive there, and Join would
+// quietly put it under the root.
 func jailEntry(root, p string) (rr, joined, lexRel string, err error) {
 	if strings.ContainsRune(p, 0) {
 		return "", "", "", errors.New("invalid path")
@@ -230,6 +232,9 @@ func jailEntry(root, p string) (rr, joined, lexRel string, err error) {
 	p = strings.TrimSpace(p)
 	if p == "" {
 		return "", "", "", errors.New("path is required")
+	}
+	if platform.RootRelative(p) {
+		return "", "", "", ErrOutsideRoot
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {

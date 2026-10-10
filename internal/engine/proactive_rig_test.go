@@ -248,6 +248,35 @@ func (r *proRig) attach(t *testing.T, slugs ...string) {
 	if !r.srv.WaitSubscribed(pane, time.Second) {
 		t.Fatal("engine did not subscribe to the pane")
 	}
+	r.waitRecorded(t, slugs...)
+}
+
+// waitRecorded waits for what Attach records in memory from its own
+// goroutines (seeProject, seeDots): a schedule with projects = ["attached"]
+// finds the pane's project there. A test that moves the clock past a slot
+// before those writes land sees the slot pass with no project to run on (CI
+// windows-latest, where memory writes are slow: TestWakeAfterSleepRunsOnlyTheLatestSlot).
+func (r *proRig) waitRecorded(t *testing.T, slugs ...string) {
+	t.Helper()
+	a, ok := r.atts.Get(pane)
+	if !ok || a.ProjectID == "" || !r.e.memEnabled() {
+		return // Attach records nothing
+	}
+	eventually(t, "the attach is recorded in memory", func() bool {
+		all, _ := r.mem.Projects()
+		for _, m := range all {
+			if m.ID != a.ProjectID {
+				continue
+			}
+			for _, s := range slugs {
+				if _, ok := m.DotsSeen[s]; !ok {
+					return false
+				}
+			}
+			return len(m.Roots) > 0
+		}
+		return false
+	})
 }
 
 func (r *proRig) reader() *fakeReader {

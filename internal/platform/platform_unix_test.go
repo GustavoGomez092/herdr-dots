@@ -77,3 +77,12 @@ func TestCommandContextIsBoundToTheContext(t *testing.T) {
 		t.Fatal("a cancelled context must stop the command")
 	}
 }
+
+// Unix has no rooted-but-relative paths: "/x" is absolute, "C:x" a name.
+func TestRootRelativeIsFalseOnUnix(t *testing.T) {
+	for _, p := range []string{"/etc/passwd", `\etc`, "C:x", "main.go"} {
+		if RootRelative(p) {
+			t.Errorf("RootRelative(%q) = true on Unix", p)
+		}
+	}
+}
