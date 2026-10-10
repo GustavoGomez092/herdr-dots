@@ -156,3 +156,24 @@ func TestListFilesDescriptionExplainsGitignoreScope(t *testing.T) {
 		}
 	}
 }
+
+// G5 (post-rc hardening fix): a non-ASCII deny glob denies the name in
+// either Unicode normalization form, whichever form the glob was typed in
+// (macOS file names are often decomposed, NFD; most typed text is NFC).
+func TestDeniedMatchesBothNormalizationForms(t *testing.T) {
+	const nfc, nfd = "café", "café"
+	for _, c := range []struct{ glob, rel string }{
+		{nfc + "/**", nfd + "/menu.txt"},
+		{nfd + "/**", nfc + "/menu.txt"},
+		{"*" + nfc + ".key", "x" + nfd + ".key"},
+		{nfd + ".env", "sub/" + nfc + ".env"},
+		{nfc + "/**", nfc + "/menu.txt"},
+	} {
+		if !Denied(c.rel, []string{c.glob}) {
+			t.Errorf("Denied(%q, [%q]) = false", c.rel, c.glob)
+		}
+	}
+	if Denied("cafe/menu.txt", []string{nfc + "/**"}) || Denied(nfd+".go", []string{nfc + ".env"}) {
+		t.Error("other names stay allowed")
+	}
+}
