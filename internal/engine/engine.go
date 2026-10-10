@@ -639,6 +639,10 @@ func (e *Engine) processPane(paneID string) {
 	e.broadcast()
 }
 
+// paneWarnKey is e.warned's key for the pane budget toast (no dot has an
+// empty slug).
+func paneWarnKey(paneID string) key { return key{pane: paneID} }
+
 // budgetNote is a budget toast to send once the pane lock is released.
 type budgetNote struct {
 	dot dots.Dot
@@ -726,8 +730,12 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 				e.status[k] = view.StatusConsulted
 			case ReasonBudget, ReasonSessionBudget:
 				e.status[k] = view.StatusBudget
-				if !e.warned[k] {
-					e.warned[k] = true
+				wk := k
+				if dec.Reason == ReasonSessionBudget {
+					wk = paneWarnKey(paneID) // the pane's budget: one toast for the pane
+				}
+				if !e.warned[wk] {
+					e.warned[wk] = true
 					budgetHit = append(budgetHit, budgetNote{dot: d, msg: budgetMessage(in, dec.Reason)})
 				}
 			}

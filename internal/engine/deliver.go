@@ -234,6 +234,7 @@ func (e *Engine) dropPane(paneID string) {
 			delete(e.status, k)
 		}
 	}
+	delete(e.warned, paneWarnKey(paneID)) // a reused pane id is warned again
 	e.mu.Unlock()
 	if oerr != nil {
 		e.d.Logf("orphan cards for %s: %v", paneID, oerr)
@@ -288,6 +289,7 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 		e.d.Logf("reset usage %s: %v", a.PaneID, err)
 	}
 	e.mu.Lock()
+	delete(e.warned, paneWarnKey(a.PaneID))
 	for _, s := range slugs {
 		k := key{a.PaneID, s}
 		delete(e.warned, k)
