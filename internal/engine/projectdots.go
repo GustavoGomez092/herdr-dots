@@ -258,15 +258,21 @@ func (e *Engine) rootWantedLocked(root string) bool {
 	return false
 }
 
+// scanClock is the one key of e.scanSeq: scans are numbered engine-wide, so
+// nothing is kept per checkout (H10) and a scan that started before its
+// checkout was pruned still loses to one made after a pane came back. No
+// checkout root is "" (resolveRoot).
+const scanClock = ""
+
 // scanRoot reads one checkout's project dots (outside every lock), installs
 // them, and pauses attached dots whose trusted file changed, vanished or lost
-// its trust. Scans are numbered per checkout: an older scan that finishes
+// its trust. Scans are numbered (scanClock): an older scan that finishes
 // after a newer one is dropped, and so is a scan of a checkout no pane is in
 // any more (pruned meanwhile). It reports whether anything changed.
 func (e *Engine) scanRoot(pr memory.Project) bool {
 	e.mu.Lock()
-	e.scanSeq[pr.Root]++
-	seq := e.scanSeq[pr.Root]
+	e.scanSeq[scanClock]++
+	seq := e.scanSeq[scanClock]
 	e.mu.Unlock()
 	s := projectdots.ScanProject(pr.Root, pr.ID, e.d.Trust)
 	ps := &projectState{pr: pr, scan: s, seq: seq, runnable: map[string]dots.Dot{}, sums: map[string][32]byte{}, trustedAt: map[string]string{}}
