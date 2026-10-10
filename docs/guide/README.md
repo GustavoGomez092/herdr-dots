@@ -3,7 +3,7 @@
 - [Install and upgrade](install-and-upgrade.md)
 - [Dots: create, edit, attach](dots.md)
 - [Delivery modes](delivery.md)
-- [Dot memory](memory.md) (the heart of the product)
+- [Dot memory](memory.md) (VITAL: the heart of the product)
 - [Council mode](council.md)
 - [Backends, keys and cost](backends.md)
 - [MCP server](mcp.md)

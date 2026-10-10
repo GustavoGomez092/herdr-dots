@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// Fetch refuses a redirect to another host (TestFetch… above); the README
+// Fetch refuses a redirect to another host (TestFetch… above); the guide
 // must say so and what to do instead, since some raw-file hosts redirect to
 // a CDN.
-func TestREADMEExplainsSameHostRedirects(t *testing.T) {
+func TestGuideExplainsSameHostRedirects(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "guide", "profiles-and-sharing.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,7 @@ func TestREADMEExplainsSameHostRedirects(t *testing.T) {
 		"download the file and import it from disk",
 	} {
 		if !strings.Contains(r, s) {
-			t.Errorf("README doesn't say %q", s)
+			t.Errorf("guide doesn't say %q", s)
 		}
 	}
 }

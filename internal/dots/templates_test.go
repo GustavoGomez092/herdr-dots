@@ -33,8 +33,8 @@ func TestFromTemplate(t *testing.T) {
 
 // P9-R16: templates are your own dots, so MCP asks from your agent are
 // allowed; every other risky capability is off. The exact defaults are
-// pinned here and the README says the same, so the two can't drift.
-func TestTemplateCapabilitiesMatchTheREADME(t *testing.T) {
+// pinned here and the guide says the same, so the two can't drift.
+func TestTemplateCapabilitiesMatchTheGuide(t *testing.T) {
 	want := CapabilitySpec{Write: false, WriteTimeoutSeconds: 600, MaxPatchBytes: 200000, MaxFiles: 50, MCP: true}
 	for _, d := range Templates() {
 		if d.Capabilities != want {
@@ -54,11 +54,11 @@ func TestTemplateCapabilitiesMatchTheREADME(t *testing.T) {
 		"write, research, web, schedules and commit reviews are off; MCP asks from your agent are allowed (your own dots)",
 	} {
 		if !strings.Contains(r, s) {
-			t.Errorf("README doesn't say %q", s)
+			t.Errorf("guide doesn't say %q", s)
 		}
 	}
 	if strings.Contains(r, "all with every risky feature off") {
-		t.Error("README still says templates have every risky feature off (MCP is on)")
+		t.Error("guide still says templates have every risky feature off (MCP is on)")
 	}
 }
 

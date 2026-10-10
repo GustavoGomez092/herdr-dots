@@ -2,6 +2,8 @@
 
 Dots remember each project: conventions, decisions and past findings, so they stop repeating themselves (the heart of the product).
 
+**Memory is VITAL to Herdr Dots.** Everything else builds on it, and its rules (what dots may write, what waits for your approval, what is never remembered) are the strictest in the product.
+
 Dots remember each project. Memory has three scopes:
 
 | Scope | Holds | Written by |

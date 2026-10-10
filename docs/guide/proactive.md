@@ -11,7 +11,7 @@ the dot's file. `proactive_enabled` in `config.toml` switches all of it off at o
 - **Idle research.** With `[research] enabled = true`, a dot looks into the open questions it noted
   earlier, its standing `topics` and the files touched in the last turns once the agent pane has been
   idle for `idle_minutes` (default 10), at most once per idle period and `max_runs_per_day` times a day
-  across every Herdr session (default 6). "Idle" means no new turn or agent session, the agent idle or Herdr reports `done`
+  across every Herdr session (default 6). "Idle" means no new turn or agent session, Herdr reports the agent as `idle` or `done`
   (not working), and the pane not refocused: Herdr has no keyboard-activity signal. Relevant
   results wait while you are away and become **one** card per pane per idle period, a `☾ Away` card
   labeled `N dots · M min`, when you come back (your next turn, the agent working again, or focusing
