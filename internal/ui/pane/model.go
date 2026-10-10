@@ -18,6 +18,7 @@ import (
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
+	setupui "herdr-dots/internal/ui/setup"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -77,6 +78,8 @@ type Model struct {
 	viewer  PatchViewer      // opens the diff viewer (WithPatchViewer); nil = unavailable
 	ticking bool             // a once-a-second tick runs while drafts run
 	clock   func() time.Time // nil = time.Now
+
+	setup *setupui.Model // the first-run Setup screen, while open (setup.go)
 }
 
 const offlineHint = "offline: actions unavailable until the engine restarts"
@@ -190,6 +193,11 @@ func (m Model) call(cmd string, args any) tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.setup != nil {
+		if mm, cmd, ok := m.setupUpdate(msg); ok {
+			return mm, cmd
+		}
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -503,6 +511,9 @@ func feedOutcome(e state.FeedEntry) string {
 }
 
 func (m Model) View() string {
+	if m.setup != nil {
+		return m.setup.View()
+	}
 	w := m.width
 	if w <= 0 {
 		w = 46

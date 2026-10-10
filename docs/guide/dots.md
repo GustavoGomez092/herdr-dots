@@ -14,7 +14,12 @@ Dots pane keys: `⏎` send card · `a` send all · `e` edit · `x` dismiss · `s
 
 ## Keybindings
 
-Run `./bin/herdr-dots setup-keys` from a shell inside Herdr. It shows what it will add, skips keys
+The first time you open Dots ('Dots: manage' in Herdr's action menu), the Setup screen offers these
+keybindings along with the MCP server, when none of them is in Herdr's config yet. It shows the four
+bindings and the config file; `k` leaves them out, `y` installs, `n` asks again in 7 days, `x` stops
+asking. `S` in the manage popup opens the screen again.
+
+Or run `./bin/herdr-dots setup-keys` from a shell inside Herdr. It shows what it will add, skips keys
 that are already taken and actions you already bound to another key, backs up your config (a new
 `config.toml.bak-<time>` file each run; none when there was no config yet), and reloads Herdr. Or paste this into
 `~/.config/herdr/config.toml` yourself and run `herdr server reload-config`:

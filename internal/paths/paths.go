@@ -72,6 +72,11 @@ func (p Paths) HistoryDir() string { return filepath.Join(p.StateDir, "history")
 // TrustFile records which project dot files the developer trusts (Phase 9).
 func (p Paths) TrustFile() string { return filepath.Join(p.ConfigDir, "trusted.json") }
 
+// OnboardingFile records the first-run Setup screen's answers (post-rc):
+// whether the MCP server and the keybindings were installed, snoozed or
+// declined for good.
+func (p Paths) OnboardingFile() string { return filepath.Join(p.ConfigDir, "onboarding.json") }
+
 // WorktreesDir holds drafts' transient worktrees (outside every repository);
 // PatchesDir holds drafted patches and their metadata.
 func (p Paths) WorktreesDir() string { return filepath.Join(p.SessionDir, "worktrees") }

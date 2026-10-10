@@ -3,7 +3,17 @@
 The Dots MCP server lets the main agent ask the dots, convene a council and read the queue and memory itself.
 
 Claude Code or Codex can consult your dots themselves while they work ("ask the security dot before you
-write the token handling"). Install the server once:
+write the token handling").
+
+The first time you open the manage popup or the Dots pane, a Setup screen offers to install the server
+for each agent CLI it finds (Claude Code: `claude` on your PATH; Codex: `codex` on your PATH or an
+existing `~/.codex/config.toml`). It shows the exact change before anything happens: the
+`claude mcp add --scope user …` command line, and the marked block for Codex's config. `y` installs it
+(the same steps as `setup-mcp --yes`, backups first), `n` or `esc` asks again in 7 days, and `x` stops
+asking. Nothing is written without `y`. Press `S` in the manage popup to open the screen again at any
+time; it shows what is installed and what it would change. `herdr-dots setup` does the same from a
+shell (`--yes`, `--no-mcp`, `--no-keys`). Your answers are kept in `onboarding.json` in the plugin's
+config directory. Or install the server yourself:
 
 ```bash
 ./bin/herdr-dots setup-mcp                 # Claude Code and/or Codex, whichever is installed

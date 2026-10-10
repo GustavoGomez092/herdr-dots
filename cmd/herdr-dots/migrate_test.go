@@ -161,7 +161,7 @@ func TestEveryWritingCommandRunsTheGate(t *testing.T) {
 	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", p.ConfigDir)
 	t.Setenv("HERDR_PLUGIN_STATE_DIR", p.StateDir)
 	t.Setenv("HERDR_SOCKET_PATH", p.SocketPath)
-	for _, cmd := range []string{"manage", "keys", "dots", "setup-mcp", "memory", "uninstall-extras"} {
+	for _, cmd := range []string{"manage", "keys", "dots", "setup-mcp", "setup", "memory", "uninstall-extras"} {
 		fsutil.ResetProtected()
 		protectNewerFiles(cmd)
 		if !fsutil.Protected(creds) {

@@ -28,35 +28,51 @@ type setupIO struct {
 	paths    func() (paths.Paths, error)
 }
 
-func runSetupMCP(args []string) error {
+// newSetupIO is setup-mcp's real effects: this binary (symlinks resolved),
+// the user's home, and child processes started by runSetupChild.
+func newSetupIO(in io.Reader, out io.Writer) (setupIO, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return setupIO{}, err
 	}
 	if real, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = real
 	}
 	home, _ := os.UserHomeDir()
-	return setupMCP(args, setupIO{
-		in: os.Stdin, out: os.Stdout,
-		// platform.Command runs an npm claude.cmd/codex.cmd shim through
-		// cmd.exe with every argument quoted, and refuses a path cmd.exe
-		// can't carry (a %, " or !) before anything runs.
-		run: func(a []string) (string, error) {
-			cmd, err := platform.Command(a[0], a[1:])
-			if err != nil {
-				return "", err
-			}
-			cmd.Env = platform.ChildEnv(os.Environ())
-			out, err := cmd.CombinedOutput()
-			return string(out), err
-		},
+	return setupIO{
+		in: in, out: out,
+		run:      runSetupChild,
 		lookPath: platform.LookPath,
 		env:      mcpinstall.Env{Getenv: os.Getenv, Home: home},
 		now:      time.Now,
 		exe:      exe,
 		paths:    paths.Discover,
-	})
+	}, nil
+}
+
+func runSetupMCP(args []string) error {
+	s, err := newSetupIO(os.Stdin, os.Stdout)
+	if err != nil {
+		return err
+	}
+	return setupMCP(args, s)
+}
+
+// runSetupChild runs one setup command (claude mcp add/remove/get, codex mcp
+// list) and returns its combined output. platform.Command runs an npm
+// claude.cmd/codex.cmd shim through cmd.exe with every argument quoted, and
+// refuses a path cmd.exe can't carry (a %, " or !) before anything runs. The
+// child gets no CLAUDE* variable but CLAUDE_CONFIG_DIR
+// (platform.WithoutClaudeEnv): a plugin process can inherit a Claude Code
+// session's variables, and `claude mcp add` must not join that session.
+func runSetupChild(a []string) (string, error) {
+	cmd, err := platform.Command(a[0], a[1:])
+	if err != nil {
+		return "", err
+	}
+	cmd.Env = platform.ChildEnv(platform.WithoutClaudeEnv(os.Environ()))
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func setupMCP(args []string, s setupIO) error {
@@ -67,70 +83,13 @@ func setupMCP(args []string, s setupIO) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if strings.Contains(s.exe, string(filepath.Separator)+"go-build") {
-		return errors.New("run the built plugin binary (./bin/herdr-dots setup-mcp), not `go run`: the clients would point at a temporary file")
-	}
-	clients, err := s.pickClients(*client, *remove)
+	m, err := s.planMCP(*client, *remove)
 	if err != nil {
 		return err
 	}
-	p, err := s.paths()
-	if err != nil {
-		return err
-	}
-	// A record file a newer herdr-dots wrote can't be updated afterwards:
-	// fail before anything is planned or asked, so no client config changes.
-	if _, err := mcpinstall.LoadRecords(mcpinstall.RecordPath(p.ConfigDir)); errors.Is(err, mcpinstall.ErrRecordsVersion) {
-		return fmt.Errorf("%w; nothing changed: update herdr-dots first", err)
-	}
-	var plans []mcpinstall.Plan
-	for _, c := range clients {
-		var pl mcpinstall.Plan
-		if *remove {
-			pl, err = mcpinstall.PlanRemove(c, s.env)
-		} else {
-			pl, err = mcpinstall.PlanInstall(c, s.env, s.exe, p.ConfigDir, p.StateDir)
-		}
-		if err != nil {
-			return fmt.Errorf("%s: %w", c.Title(), err)
-		}
-		plans = append(plans, pl)
-	}
-
-	todo := 0
-	for _, pl := range plans {
-		fmt.Fprintf(s.out, "\n== %s ==\n", pl.Client.Title())
-		if pl.Nothing {
-			fmt.Fprintf(s.out, "Nothing to do: %s", pl.Preview)
-			continue
-		}
-		todo++
-		for _, c := range pl.Commands {
-			fmt.Fprintf(s.out, "Will run: %s\n", mcpShellJoin(c.Args))
-		}
-		for _, e := range pl.Edits {
-			fmt.Fprintf(s.out, "Will edit %s:\n", e.Path)
-		}
-		fmt.Fprint(s.out, pl.Preview)
-		for _, b := range pl.Backups {
-			fmt.Fprintf(s.out, "Backs up %s first.\n", b)
-		}
-	}
-	// recordFailed names a failed record save as only that: the client's
-	// config is already as the preview showed.
-	recordFailed := func(who string, applied bool, err error) error {
-		if err == nil {
-			return nil
-		}
-		what := "nothing needed changing"
-		if applied {
-			what = "the change was applied"
-		}
-		return fmt.Errorf("%s%s; only the install record could not be saved (%s): %w", who, what, mcpinstall.RecordPath(p.ConfigDir), err)
-	}
-	if todo == 0 {
+	if m.print() == 0 {
 		fmt.Fprintln(s.out, "\nNothing changed.")
-		return recordFailed("", false, s.saveRecords(p, plans, nil, *remove))
+		return m.nothingToDo()
 	}
 	if !*yes {
 		fmt.Fprint(s.out, "\nApply these changes? [y/N] ")
@@ -140,49 +99,168 @@ func setupMCP(args []string, s setupIO) error {
 			return nil
 		}
 	}
-	// Every client is handled on its own: one client's failure can't block
-	// another's change or record update.
-	var errs []error
-	for _, pl := range plans {
-		if pl.Nothing {
-			errs = append(errs, recordFailed(pl.Client.Title()+": ", false, s.saveRecords(p, []mcpinstall.Plan{pl}, nil, *remove)))
-			continue
-		}
-		bs, err := mcpinstall.Apply(pl, func(c mcpinstall.Command) error {
-			out, err := s.run(c.Args)
-			if err == nil || !c.MayFail {
-				fmt.Fprint(s.out, mcpIndent(out))
-			}
-			return err
-		}, s.now())
-		for _, b := range bs {
-			fmt.Fprintf(s.out, "Backup: %s\n", b)
-		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", pl.Client.Title(), err))
-			continue
-		}
-		s.verify(pl)
-		errs = append(errs, recordFailed(pl.Client.Title()+": ", true,
-			s.saveRecords(p, []mcpinstall.Plan{pl}, map[mcpinstall.Client][]string{pl.Client: bs}, *remove)))
-	}
-	if err := errors.Join(errs...); err != nil {
+	if err := m.apply(); err != nil {
 		return err
 	}
-	if *remove {
-		fmt.Fprintln(s.out, "\nRemoved. Restart the agent sessions in your Herdr panes to drop the tools.")
-		return nil
-	}
-	fmt.Fprintln(s.out, "\nInstalled. Restart Claude Code or Codex in your Herdr panes to load the tools (mcp__herdr-dots__*).")
-	fmt.Fprintln(s.out, "Note: answers from these tools reach the main agent directly; they bypass the Dots approval queue.")
+	m.printDone()
 	return nil
 }
 
-// pickClients resolves --client. Claude needs the claude CLI (it edits its
-// own config); Codex needs the codex CLI or an existing config file.
+// mcpSetup is setup-mcp's plan for the clients it handles. Planning,
+// printing and applying are separate steps, shared by setup-mcp, setup and
+// the Setup screen, so all three make the same change.
+type mcpSetup struct {
+	s      setupIO
+	p      paths.Paths
+	remove bool
+	plans  []mcpinstall.Plan
+}
+
+// errNoClients: neither client CLI (nor a Codex config) was found.
+var errNoClients = errors.New("neither Claude Code nor Codex found; nothing changed")
+
+// planMCP plans installing (or removing) the server for --client. Nothing
+// is changed.
+func (s setupIO) planMCP(client string, remove bool) (*mcpSetup, error) {
+	if strings.Contains(s.exe, string(filepath.Separator)+"go-build") {
+		return nil, errors.New("run the built plugin binary (./bin/herdr-dots setup-mcp), not `go run`: the clients would point at a temporary file")
+	}
+	clients, err := s.pickClients(client, remove)
+	if err != nil {
+		return nil, err
+	}
+	p, err := s.paths()
+	if err != nil {
+		return nil, err
+	}
+	// A record file a newer herdr-dots wrote can't be updated afterwards:
+	// fail before anything is planned or asked, so no client config changes.
+	if _, err := mcpinstall.LoadRecords(mcpinstall.RecordPath(p.ConfigDir)); errors.Is(err, mcpinstall.ErrRecordsVersion) {
+		return nil, fmt.Errorf("%w; nothing changed: update herdr-dots first", err)
+	}
+	m := &mcpSetup{s: s, p: p, remove: remove}
+	for _, c := range clients {
+		var pl mcpinstall.Plan
+		if remove {
+			pl, err = mcpinstall.PlanRemove(c, s.env)
+		} else {
+			pl, err = mcpinstall.PlanInstall(c, s.env, s.exe, p.ConfigDir, p.StateDir)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", c.Title(), err)
+		}
+		m.plans = append(m.plans, pl)
+	}
+	return m, nil
+}
+
+// print writes the plan as setup-mcp shows it and returns how many clients
+// have something to do.
+func (m *mcpSetup) print() int {
+	todo := 0
+	for _, pl := range m.plans {
+		fmt.Fprintf(m.s.out, "\n== %s ==\n", pl.Client.Title())
+		if pl.Nothing {
+			fmt.Fprintf(m.s.out, "Nothing to do: %s", pl.Preview)
+			continue
+		}
+		todo++
+		for _, l := range mcpWillLines(pl) {
+			fmt.Fprintln(m.s.out, l)
+		}
+		fmt.Fprint(m.s.out, pl.Preview)
+		for _, b := range pl.Backups {
+			fmt.Fprintf(m.s.out, "Backs up %s first.\n", b)
+		}
+	}
+	return todo
+}
+
+// mcpWillLines are a plan's "Will run" and "Will edit" lines.
+func mcpWillLines(pl mcpinstall.Plan) []string {
+	var out []string
+	for _, c := range pl.Commands {
+		out = append(out, "Will run: "+mcpShellJoin(c.Args))
+	}
+	for _, e := range pl.Edits {
+		out = append(out, "Will edit "+e.Path+":")
+	}
+	return out
+}
+
+// recordFailed names a failed record save as only that: the client's
+// config is already as the preview showed.
+func (m *mcpSetup) recordFailed(who string, applied bool, err error) error {
+	if err == nil {
+		return nil
+	}
+	what := "nothing needed changing"
+	if applied {
+		what = "the change was applied"
+	}
+	return fmt.Errorf("%s%s; only the install record could not be saved (%s): %w", who, what, mcpinstall.RecordPath(m.p.ConfigDir), err)
+}
+
+// nothingToDo saves the records when no client needs a change.
+func (m *mcpSetup) nothingToDo() error {
+	return m.recordFailed("", false, m.s.saveRecords(m.p, m.plans, nil, m.remove))
+}
+
+// apply applies every plan. Every client is handled on its own: one
+// client's failure can't block another's change or record update.
+func (m *mcpSetup) apply() error {
+	var errs []error
+	for _, pl := range m.plans {
+		errs = append(errs, m.applyOne(pl))
+	}
+	return errors.Join(errs...)
+}
+
+// applyOne applies one client's plan, shows the result and updates its
+// install record.
+func (m *mcpSetup) applyOne(pl mcpinstall.Plan) error {
+	s := m.s
+	if pl.Nothing {
+		return m.recordFailed(pl.Client.Title()+": ", false, s.saveRecords(m.p, []mcpinstall.Plan{pl}, nil, m.remove))
+	}
+	bs, err := mcpinstall.Apply(pl, func(c mcpinstall.Command) error {
+		out, err := s.run(c.Args)
+		if err == nil || !c.MayFail {
+			fmt.Fprint(s.out, mcpIndent(out))
+		}
+		return err
+	}, s.now())
+	for _, b := range bs {
+		fmt.Fprintf(s.out, "Backup: %s\n", b)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", pl.Client.Title(), err)
+	}
+	s.verify(pl)
+	return m.recordFailed(pl.Client.Title()+": ", true,
+		s.saveRecords(m.p, []mcpinstall.Plan{pl}, map[mcpinstall.Client][]string{pl.Client: bs}, m.remove))
+}
+
+// printDone is setup-mcp's closing line after a successful apply.
+func (m *mcpSetup) printDone() {
+	if m.remove {
+		fmt.Fprintln(m.s.out, "\nRemoved. Restart the agent sessions in your Herdr panes to drop the tools.")
+		return
+	}
+	fmt.Fprintln(m.s.out, "\nInstalled. Restart Claude Code or Codex in your Herdr panes to load the tools (mcp__herdr-dots__*).")
+	fmt.Fprintln(m.s.out, "Note: answers from these tools reach the main agent directly; they bypass the Dots approval queue.")
+}
+
+// detected reports which clients setup-mcp can handle: Claude needs the
+// claude CLI (it edits its own config); Codex needs the codex CLI or an
+// existing config file.
+func (s setupIO) detected() (claude, codex bool) {
+	return s.has("claude"), s.has("codex") || mcpFileExists(s.env.CodexConfigPath())
+}
+
+// pickClients resolves --client (see detected).
 func (s setupIO) pickClients(flagVal string, remove bool) ([]mcpinstall.Client, error) {
-	claudeOK := s.has("claude")
-	codexOK := s.has("codex") || mcpFileExists(s.env.CodexConfigPath())
+	claudeOK, codexOK := s.detected()
 	switch flagVal {
 	case "claude":
 		if !claudeOK {
@@ -210,7 +288,7 @@ func (s setupIO) pickClients(flagVal string, remove bool) ([]mcpinstall.Client, 
 			fmt.Fprintln(s.out, "Skipping Codex: codex CLI not found on PATH and no "+s.env.CodexConfigPath()+".")
 		}
 		if len(out) == 0 {
-			return nil, errors.New("neither Claude Code nor Codex found; nothing changed")
+			return nil, errNoClients
 		}
 		return out, nil
 	}

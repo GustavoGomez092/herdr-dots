@@ -66,7 +66,7 @@ var gateExempt = map[string]string{
 	"--version":      "writes nothing",
 	"engine":         "runs the full migration itself at start, under engine.lock (serveEngine)",
 	"migrate":        "is the migration",
-	"pane":           "UI: writes through the engine (IPC)",
+	"pane":           paneGateReason,
 	"summon-ui":      "UI: writes through the engine (IPC)",
 	"diff-ui":        "UI: reads one patch; apply and discard go through the engine (IPC)",
 	"action":         "writes only dotspanes.json, an unversioned runtime cache",
@@ -75,6 +75,12 @@ var gateExempt = map[string]string{
 	"mcp": "writes memory proposals directly through memory.Store, which is safe only because the memory " +
 		"kinds are self-guarded (memory.ErrVersion under memory.lock); everything else goes through the engine",
 }
+
+// paneGateReason: the Dots pane's first-run Setup screen (post-rc) writes
+// outside the engine too, but only files whose own writers refuse a newer
+// version, and configs that aren't herdr-dots files.
+const paneGateReason = "UI: writes through the engine (IPC); its first-run Setup screen writes only onboarding.json " +
+	"and mcp-install.json, whose writers refuse a newer version, and the agents' and Herdr's own configs"
 
 // readOnlyNotice is the toast for files kept read-only ("" for none): a
 // newer herdr-dots wrote them, or their migration failed.
@@ -93,14 +99,15 @@ func readOnlyNotice(rep migrate.Report) string {
 // writingCommands are the commands that write persisted files outside the
 // engine. Before they run, files a newer version wrote are marked read-only
 // in this process too: credentials (keys, manage), dots edit/import (dots,
-// manage), mcp-install.json (setup-mcp), uninstall-extras, and the memory
+// manage), mcp-install.json and onboarding.json (setup-mcp, setup),
+// uninstall-extras, and the memory
 // commands (memory files also refuse newer versions themselves, under their
 // lock, but the gate costs one read per file and memory is VITAL). `mcp`
 // is left out (see gateExempt): it writes memory proposals directly, which
 // is safe only because the memory kinds are self-guarded, and its start
 // stays fast.
 var writingCommands = map[string]bool{
-	"manage": true, "keys": true, "dots": true, "setup-mcp": true, "uninstall-extras": true, "memory": true,
+	"manage": true, "keys": true, "dots": true, "setup-mcp": true, "setup": true, "uninstall-extras": true, "memory": true,
 }
 
 // protectNewerFiles marks newer files read-only for this process. It only

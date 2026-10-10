@@ -15,6 +15,7 @@ import (
 	"herdr-dots/internal/lockfile"
 	"herdr-dots/internal/mcpinstall"
 	"herdr-dots/internal/memory"
+	"herdr-dots/internal/onboarding"
 	"herdr-dots/internal/patchstore"
 	"herdr-dots/internal/paths"
 	"herdr-dots/internal/projectdots"
@@ -175,5 +176,40 @@ func TestExternalFormatsRefuseNewerVersions(t *testing.T) {
 	}
 	if dotpack.Format != 1 {
 		t.Fatalf("dotpack.Format = %d: register the change in External and CHANGELOG.md", dotpack.Format)
+	}
+}
+
+// Post-rc: onboarding.json (the first-run Setup screen's record) is a
+// config kind at version 1, written under its <file>.lock; a newer one stays
+// read-only and its writer refuses it.
+func TestOnboardingRecordIsAVersionedKind(t *testing.T) {
+	t.Cleanup(fsutil.ResetProtected)
+	_, p := writerTree(t)
+	s := onboarding.Store{Path: p.OnboardingFile()}
+	if err := s.Mark(onboarding.Snoozed, onboarding.MCP); err != nil {
+		t.Fatal(err)
+	}
+	var kind *Kind
+	for _, k := range Default().Kinds {
+		if k.Name == "onboarding" {
+			kind = &k
+		}
+	}
+	if kind == nil || kind.Root != ConfigRoot || kind.Current != onboarding.Version || !kind.SelfGuarded ||
+		kind.Lock == nil || kind.Lock(p.OnboardingFile()) != p.OnboardingFile()+".lock" {
+		t.Fatalf("onboarding kind: %+v", kind)
+	}
+	r := Roots{Config: p.ConfigDir}
+	if rep, err := Default().Run(r, Options{}); err != nil || !rep.Empty() {
+		t.Fatalf("a current record: %+v %v", rep, err)
+	}
+	newer := `{"version":2,"mcp":{"state":"never"},"keys":{}}`
+	writeFile(t, p.OnboardingFile(), newer)
+	rep, err := Default().Run(r, Options{})
+	if err != nil || len(rep.ReadOnly) != 1 {
+		t.Fatalf("report %+v %v", rep, err)
+	}
+	if err := s.Mark(onboarding.Installed, onboarding.MCP); !errors.Is(err, fsutil.ErrNewerVersion) || readFile(t, p.OnboardingFile()) != newer {
+		t.Fatalf("a newer onboarding.json must not be rewritten: %v", err)
 	}
 }
