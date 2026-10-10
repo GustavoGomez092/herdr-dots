@@ -270,8 +270,11 @@ func mapErr(err error, key, model string) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("openai-api timed out: %w", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("openai-api cancelled: %w", err) // not a timeout (B18)
 	}
 	var apierr *openai.Error
 	if errors.As(err, &apierr) {

@@ -347,8 +347,11 @@ func mapErr(err error, known []string, model string) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("anthropic-api timed out: %w", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("anthropic-api cancelled: %w", err) // not a timeout (B18)
 	}
 	var apierr *anthropic.Error
 	if errors.As(err, &apierr) {
