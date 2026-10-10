@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 
@@ -241,8 +242,9 @@ func (f File) List() ([]Status, error) {
 // Last4 is "…" plus a key's last 4 characters ("" for keys shorter than 12,
 // which would reveal too much of the key).
 func Last4(key string) string {
-	if len(key) < 12 {
+	if utf8.RuneCountInString(key) < 12 {
 		return ""
 	}
-	return "…" + key[len(key)-4:]
+	r := []rune(key)
+	return "…" + string(r[len(r)-4:])
 }
