@@ -672,66 +672,20 @@ func (c *memCLI) importFile(args []string) error {
 	// Resolve the project before anything is written, so an unknown
 	// project never leaves a partial import; an all-global import needs none.
 	var pr memory.Project
-	for _, e := range es {
-		if e.Scope != memory.ScopeGlobal {
-			if pr, err = c.project(f.project); err != nil {
-				return fmt.Errorf("import: %w (nothing imported)", err)
-			}
-			break
+	if memory.NeedsProject(es) {
+		if pr, err = c.project(f.project); err != nil {
+			return fmt.Errorf("import: %w (nothing imported)", err)
 		}
 	}
 	// Every entry is added (the store dedupes), so every entry is checked.
 	if err := c.secretGate("import", es, f); err != nil {
 		return err
 	}
-	n := 0
-	// A proposed entry that carries "from" claims to be a dot pack's: it goes
-	// through ImportPack and its limit of MaxPendingImports waiting entries
-	// per scope, so a crafted backup can't bury the developer in reviews.
-	packs := map[string][]memory.Entry{}
-	var packOrder []string
-	for i, e := range es {
-		pid := ""
-		if e.Scope != memory.ScopeGlobal {
-			pid = pr.ID
-		}
-		e.ID, e.Source = "", memory.SourceImport
-		if e.From != "" && e.Status == memory.StatusProposed {
-			// ImportPack attributes a dot-scope entry to the dot it is stored
-			// under, so a restore of a dot-scope entry keeps From = that
-			// dot, not a different original pack name (documented limit).
-			key := e.From
-			if e.Scope == memory.ScopeDot {
-				key = e.Dot
-			}
-			if _, ok := packs[key]; !ok {
-				packOrder = append(packOrder, key)
-			}
-			packs[key] = append(packs[key], e)
-			continue
-		}
-		if _, err := c.store.Add(pid, e); err != nil {
-			// The entry number only: the text may be a secret.
-			fmt.Fprintf(c.errOut, "skipped entry %d: %v\n", i+1, err)
-			continue
-		}
-		n++
+	res := c.store.ImportEntries(pr.ID, es)
+	for _, line := range res.Skipped {
+		fmt.Fprintln(c.errOut, line)
 	}
-	for _, key := range packOrder {
-		if pr.ID == "" {
-			fmt.Fprintf(c.errOut, "skipped the entries of pack %s: they need a project\n", textutil.SanitizeModelText(key))
-			continue
-		}
-		res, err := c.store.ImportPack(pr.ID, key, packs[key])
-		n += res.Added + res.Updated
-		for _, why := range res.Rejected {
-			fmt.Fprintf(c.errOut, "skipped (pack %s) %s\n", textutil.SanitizeModelText(key), textutil.SanitizeModelText(why))
-		}
-		if err != nil {
-			fmt.Fprintf(c.errOut, "skipped pack %s: %v\n", textutil.SanitizeModelText(key), err)
-		}
-	}
-	fmt.Fprintf(c.out, "added or merged %d entries\n", n)
+	fmt.Fprintf(c.out, "added or merged %d entries\n", res.Added)
 	return nil
 }
 

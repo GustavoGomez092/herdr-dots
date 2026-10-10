@@ -32,9 +32,29 @@ Each run gets a memory block of at most 6,000 characters, picked by relevance (p
 first). It is sent as reference data in the user prompt, never as instructions.
 
 **Seeing and changing memory.** In the manage popup press `M` (the selected dot's memory) or `P`
-(project memory): `a` approve, `e` edit, `p` pin, `x` forget, `X` forget everything in a scope,
-`n` new, `/` filter, `tab` switch scope. Deleting a dot asks whether to delete its memory too.
-From any shell:
+(project memory). The memory screen's keys:
+
+| Key | Does |
+|---|---|
+| `a` | Approve a proposal (its whole text is shown first) |
+| `e` / `n` | Edit the selected entry / add a new one to the scope you are viewing |
+| `p` | Pin or unpin |
+| `x` / `X` | Forget one entry / forget everything in the scope you are viewing (type its name) |
+| `E` | Export the entries of the scope you are viewing, archived ones too, to a new TOML file (default `herdr-dots-memory-<project>-<YYYYMMDD>.toml`, private to you; an existing file is never overwritten) |
+| `I` | Import a TOML export: a preview first, then `y` |
+| `P` | Purge all memory of this project (its dots' memory too); type the project id to confirm. Global memory is kept |
+| `/` / `tab` | Filter / switch scope |
+
+**Import confirm rules.** `I` reads the file (at most 4 MiB) and shows a preview before anything
+is stored: the counts by scope and status (for example `1 project proposal from pack "team"`)
+and how many entries look like secrets, by entry number only, never their text. `y` imports;
+when any entry looks like a secret, the preview says so and only `Y` (capital) imports. A file
+with project or dot memory is refused on a screen with no project. Proposals from a dot pack stay
+proposals and wait for your approval. In a popup too small to show the whole preview (or the
+export, import or purge screen), the screen says "Too small" and its confirm key does nothing.
+
+Deleting a dot asks whether to delete its memory too. Every screen action also works from any
+shell:
 
 ```bash
 herdr-dots memory list --dot security

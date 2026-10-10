@@ -140,10 +140,12 @@ The macOS acceptance evidence is in
   Low 4 (R8 a follow-up; R9, R10, R11 accepted).
 - **Acceptance run (macOS).** `gofmt`, `go vet`, `go test -race -count=1
   ./...` (48 packages `ok`), `make cross`, the local release end to end and
-  actionlint/shellcheck passed. Of the 41 checklist rows, 33 have macOS
-  evidence (11 of them with a live or Windows part as a user gate), 1 fails
-  (row 13: memory export, import and purge are CLI only), 7 wait on user
-  gates or the running soak. Linux and Windows columns: user gates.
+  actionlint/shellcheck passed. Of the 41 checklist rows, 34 have macOS
+  evidence (12 of them with a live or Windows part as a user gate), none
+  fails, 7 wait on user gates or the running soak. Row 13 (memory export,
+  import and purge were CLI only) failed in the first run; Task 14 added
+  them to the memory screen, and its live popup check is a user gate.
+  Linux and Windows columns: user gates.
 - **Live smoke.** `--version`, a fresh engine start without `migrate:`
   warnings, and a `queue.json` a newer version wrote (read-only, unchanged,
   the engine still starts) passed. The toast and the memory approve guard in
@@ -159,7 +161,6 @@ User gates that remain (the Blockers of `docs/release/ready-to-publish.md`):
 - License.
 - Name and listing.
 - The acceptance run on Linux and Windows hardware, and on macOS with a real `herdr plugin install`.
-- Acceptance row 13: memory export, import and purge in the TUI (or a checklist change).
 - The 8-hour soak result review.
 - A patched Go in every workflow and a clean govulncheck before any tag (no `toolchain` line in `go.mod`).
 - GitHub Actions pinned by commit SHA.
