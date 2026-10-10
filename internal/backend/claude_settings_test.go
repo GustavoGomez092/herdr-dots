@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -79,5 +80,64 @@ func TestDotArgsCannotReloadRepositorySettings(t *testing.T) {
 	}
 	if err := checkArgs("claude-cli", r.Args); err == nil {
 		t.Fatal("Run must refuse a dot that passes --setting-sources")
+	}
+}
+
+// The inline form of the flag is refused too (small round, item 3).
+func TestDotArgsCannotReloadRepositorySettingsInline(t *testing.T) {
+	r := req()
+	r.Args = []string{"--setting-sources=user,project,local"}
+	cmd := ClaudeCLI{Environ: func() []string { return nil }}.BuildCmd(r)
+	defer cmd.Close()
+	if slices.Contains(cmd.Args, "--setting-sources=user,project,local") {
+		t.Fatalf("the inline form reached argv: %q", cmd.Args)
+	}
+	if v, _ := argAfter(cmd.Args, "--setting-sources"); v != "user" {
+		t.Fatalf("setting sources %q", v)
+	}
+	if err := checkArgs("claude-cli", r.Args); err == nil {
+		t.Fatal("Run must refuse a dot that passes --setting-sources=…")
+	}
+}
+
+// Security review R3 (cheap half): claude-cli review, ask and memory runs
+// that read the repository get the secret-file Read deny rules research
+// has (researchSettings: toolloop.DefaultDeny, DraftDeny, credentials*,
+// tool_deny_globs), with hooks still off.
+func TestClaudeRepoReadRunsDenySecretFiles(t *testing.T) {
+	c := ClaudeCLI{Environ: func() []string { return nil }, Deny: []string{"private/**"}}
+	review := req()
+	memory := req()
+	memory.Pass = PassMemory
+	question := req()
+	question.Question = "is this token check safe?"
+	for name, r := range map[string]Request{"review": review, "memory pass": memory, "ask": question} {
+		t.Run(name, func(t *testing.T) {
+			cmd := c.BuildCmd(r)
+			defer cmd.Close()
+			v, _ := argAfter(cmd.Args, "--settings")
+			var s struct {
+				DisableAllHooks bool `json:"disableAllHooks"`
+				Permissions     struct {
+					Deny []string `json:"deny"`
+				} `json:"permissions"`
+			}
+			if err := json.Unmarshal([]byte(v), &s); err != nil {
+				t.Fatalf("settings %q: %v", v, err)
+			}
+			if !s.DisableAllHooks {
+				t.Fatalf("hooks must stay off: %s", v)
+			}
+			for _, want := range []string{"Read(.env)", "Read(**/.env)", "Read(id_rsa*)", "Read(**/.ssh/**)", "Read(credentials*)", "Read(private/**)"} {
+				if !slices.Contains(s.Permissions.Deny, want) {
+					t.Errorf("deny rules miss %s: %s", want, v)
+				}
+			}
+		})
+	}
+	noRepo := req()
+	noRepo.RepoRead = false
+	if v, _ := argAfter(c.BuildCmd(noRepo).Args, "--settings"); v != hooklessSettings {
+		t.Fatalf("a run with no tools keeps the hookless settings, got %q", v)
 	}
 }

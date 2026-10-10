@@ -61,11 +61,11 @@ The eleven areas in "Boundaries in detail" below split these six by feature.
 | T15 | Inject types into the agent while the developer is typing | Inject only when the agent is idle and the pane isn't focused; a runtime kill switch that fails closed | `TestInjectWaitsWhileFocusedThenFlushes`, `TestInjectKillSwitchAppliesAtRuntime`, `TestMalformedConfigKeepsLastGoodButDisablesInject`, `FuzzConfigLoad` |
 | T16 | A write-capable dot's patch escapes the worktree or touches `.git/` | Patch validation (no `.git/`, no escapes, size caps), apply only when the agent is idle, never stage or commit | `TestEscapesRefusesNTFSAliasesOfDotGit`, `TestValidateRefusesARenameOrCopyThatHidesASourcePath`, `TestACommittedSymlinkCannotBeRetargetedByAForgedDiff`, `TestAnApplyWithoutTheReviewedHashIsRefused`, `FuzzDiffHeaders` |
 | T17 | A tampered or substituted release binary | `build.sh`/`build.ps1` verify the archive against `release/SHA256SUMS` from the cloned tree and never run an unverified binary; the publish job refuses archives that differ from the committed checksums; cosign keyless signatures, checked by `verify-release` | `TestChecksumMismatchFallsBackToASourceBuild`, `TestArchiveWithoutTheBinaryIsRejected`, `TestVerifyReleaseRefusesATamperedArchive`, `TestVerifyReleaseRefusesAReplacedBinary`, `TestVerifyReleaseRunsCosignWithTheWorkflowIdentity` |
-| T18 | Vulnerable dependencies | Few, pinned modules; `govulncheck` in CI and before a release | the `vulncheck` CI job; Task 11 Step 3 result: no reachable vulnerability in a third-party module; 24 reachable ones in the Go 1.25.7 standard library this machine builds with (review R2: release builds need a patched Go, a user gate) |
+| T18 | Vulnerable dependencies | Few, pinned modules; `govulncheck` in CI and before a release | the `vulncheck` CI job; Task 11 Step 3 result: no reachable vulnerability in a third-party module; 24 reachable ones in the Go 1.25.7 standard library this machine builds with; the workflows most likely install go1.25.0 (review R2: an explicit patched `go-version` in every workflow is a user gate; the release candidate job runs govulncheck) |
 | T19 | Files from a newer version are overwritten by an older binary (data loss after a downgrade) | `migrate.Run` marks them read-only; `WriteFileAtomic` refuses them; migrations back up first and run under the file's lock | `TestNewerFileIsReadOnlyAndNeverRewritten`, `TestFutureQueueIsReadButNeverRewritten`, `TestWritingCommandsProtectNewerFiles`, `TestLockedFileWaitsThenFailsWithoutChange` |
 | T20 | Uninstall deletes the developer's data or config by mistake | Backups before every config edit; only herdr-dots bindings removed; `--purge` needs a typed phrase, refuses while an engine runs, and refuses home, root and short paths | `TestRemoveBlockKeepsEverythingElseByteForByte`, `TestPurgeNeedsTheTypedPhraseEvenWithYes`, `TestPurgeRefusesWhileAnEngineRuns`, `TestSafeToPurgeRefusesHomeRootAndRelativePaths` |
 | T21 | Telemetry or unexpected network traffic | None: the plugin talks only to the backends the developer configures, Herdr's local socket, and GitHub during install | code review (Task 11 Step 3): the only HTTP clients are the provider adapters (`internal/backend/*`, also behind the manage popup's save check and model list) and pack import from an https URL (`internal/dotpack/fetch.go`, from `dots import` or the manage popup), which the developer starts |
-| T22 | A hostile repository's `.claude/settings.json` (or `settings.local.json`) runs commands or redirects a claude-cli dot: `claude -p` skips the workspace trust dialog, so credential helpers (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`) and `env` (`ANTHROPIC_BASE_URL`) from the repository would apply to every review | Every claude-cli run loads only the developer's user settings (`--setting-sources user`); drafts and research run `--restricted`, which loads no settings file; a dot's args can't pass either flag; `--strict-mcp-config` keeps the repository's `.mcp.json` out | `TestClaudeRunsNeverLoadRepositorySettings`, `TestDotArgsCannotReloadRepositorySettings`, `TestClaudeDraftGetsFileToolsAndNoShell`, `TestClaudeResearchDeniesSecretsAndFetch` (review R1, fixed in this task) |
+| T22 | A hostile repository's `.claude/settings.json` (or `settings.local.json`) runs commands or redirects a claude-cli dot: `claude -p` skips the workspace trust dialog, so credential helpers (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`) and `env` (`ANTHROPIC_BASE_URL`) from the repository would apply to every review | Every claude-cli run loads only the developer's user settings (`--setting-sources user`); drafts and research run `--restricted`, which loads no settings file; a dot's args can't pass either flag (in either form) or `--managed-settings`; `--strict-mcp-config` keeps the repository's `.mcp.json` out | `TestClaudeRunsNeverLoadRepositorySettings`, `TestDotArgsCannotReloadRepositorySettings`, `TestDotArgsCannotReloadRepositorySettingsInline`, `TestValidateRejectsUnsafeBackendArgs`, `TestClaudeDraftGetsFileToolsAndNoShell`, `TestClaudeResearchDeniesSecretsAndFetch` (review R1, fixed in this task; argv-pinned; live check pending) |
 
 ## Boundaries in detail
 
@@ -81,8 +81,10 @@ triage rows (the full reasons are in the triage notes).
   writes memory, or tells the agent to do something harmful.
 - **Mitigations:**
   - Read-only runs (T1): `internal/backend/claude.go` (`BuildCmd`: `--tools
-    Read,Grep,Glob`, `--strict-mcp-config`, `--settings
-    {"disableAllHooks":true}`, `--setting-sources user`),
+    Read,Grep,Glob`, `--strict-mcp-config`, `--settings` with
+    `disableAllHooks` and, when the read tools are on, Read deny rules for
+    secret files (`researchSettings`, review R3,
+    `TestClaudeRepoReadRunsDenySecretFiles`), `--setting-sources user`),
     `internal/backend/codex.go` (`--sandbox read-only`, never drafts:
     `ErrCodexCannotDraft`), `internal/backend/toolloop` (jail: `ResolveInRoot`,
     `openVerified`, `Unavailable` for `/`, `$HOME` and its ancestors,
@@ -93,17 +95,23 @@ triage rows (the full reasons are in the triage notes).
     web text likewise (`TestResearchSystemPrompt`).
   - Commit reviews quote the commit as data and leave out denied files
     (`internal/engine/commits.go`: `commitPatch`; `TestCommitReviewLeavesDeniedFilesOut`, P10-R9).
-  - Repository agent settings never load (T22).
+  - Repository agent settings never load (T22; argv-pinned; live check
+    pending). A side effect, inferred from the Claude Code bundle and not
+    run: with `--setting-sources user` the repository's `CLAUDE.md` probably
+    no longer reaches claude-cli dots either (project instructions load with
+    the project source). Confirming it is part of the R1 live gate.
 - **Residual risk:** a dot can still *say* something wrong; it can't act on
   it, and memory written from it waits for approval (Known gaps). claude-cli
-  review runs can read files outside the repository and get no secret-file
-  deny list (review R3; API dots and research do get one). Codex dots read
+  review, ask and memory runs now get the secret-file Read deny rules, but
+  they are not confined to the repository: they can read other files outside
+  it, and whether Read deny rules also bind Grep and Glob is unverified
+  (review R3, triage X9). Codex dots read
   through Codex's own sandbox, so `tool_deny_globs` doesn't limit them
-  [S24], and Codex may load repository instructions (review R6). Local dot
-  args can still use some claude/codex flags the denylist doesn't name [B9].
+  [triage S24], and Codex may load repository instructions (review R6). Local dot
+  args can still use some claude/codex flags the denylist doesn't name [triage B9].
   Research runs `--restricted` and so drop the developer's own `~/.claude`
-  deny rules [S21]. The JSON extractor fails closed on prose with braces
-  [B1].
+  deny rules [triage S21]. The JSON extractor fails closed on prose with braces
+  [triage B1].
 
 ### B2. Model output reaching the terminal and the agent (sanitizing, delivery, inject)
 
@@ -128,8 +136,8 @@ triage rows (the full reasons are in the triage notes).
 - **Residual risk:** inject mode is, by design, unapproved text in the
   agent's prompt; it is off unless the developer turns it on for a dot, and
   clamped for shared and project dots. Stored text is sanitized once, not
-  again at draw time [S19]. A pane closing inside a delivery can lose one
-  outcome record [E40].
+  again at draw time [triage S19]. A pane closing inside a delivery can lose one
+  outcome record [triage E40].
 
 ### B3. Write-capable drafts, the two approval gates and the patch apply path
 
@@ -160,8 +168,8 @@ triage rows (the full reasons are in the triage notes).
 - **Residual risk:** gate 2 lists unviewed files rather than blocking
   (P7-R8). Apply uses the developer's own filters and LFS (P7-R4), which come
   from the local `.git/config`, not from a clone. The private snapshot refs
-  leave with `git push --mirror` [S17]; two engines on one repository end each
-  other's drafts [G7]. `x` discards a patch without a confirm [D10].
+  leave with `git push --mirror` [triage S17]; two engines on one repository end each
+  other's drafts [triage G7]. `x` discards a patch without a confirm [triage D10].
 
 ### B4. Proactive and background runs: the daily budget, web research, git config execution
 
@@ -195,8 +203,8 @@ triage rows (the full reasons are in the triage notes).
   with server-side web fetch; Anthropic only fetches URLs already in the
   context, and 5 uses cap a link-following leak, but this is provider
   behaviour, not live-verified here (review R5). No cross-session daily
-  reservation (at most one extra run per session) [Q13]; `--max-budget-usd`
-  stop behaviour is a user gate [X10].
+  reservation (at most one extra run per session) [triage Q13]; `--max-budget-usd`
+  stop behaviour is a user gate [triage X10].
 
 ### B5. Shared dot packs and project dots (trust, the clamp, hidden characters, TOML bombs)
 
@@ -230,8 +238,8 @@ triage rows (the full reasons are in the triage notes).
 - **Residual risk:** trust is keyed by the git root commit, so a fork or
   clone sharing it trusts byte-identical files (by design,
   `TestTrustIsSharedByClonesOfTheSameProjectOnly`). An in-limit hostile file
-  still costs about 60 ms per 100 MB to pre-scan [H11]; `dots untrust FILE`
-  revokes every checkout [H7]. A trusted project dot's purpose is a prompt
+  still costs about 60 ms per 100 MB to pre-scan [triage H11]; `dots untrust FILE`
+  revokes every checkout [triage H7]. A trusted project dot's purpose is a prompt
   like any other (B1).
 
 ### B6. Phase 2 memory (VITAL): provenance, suppression, secret scanning
@@ -258,9 +266,9 @@ triage rows (the full reasons are in the triage notes).
   - Approve shows the whole proposal or refuses (T5; P2-R9 closed by
     Task 10).
 - **Residual risk:** homoglyph and space-split secrets pass the scanner
-  (Known gaps). Ledger audit lines can be lost or over-scrubbed [M17, M19,
-  M25]; a rejected agent proposal can be proposed again [M33]. `enter`
-  deletes a deleted dot's memory by default [U22, a user decision]. Project
+  (Known gaps). Ledger audit lines can be lost or over-scrubbed [triage M17, M19,
+  M25]; a rejected agent proposal can be proposed again [triage M33]. `enter`
+  deletes a deleted dot's memory by default [triage U22, a user decision]. Project
   memory follows the git root commit, so a fork shares it (by design).
 
 ### B7. MCP: the main agent asking dots; Codex and Claude MCP isolation
@@ -286,10 +294,14 @@ triage rows (the full reasons are in the triage notes).
     `TestCodexRefusesAServerItCantDisable`).
 - **Residual risk:** the MCP restriction is not a security boundary against
   the agent itself: the agent has a shell and runs as the developer, so it can
-  talk to the engine socket directly (B9). `read_memory` returns global
-  entries of dots not attached to the pane [S16]. A project-level
-  `.codex/config.toml` server isn't detected [P1]. Codex paths are not
-  live-verified [X3].
+  talk to the engine socket directly (B9). An `ask_dot` to a claude-cli dot
+  runs it with the read tools in the pane's directory, and those reads are
+  not confined to it: the dot can read files outside the repository (secret
+  files are denied by name, review R3), and its answer goes straight to the
+  agent without the approval queue. `read_memory` returns global
+  entries of dots not attached to the pane [triage S16]. A project-level
+  `.codex/config.toml` server isn't detected [triage P1]. Codex paths are not
+  live-verified [triage X3].
 
 ### B8. Credentials and keys (redaction everywhere)
 
@@ -306,10 +318,10 @@ triage rows (the full reasons are in the triage notes).
   value (`TestSDKChainTokensAreRedactedFromErrors`); history and memory run
   `credentials.Redact` and the scanner (`TestDefaultRedactionNeverStoresKeys`).
   Keys travel in headers, never argv; CLI dots use the CLIs' own login.
-- **Residual risk:** environment keys aren't shape-checked [S11]; tokens
+- **Residual risk:** environment keys aren't shape-checked [triage S11]; tokens
   the Anthropic SDK reads from files or federation aren't redacted by value
-  [S23]; query-string key names aren't redacted by name [S13];
-  `credentials.toml` read-modify-write has no lock [S10]. A repository could
+  [triage S23]; query-string key names aren't redacted by name [triage S13];
+  `credentials.toml` read-modify-write has no lock [triage S10]. A repository could
   have redirected a claude-cli dot's API endpoint through its settings until
   this task (T22, fixed).
 
@@ -334,9 +346,9 @@ triage rows (the full reasons are in the triage notes).
   patch (it can read the hash from a snapshot). The approval gates protect
   against the plugin's own models and against acting on unseen text in the
   UI; they are not a boundary against other programs of the same user, who
-  could edit the files directly anyway [I8]. On Linux, a local user who
+  could edit the files directly anyway [triage I8]. On Linux, a local user who
   pre-creates the temp-dir fallback directory stops the engine from starting
-  (denial of service, review R7). There are no server write deadlines [I6].
+  (denial of service, review R8). There are no server write deadlines [triage I6].
 
 ### B10. Install and update (checksums, cosign optional, source fallback)
 
@@ -357,10 +369,13 @@ triage rows (the full reasons are in the triage notes).
 - **Residual risk:** cosign is optional; checksums alone vouch only for the
   tree the developer cloned. wget can't restrict redirect protocols (the
   checksum still decides). A source build uses whatever Go the developer has.
-  Release builds use the Go version `go.mod` names (setup-go reads `go
-  1.25.0`), and Go 1.25.7 has 24 reachable standard-library vulnerabilities:
-  pinning a patched toolchain is a user gate [X12, review R2]. Actions are
-  pinned by tag, not SHA [W16]. `release/REPO` and the checksums are empty
+  Release builds use `go-version-file: go.mod`, which says `go 1.25.0`, so
+  setup-go most likely installs go1.25.0; already go1.25.7 has 24 reachable
+  standard-library vulnerabilities. Setting an explicit patched `go-version`
+  in every workflow is a user gate [triage X12, review R2]; the release
+  workflow's candidate job runs govulncheck, so a tag with a vulnerable
+  toolchain stops before any checksums are proposed. Actions are
+  pinned by tag, not SHA [triage W16]. `release/REPO` and the checksums are empty
   until publishing, so installs build from source today.
 
 ### B11. Windows (compiled and unit-tested only)
@@ -380,10 +395,10 @@ triage rows (the full reasons are in the triage notes).
   portability guard keeps every child process on `platform.Command`
   (`TestProductChildrenGoThroughPlatform`).
 - **Residual risk:** none of this has run on Windows here: it is compiled
-  and unit-tested (cross-compiled, plus CI when pushed), a user gate [X1,
-  X2, W6, W7, W17] (P6-R1). Known: a residual `Purge` race [W1, W2],
-  inherited ACLs on `CreateFile` [W4], an aliased `os/exec` import would pass
-  the guard [W13], user names with `%` or `!` can't run npm shims [W15].
+  and unit-tested (cross-compiled, plus CI when pushed), a user gate [triage X1,
+  X2, W6, W7, W17] (P6-R1). Known: a residual `Purge` race [triage W1, W2],
+  inherited ACLs on `CreateFile` [triage W4], an aliased `os/exec` import would pass
+  the guard [triage W13], user names with `%` or `!` can't run npm shims [triage W15].
 
 ## Known gaps
 
@@ -394,7 +409,7 @@ triage rows (the full reasons are in the triage notes).
 - A dot file the developer writes can still pass some `claude`/`codex` flags the denylist doesn't name (short forms, combined flags; see the triage notes). Imported and project dots keep no args but `--model`/`--effort`.
 - Linux and Windows privacy (modes, DACLs, pipes) is tested in CI only; not run on those systems here.
 - The engine endpoint is unauthenticated for processes of the same user, the coding agent included (B9).
-- claude-cli review, ask, memory and council runs can read files outside the repository and have no secret-file deny list (review R3).
-- Codex dots may read repository instructions and project config that the plugin doesn't control (review R6, [S24]).
-- `--setting-sources user` (T22) is pinned by argv tests and the flag is present in the installed Claude Code 2.1.295, but a live run that shows a repository `apiKeyHelper` is ignored is a user gate, like the `--restricted` re-check [X8].
-- Release binaries must be built with a patched Go toolchain (review R2, [X12]).
+- claude-cli review, ask, memory and council runs deny secret files by name but can still read other files outside the repository; whether Read deny rules also bind Grep and Glob is unverified (review R3, triage X9).
+- Codex dots may read repository instructions and project config that the plugin doesn't control (review R6, [triage S24]).
+- `--setting-sources user` (T22) is pinned by argv tests and the flag is present in the installed Claude Code 2.1.295, but a live run that shows a repository `apiKeyHelper` is ignored is a user gate, like the `--restricted` re-check [triage X8].
+- Release binaries must be built with a patched Go toolchain: set an explicit `go-version` in every workflow (review R2, [triage X12]).

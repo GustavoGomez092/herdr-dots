@@ -63,7 +63,7 @@ func TestWriteToolsNeedBothWriteAndPassWrite(t *testing.T) {
 		if slices.Contains(cmd.Args, "--restricted") {
 			t.Errorf("case %d: --restricted is for drafts only: %v", i, cmd.Args)
 		}
-		if v, _ := argAfter(cmd.Args, "--settings"); v != `{"disableAllHooks":true}` {
+		if v, _ := argAfter(cmd.Args, "--settings"); v != researchSettings(nil) {
 			t.Errorf("case %d: read-only settings changed: %q", i, v)
 		}
 		sys, _ := argAfter(cmd.Args, "--append-system-prompt")

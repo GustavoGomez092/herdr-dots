@@ -26,6 +26,8 @@ var claudeDenied = [][]string{
 	{"--restricted"},
 	{"--setting-sources", "x"},
 	{"--setting-sources=x"},
+	{"--managed-settings", "x.json"}, // Phase 10 Task 11 small round
+	{"--managed-settings=x.json"},
 	{"-w", "x"},
 	{"--worktree", "x"},
 	{"--worktree=x"},

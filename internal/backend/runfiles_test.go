@@ -38,7 +38,7 @@ func TestShortPromptStaysInArgvExactlyAsV1(t *testing.T) {
 	cmd := ClaudeCLI{Environ: func() []string { return nil }}.BuildCmd(r)
 	defer cmd.Close()
 	want := []string{"-p", "--output-format", "json", "--no-session-persistence", "--strict-mcp-config",
-		"--settings", `{"disableAllHooks":true}`, "--append-system-prompt", SystemPrompt(r),
+		"--settings", researchSettings(nil), "--append-system-prompt", SystemPrompt(r),
 		"--model", "sonnet", "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob",
 		"--setting-sources", "user"} // security review R1: never the repository's settings
 	if !slices.Equal(cmd.Args, want) || cmd.Cleanup != nil {
@@ -53,7 +53,7 @@ func TestLongPromptMovesToAPrivateFile(t *testing.T) {
 	if !ok || slices.Contains(cmd.Args, "--append-system-prompt") || slices.Contains(cmd.Args, SystemPrompt(r)) {
 		t.Fatalf("args %q", cmd.Args)
 	}
-	if v, _ := argAfter(cmd.Args, "--settings"); v != `{"disableAllHooks":true}` {
+	if v, _ := argAfter(cmd.Args, "--settings"); v != researchSettings(nil) {
 		t.Fatalf("settings %q: no shim, so inline", v)
 	}
 	got, err := os.ReadFile(path)
@@ -73,10 +73,10 @@ func TestShimGetsPromptAndSettingsAsFiles(t *testing.T) {
 	defer cmd.Close()
 	settings, _ := argAfter(cmd.Args, "--settings")
 	prompt, ok := argAfter(cmd.Args, "--append-system-prompt-file")
-	if !ok || settings == `{"disableAllHooks":true}` {
+	if !ok || settings == researchSettings(nil) {
 		t.Fatalf("args %q", cmd.Args)
 	}
-	if b, err := os.ReadFile(settings); err != nil || string(b) != `{"disableAllHooks":true}` {
+	if b, err := os.ReadFile(settings); err != nil || string(b) != researchSettings(nil) {
 		t.Fatalf("settings file %q %v", b, err)
 	}
 	for _, a := range cmd.Args {
