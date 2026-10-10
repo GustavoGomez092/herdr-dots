@@ -60,7 +60,7 @@ func TestWatchToANonReadingClientTimesOut(t *testing.T) {
 // error, instead of waiting for the reply or the deadline.
 func TestCallHonorsCancellation(t *testing.T) {
 	h := newQueryHandler(nil)
-	h.slow = 3 * time.Second
+	h.slow = 1500 * time.Millisecond // a Call that ignored the cancel would take this long
 	c := serveHandler(t, h)
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(100*time.Millisecond, cancel)
