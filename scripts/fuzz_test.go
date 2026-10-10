@@ -74,9 +74,15 @@ func TestReleaseFuzzMatrixCoversEveryTarget(t *testing.T) {
 		t.Fatal("the fuzz job has no timeout-minutes")
 	}
 	timeout, _ := strconv.Atoi(m[1])
-	m = regexp.MustCompile(`sh scripts/fuzz\.sh (\S+) \$\{\{ matrix\.packages \}\}`).FindStringSubmatch(job)
-	if m == nil {
-		t.Fatal("the fuzz job doesn't run sh scripts/fuzz.sh <time> ${{ matrix.packages }}")
+	if !regexp.MustCompile(`sh scripts/fuzz\.sh "\$FUZZ_TIME" \$\{\{ matrix\.packages \}\}`).MatchString(job) ||
+		!strings.Contains(job, "FUZZ_TIME: ${{ github.event.inputs.fuzz_time || '10m' }}") {
+		t.Fatal(`the fuzz job doesn't run sh scripts/fuzz.sh "$FUZZ_TIME" ${{ matrix.packages }} with FUZZ_TIME defaulting to 10m`)
+	}
+	// The headroom is checked at the release gate's time: the dispatch
+	// input's default, which is also the tag push's time.
+	m = regexp.MustCompile(`(?m)^\s+fuzz_time:\n(?:\s+\w+: .*\n)*?\s+default: "(\S+)"`).FindStringSubmatch(string(wf))
+	if m == nil || m[1] != "10m" {
+		t.Fatalf("the fuzz_time input must default to the 10m release gate: %v", m)
 	}
 	per, err := time.ParseDuration(m[1])
 	if err != nil {

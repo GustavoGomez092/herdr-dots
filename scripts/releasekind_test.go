@@ -33,7 +33,7 @@ func candidateRun(t *testing.T, version string) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := "HERDR_DOTS_VERSION=" + version + "\nASSET_COMMIT=0123456789ab\nASSET_TIME=1791072000\n"
+	env := "HERDR_DOTS_VERSION=" + version + "\nASSET_COMMIT=0123456789ab\nASSET_TIME=1791072000\nASSET_MTIME=2026-10-04T00:00:00Z\n"
 	var sums strings.Builder
 	for _, p := range []string{"darwin_amd64.tar.gz", "darwin_arm64.tar.gz", "linux_amd64.tar.gz", "linux_arm64.tar.gz", "windows_amd64.zip", "windows_arm64.zip"} {
 		sums.WriteString(strings.Repeat("a", 64) + "  herdr-dots_" + version + "_" + p + "\n")

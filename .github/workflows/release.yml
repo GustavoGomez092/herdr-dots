@@ -29,6 +29,11 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      fuzz_time:
+        description: "Fuzz time per target (the release gate is 10m; shorten only to repeat a candidate whose Go code already passed it)"
+        default: "10m"
+        required: true
   push:
     tags: ["v*"]
 
@@ -116,7 +121,9 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26.9" # patched Go: govulncheck clean (go.mod stays at 1.25.0)
-      - run: sh scripts/fuzz.sh 10m ${{ matrix.packages }}
+      - run: sh scripts/fuzz.sh "$FUZZ_TIME" ${{ matrix.packages }}
+        env:
+          FUZZ_TIME: ${{ github.event.inputs.fuzz_time || '10m' }}
       - name: keep crashers
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -164,6 +171,7 @@ jobs:
             echo "HERDR_DOTS_VERSION=${{ needs.meta.outputs.version }}"
             echo "ASSET_COMMIT=$(git rev-parse --short=12 HEAD)"
             echo "ASSET_TIME=$(git log -1 --format=%ct HEAD)"
+            echo "ASSET_MTIME=$(git log -1 --format=%cI HEAD)" # RFC 3339: archive entries need it (ASSET_TIME is Unix seconds for the binaries)
           } > release/ASSET_ENV
           cat release/ASSET_ENV >> "$GITHUB_ENV"
       # Snapshot mode: a candidate has no tag yet. Every archive name, flag

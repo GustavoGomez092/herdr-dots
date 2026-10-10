@@ -32,7 +32,7 @@ archives:
     files:
       - none* # the binary only
     builds_info:
-      mtime: "{{ .Env.ASSET_TIME }}"
+      mtime: "{{ .Env.ASSET_MTIME }}"
 
 checksum:
   name_template: SHA256SUMS
