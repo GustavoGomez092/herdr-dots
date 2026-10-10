@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,7 +51,16 @@ type Config struct {
 	PricesFile       string                    `toml:"prices_file"`        // "" = CONFIG_DIR/prices.toml
 
 	ProjectDotsEnabled bool `toml:"project_dots_enabled"` // Phase 9: load trusted .herdr-dots/dots from repositories; false on a malformed file
+
+	// UnknownKeys are the keys config.toml sets that no setting reads (a
+	// typo), and "providers.<name>" for a provider that doesn't exist,
+	// sorted; nil when there are none. The rest of the file still applies.
+	UnknownKeys []string `toml:"-"`
 }
+
+// KnownProviders are the [providers.<name>] tables a backend reads
+// (backend.ProviderFor).
+var KnownProviders = []string{"anthropic", "openai", "openrouter", "ollama"}
 
 // ProviderConfig is one [providers.<name>] table (anthropic, openai,
 // openrouter, ollama). Keys never live here: api_key_env names a variable.
@@ -151,12 +162,22 @@ func Load(path string) (Config, error) {
 		c.ProjectDotsEnabled = false
 		return c, err
 	}
-	if _, err := toml.Decode(string(data), &c); err != nil {
+	md, err := toml.Decode(string(data), &c)
+	if err != nil {
 		c = Default()
 		c.InjectEnabled, c.MemoryEnabled, c.WriteEnabled, c.ProactiveEnabled = false, false, false, false
 		c.ProjectDotsEnabled = false
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
+	for _, k := range md.Undecoded() {
+		c.UnknownKeys = append(c.UnknownKeys, k.String())
+	}
+	for name := range c.Providers {
+		if !slices.Contains(KnownProviders, name) {
+			c.UnknownKeys = append(c.UnknownKeys, "providers."+name)
+		}
+	}
+	sort.Strings(c.UnknownKeys)
 	if c.MaxParallelRuns < 1 {
 		c.MaxParallelRuns = 1
 	}
