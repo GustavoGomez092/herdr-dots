@@ -711,28 +711,26 @@ func (m Model) keysConfirm(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// keysConfirmMemory answers "Also delete its memory in all projects? (Y/n)".
+// keysConfirmMemory answers "Also delete its memory in all projects? (y/N)".
+// Memory is kept by default (U22, the developer's decision): only y deletes
+// it; enter, n, esc and every other key keep it.
 func (m Model) keysConfirmMemory(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	slug, name, st, caller := m.delSlug, m.delName, m.d.Memory, m.d.Caller
-	switch k.String() {
-	case "n", "N", "esc":
-		m.scr = scrLibrary
+	m.scr = scrLibrary
+	if s := k.String(); s != "y" && s != "Y" {
 		m.status = "deleted " + name + " (memory kept)"
 		return m, nil
-	case "y", "Y", "enter":
-		m.scr = scrLibrary
-		return m, func() tea.Msg {
-			del, err := st.DeleteDot(slug)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil) // part of it may be gone even on an error
-			if err != nil {
-				return errMsg{err}
-			}
-			return memDeletedMsg{name: name, del: del}
-		}
 	}
-	return m, nil
+	return m, func() tea.Msg {
+		del, err := st.DeleteDot(slug)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = caller.Call(ctx, ipc.CmdMemoryChanged, nil) // part of it may be gone even on an error
+		if err != nil {
+			return errMsg{err}
+		}
+		return memDeletedMsg{name: name, del: del}
+	}
 }
 
 // badge marks where a library dot comes from.
@@ -787,8 +785,8 @@ func (m Model) View() string {
 	case scrConfirm:
 		return style.Title.Render(fmt.Sprintf("Delete %s?", m.delName)) + "\n\n" + style.Dim.Render("y delete · any other key cancels")
 	case scrConfirmMemory:
-		return style.Title.Render(fmt.Sprintf("Deleted %s.", m.delName)) + "\nAlso delete its memory in all projects? (Y/n)\n\n" +
-			style.Dim.Render("y/enter delete memory · n keep it (re-creating the dot picks it back up)")
+		return style.Title.Render(fmt.Sprintf("Deleted %s.", m.delName)) + "\nAlso delete its memory in all projects? (y/N)\n\n" +
+			style.Dim.Render("y delete memory · enter or any other key keeps it (re-creating the dot picks it back up)")
 	case scrMemory:
 		if m.mem != nil {
 			return m.mem.View()

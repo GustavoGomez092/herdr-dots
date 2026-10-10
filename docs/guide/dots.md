@@ -73,6 +73,6 @@ rather than the whole text.
 ## Deleting a dot
 
 Deleting a dot in the manage popup then asks "Also delete its memory in all
-projects? (Y/n)". At the moment `enter` answers yes (forgetting is real), so a
-reflexive `enter` deletes that dot's memory with no undo. This default is the
-developer's decision and is still open; press `n` to keep the memory.
+projects? (y/N)". The default keeps the memory: `enter`, `n`, `esc` and any
+other key keep it, and only `y` deletes it in every project, with no undo. A
+kept memory comes back if you re-create a dot with the same name.
