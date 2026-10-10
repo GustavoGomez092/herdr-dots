@@ -23,12 +23,24 @@ import (
 type codexRecord struct {
 	Type    string `json:"type"`
 	Payload struct {
-		Type      string `json:"type"`
-		Message   string `json:"message"`
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-		Input     string `json:"input"`
+		Type      string     `json:"type"`
+		Message   codexField `json:"message"`
+		Name      codexField `json:"name"`
+		Arguments codexField `json:"arguments"`
+		Input     codexField `json:"input"`
 	} `json:"payload"`
+}
+
+// codexField is a payload string. A value of another JSON type (an object,
+// say) reads as "" instead of failing the whole record (T5).
+type codexField string
+
+func (f *codexField) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*f = codexField(s)
+	}
+	return nil
 }
 
 var patchFileRe = regexp.MustCompile(`(?m)^\*\*\* (?:Add|Update|Delete) File: (.+)$`)
@@ -56,27 +68,31 @@ func applyCodex(turns []Turn, line []byte) []Turn {
 		return turns
 	}
 	p := rec.Payload
+	msg := string(p.Message)
 	switch {
 	case rec.Type == "event_msg" && p.Type == "user_message":
-		if strings.TrimSpace(p.Message) == "" {
+		if strings.TrimSpace(msg) == "" {
 			return turns
 		}
-		return append(turns, Turn{Index: len(turns) + 1, User: p.Message, FromDots: FromDots(p.Message)})
+		return append(turns, Turn{Index: len(turns) + 1, User: msg, FromDots: FromDots(msg)})
 	case len(turns) == 0:
 		return turns
 	case rec.Type == "event_msg" && p.Type == "agent_message":
+		if msg == "" {
+			return turns
+		}
 		cur := &turns[len(turns)-1]
 		if cur.Assistant != "" {
 			cur.Assistant += "\n"
 		}
-		cur.Assistant += p.Message
+		cur.Assistant += msg
 	case rec.Type == "response_item" && (p.Type == "function_call" || p.Type == "custom_tool_call"):
 		cur := &turns[len(turns)-1]
 		var paths []string
-		for _, m := range patchFileRe.FindAllStringSubmatch(p.Arguments+"\n"+p.Input, -1) {
+		for _, m := range patchFileRe.FindAllStringSubmatch(string(p.Arguments)+"\n"+string(p.Input), -1) {
 			paths = append(paths, strings.TrimSpace(m[1]))
 		}
-		cur.Tools = append(cur.Tools, ToolUse{Name: p.Name, Paths: paths})
+		cur.Tools = append(cur.Tools, ToolUse{Name: string(p.Name), Paths: paths})
 	}
 	return turns
 }
