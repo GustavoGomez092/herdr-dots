@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -54,7 +55,8 @@ type Meta struct {
 	// SummaryHadSecret: the summary as the dot wrote it looked like it held a
 	// credential (it was redacted, or memory's scan found one). Memory's
 	// outcome paths then write a redacted ledger line and no entry. The text
-	// as written is never stored (older records' summary_raw is ignored).
+	// as written is never stored: an older record's summary_raw only sets
+	// this flag (Get), and the next rewrite drops it.
 	SummaryHadSecret bool      `json:"summary_had_secret,omitempty"`
 	Stat             string    `json:"stat,omitempty"` // "3 files +42 −7"
 	Files            int       `json:"files"`
@@ -183,16 +185,30 @@ func (s *Store) Get(id string) (Meta, error) {
 
 // Diff reads id's patch and metadata and checks the patch is byte for byte
 // what was drafted (ErrChanged otherwise), so what the user reviews is what
-// gets applied.
+// gets applied. The file must be a regular file of the drafted size before
+// anything is read, and no more than that size is read.
 func (s *Store) Diff(id string) ([]byte, Meta, error) {
 	m, err := s.Get(id)
 	if err != nil {
 		return nil, Meta{}, err
 	}
-	diff, err := os.ReadFile(s.PatchPath(id))
+	p := s.PatchPath(id)
+	st, err := os.Lstat(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, m, fmt.Errorf("%w: %s has no patch file", ErrNotFound, id)
 	}
+	if err != nil {
+		return nil, m, err
+	}
+	if !st.Mode().IsRegular() || st.Size() != int64(m.Bytes) {
+		return nil, m, fmt.Errorf("%w: %s", ErrChanged, id)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, m, err
+	}
+	defer f.Close()
+	diff, err := io.ReadAll(io.LimitReader(f, int64(m.Bytes)+1))
 	if err != nil {
 		return nil, m, err
 	}
@@ -231,6 +247,40 @@ func (s *Store) Delete(id string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// SweepOrphanPatches removes every <id>.patch with no <id>.json (a crash
+// between PutPatch's two writes leaves one; nothing can reach it) and
+// reports how many it removed. It holds the store's lock, so a PutPatch in
+// progress is never mistaken for an orphan. A record that exists but can't
+// be read keeps its patch.
+func (s *Store) SweepOrphanPatches() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ents, err := os.ReadDir(s.Dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	var errs []error
+	for _, e := range ents {
+		id, ok := strings.CutSuffix(e.Name(), ".patch")
+		if !ok || e.IsDir() || !ValidID(id) {
+			continue
+		}
+		if _, err := os.Lstat(s.metaPath(id)); !errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err := os.Remove(s.PatchPath(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
 }
 
 // List returns every readable metadata file, oldest first, plus one error

@@ -52,6 +52,9 @@ func Validate(ctx context.Context, g Git, co Checkout, p Patch, caps Caps) error
 	if caps.MaxFiles > 0 && p.Files > caps.MaxFiles {
 		return fmt.Errorf("%w: %d files (max %d)", ErrTooLarge, p.Files, caps.MaxFiles)
 	}
+	if p.Truncated {
+		return fmt.Errorf("%w: more than %d bytes (max %d)", ErrTooLarge, len(p.Diff)-1, caps.MaxBytes)
+	}
 	if caps.MaxBytes > 0 && p.Bytes > caps.MaxBytes {
 		return fmt.Errorf("%w: %d bytes (max %d)", ErrTooLarge, p.Bytes, caps.MaxBytes)
 	}

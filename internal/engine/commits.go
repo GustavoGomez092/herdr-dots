@@ -50,10 +50,23 @@ const seenHeads = 32
 // holds the last seenHeads HEADs it recorded or reviewed, so going back to
 // one (A, B, then a reset to A) is not a new commit.
 type headSeen struct {
-	head string
-	gen  uint64
-	cwd  string
-	seen []string // oldest first
+	head     string
+	gen      uint64
+	cwd      string
+	seen     []string // oldest first
+	reviewed []string // the HEADs a review started for, oldest first (at most seenHeads)
+}
+
+// reviewedElsewhereLocked names another pane where the dot slug already
+// started a review of head, so one dot on two panes reviews a commit once
+// (R4). Caller holds e.mu.
+func (e *Engine) reviewedElsewhereLocked(k key, head string) string {
+	for k2, h := range e.heads {
+		if k2.slug == k.slug && k2.pane != k.pane && slices.Contains(h.reviewed, head) {
+			return k2.pane
+		}
+	}
+	return ""
 }
 
 // saw records head as the current HEAD and as seen.
@@ -260,6 +273,16 @@ func (e *Engine) reviewCommit(a state.Attachment, gen uint64, head string, ds []
 			skipped = append(skipped, fmt.Sprintf("dot %s: %s not reviewed (%s)", d.Slug, label, dec.Reason))
 			continue
 		}
+		if other := e.reviewedElsewhereLocked(k, head); other != "" {
+			e.releaseLocked(k)
+			skipped = append(skipped, fmt.Sprintf("dot %s: %s already reviewed for pane %s", d.Slug, label, other))
+			continue
+		}
+		h.reviewed = append(h.reviewed, head)
+		if len(h.reviewed) > seenHeads {
+			h.reviewed = slices.Clone(h.reviewed[len(h.reviewed)-seenHeads:])
+		}
+		e.heads[k] = h
 		paneCalls++
 		j := bgJob{kind: state.RunCommit, paneID: a.PaneID, session: cur.SessionValue, project: cur.ProjectID, projectName: cur.ProjectName,
 			cwd: a.Cwd, dot: d, turns: tail(turns, d.Context.Turns), question: question, label: label,
@@ -393,12 +416,13 @@ func (e *Engine) commitContext(cwd, head string) (string, error) {
 // commitPatch is the commit's patch without the content of any file the deny
 // set covers (toolloop.DefaultDeny, DraftDeny and config tool_deny_globs,
 // case-folded by toolloop.Denied; ruling P10-R9), with a closing line saying
-// how many were left out. The file list (--stat) may still name them.
+// how many were left out. The file list (--stat) may still name them. A
+// rename or copy of a denied file is denied under its new name too (S25).
 //
 // worktree.Git sets GIT_LITERAL_PATHSPECS (no pathspec magic, so no
 // :(exclude)), so a commit with denied files is shown with the other files as
 // literal pathspecs, from the repository's top level (where the paths from
-// --name-only are relative). When those don't fit in commitPathspecBytes
+// --name-status are relative). When those don't fit in commitPathspecBytes
 // (argv is short on Windows), the patch is left out rather than risk a
 // denied file's content. While tool_deny_globs holds an invalid pattern the
 // deny set is unknown, so no patch is sent at all.
@@ -407,20 +431,26 @@ func (e *Engine) commitPatch(cwd, head string) (string, error) {
 	if cfg.RepoToolsOff() {
 		return "[patch left out: tool_deny_globs in config.toml has an invalid pattern]", nil
 	}
-	files, err := e.commitFiles(cwd, head)
+	changes, err := e.commitChanges(cwd, head)
 	if err != nil {
 		return "", err
 	}
 	deny := append(append(append([]string(nil), toolloop.DefaultDeny...), toolloop.DraftDeny...), cfg.ToolDenyGlobs...)
 	var keep []string
 	denied, size := 0, 0
-	for _, f := range files {
-		if toolloop.Denied(f, deny) {
+	for _, c := range changes {
+		// A rename or copy carries its source's content: a denied source
+		// makes the new name denied too (S25).
+		if toolloop.Denied(c.path, deny) || (c.from != "" && toolloop.Denied(c.from, deny)) {
 			denied++
 			continue
 		}
-		keep = append(keep, f)
-		size += len(f) + 1
+		for _, f := range []string{c.from, c.path} {
+			if f != "" {
+				keep = append(keep, f)
+				size += len(f) + 1
+			}
+		}
 	}
 	if denied == 0 {
 		return e.commitShow(cwd, head, "--patch")
@@ -495,6 +525,52 @@ func (e *Engine) commitFiles(cwd, head string) ([]string, error) {
 		return nil, err
 	}
 	return splitPaths(out), nil
+}
+
+// commitChange is one entry of a commit's file list: the path it changed and,
+// for a rename or a copy, the path its content came from.
+type commitChange struct{ path, from string }
+
+// commitChanges lists the paths a commit changed with their rename and copy
+// sources (--name-status -z). Rename and copy detection are pinned on,
+// whatever the repository's diff.renames says, so a denied file's content
+// is traced to its new name.
+func (e *Engine) commitChanges(cwd, head string) ([]commitChange, error) {
+	out, err := e.commitShow(cwd, head, "--name-status", "-z", "--find-renames", "--find-copies")
+	if err != nil {
+		return nil, err
+	}
+	return parseNameStatus(out), nil
+}
+
+// parseNameStatus reads git's NUL-separated --name-status -z output: a
+// status, then one path, or two (source, then destination) for a rename (R)
+// or a copy (C). A record the output cap (commitGitMaxBytes) cut short is
+// dropped.
+func parseNameStatus(out string) []commitChange {
+	end := strings.LastIndexByte(out, 0)
+	if end < 0 {
+		return nil
+	}
+	f := strings.Split(out[:end], "\x00") // every field, NUL-terminated
+	var changes []commitChange
+	for i := 0; i+1 < len(f); {
+		status := strings.TrimSpace(f[i])
+		switch {
+		case status == "":
+			i++
+		case status[0] == 'R' || status[0] == 'C':
+			if i+2 >= len(f) { // the destination was cut short
+				return changes
+			}
+			changes = append(changes, commitChange{from: f[i+1], path: f[i+2]})
+			i += 3
+		default:
+			changes = append(changes, commitChange{path: f[i+1]})
+			i += 2
+		}
+	}
+	return changes
 }
 
 // splitPaths reads git's NUL-terminated path list. Every complete path ends

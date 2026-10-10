@@ -40,7 +40,9 @@ const lateGrace = 2 * time.Minute
 const claimSkew = memory.ScheduleSkew
 
 // maxScheduledPerDay caps a dot's scheduled runs per local day across every
-// Herdr session (daily.json; ruling P8-R12): a 15-minute cron fills it.
+// Herdr session (daily.json; ruling P8-R12). Every project's run counts, so
+// a 15-minute cron (the shortest allowed) fills it on one project, and on
+// several projects it fills sooner.
 const maxScheduledPerDay = 96
 
 // schedPane keys a scheduled dot's fire in bgQueued (no Herdr pane id looks
@@ -169,7 +171,9 @@ func (e *Engine) fireSchedule(x dueSlot) {
 		// treated as absent (ClaimSchedule overwrites it too, ruling P8-R12).
 		future := last.After(e.now().Add(claimSkew))
 		if future {
-			e.d.Logf("dot %s: the last claim on %s (%s) is in the future (a clock was wrong); treated as absent", d.Slug, t.name, last.Format(time.RFC3339))
+			if e.onceToday("log:future-claim:" + d.Slug + ":" + t.id) {
+				e.d.Logf("dot %s: the last claim on %s (%s) is in the future (a clock was wrong); treated as absent", d.Slug, t.name, last.Format(time.RFC3339))
+			}
 		} else if !last.Before(x.slot) {
 			continue // this engine or another session already ran it
 		}
@@ -183,7 +187,11 @@ func (e *Engine) fireSchedule(x dueSlot) {
 		}
 		paneID, att, paused, gen := e.paneOnProject(t.id, d.Slug)
 		if r := e.backgroundGate(d.Slug, state.RunScheduled, maxScheduledPerDay, paused); r != ReasonRun {
-			e.d.Logf("dot %s: %s on %s skipped (%s)", d.Slug, label, t.name, r)
+			// Once a day per project and reason: a capped 15-minute schedule
+			// would otherwise log every slot.
+			if e.onceToday("log:skip:" + d.Slug + ":" + t.id + ":" + string(r)) {
+				e.d.Logf("dot %s: %s on %s skipped (%s; logged once today)", d.Slug, label, t.name, r)
+			}
 			continue // not claimed: a later catch-up may still run it
 		}
 		if paneID != "" {

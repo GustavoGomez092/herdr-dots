@@ -61,8 +61,10 @@ func TestDiscardRefusesAPatchAlreadyApplied(t *testing.T) {
 	if err := r.e.DiscardPatch(c.ID); err == nil {
 		t.Fatal("discarded a patch whose record says applied")
 	}
-	if got, _ := r.q.Get(c.ID); got.Status != queue.StatusOrphaned {
-		t.Fatalf("card %+v", got)
+	// D8: the refused discard repairs the card instead of leaving it stuck
+	// on screen: it ends applied, as the apply would have marked it.
+	if got, _ := r.q.Get(c.ID); got.Status != queue.StatusApplied {
+		t.Fatalf("card %+v, want applied", got)
 	}
 	if m, err := r.patches.Get(c.PatchID); err != nil || m.Status != patchstore.StatusApplied {
 		t.Fatalf("meta %+v %v", m, err)

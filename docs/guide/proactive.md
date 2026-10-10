@@ -58,8 +58,8 @@ the dot's file. `proactive_enabled` in `config.toml` switches all of it off at o
   quoted as data. There is one review per new `HEAD`: a burst of commits, a reset or a branch switch is
   one review of the commit `HEAD` points at. The first `HEAD` seen after the engine starts or the dot
   is attached is only recorded, going back to a `HEAD` already seen is not reviewed again, and commits
-  made while proactive work is off are never reviewed later. A dot gets at most 24 commit reviews a
-  day. Reviews go through the dot's turn filter (pause, cooldown, `file_globs` matched against the
+  made while proactive work is off are never reviewed later. A dot attached to two panes reviews a
+  commit once, for the first pane that sees it. A dot gets at most 24 commit reviews a day. Reviews go through the dot's turn filter (pause, cooldown, `file_globs` matched against the
   commit's files, call and dollar budgets) and arrive like a turn review, in the dot's delivery mode.
   Nothing is installed in your repository: git runs with hooks, fsmonitor, external diff and textconv
   drivers off, submodule diffs kept short and every transport refused, so a repository's own config
@@ -112,6 +112,8 @@ log line and one toast. The budget never becomes unlimited.
 A commit review sends the commit's patch to the dot's backend, but the content
 of every file the deny set covers (`.env*`, `*.pem`, the built-in secret globs
 and your `tool_deny_globs`) is left out. The review is told "N denied file(s)
-left out of this review". The file list may still name them. If
+left out of this review". The file list may still name them. A denied file
+renamed or copied in the commit to a name the deny set doesn't cover is left
+out too, under its new name. If
 `tool_deny_globs` holds an invalid pattern, the patch is left out altogether
 until you fix it.

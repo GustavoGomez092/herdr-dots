@@ -530,9 +530,12 @@ func gitFiles(ctx context.Context, root string) ([]string, error) {
 
 // gitFilesArgs is gitFiles' git command line: fsmonitor and hooks off, and
 // every transport refused (with gitEnv's GIT_ALLOW_PROTOCOL=none and
-// GIT_NO_LAZY_FETCH=1, a partial clone never fetches).
+// GIT_NO_LAZY_FETCH=1, a partial clone never fetches). Precomposition is off
+// (macOS): git reports names as they are on disk, so a decomposed (NFD) name
+// passes the exact on-disk name check instead of vanishing (G4).
 func gitFilesArgs(gitDir, root string) []string {
 	return []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + platform.DevNull, "-c", "protocol.allow=never",
+		"-c", "core.precomposeunicode=false",
 		"--git-dir=" + gitDir, "--work-tree=" + root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"}
 }
 

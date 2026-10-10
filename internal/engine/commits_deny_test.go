@@ -66,3 +66,62 @@ func TestCommitReviewWithAnInvalidDenyGlobSendsNoPatch(t *testing.T) {
 		t.Fatalf("question:\n%s", q)
 	}
 }
+
+// S25 (P10-R9 rename gap): a denied file renamed in the commit to a
+// non-denied name is denied too. Its new name may be listed, but no line of
+// its content goes in the review: not as the rename's context lines, and
+// not as a new file when other denied files force the pathspec route.
+func TestCommitReviewLeavesARenamedDeniedFileOut(t *testing.T) {
+	r, repo := commitRigWith(t, proOpts{}, commitDot("Tests"))
+	secret := "API_TOKEN=renamedsecretcontent\nLINE2=keep\nLINE3=keep\nLINE4=keep\n"
+	proCommit(t, repo, ".env", secret, "add env")
+
+	// A rename with an edit: its patch would carry the old lines as context.
+	proGit(t, repo, "mv", ".env", "notes.txt")
+	head := proCommit(t, repo, "notes.txt", secret+"LINE5=new\n", "rename env with an edit")
+	q, err := r.e.commitContext(repo, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(q, "renamedsecretcontent") || !strings.Contains(q, "1 denied file(s)") {
+		t.Fatalf("an edited rename of a denied file:\n%s", q)
+	}
+
+	// A pure rename next to another denied file: the pathspec route would
+	// show the new name as a whole new file.
+	proCommit(t, repo, ".env.prod", "API_TOKEN=puresecretcontent\n", "add env.prod")
+	proGit(t, repo, "mv", ".env.prod", "notes2.txt")
+	if err := os.WriteFile(filepath.Join(repo, "tls.pem"), []byte("pemsecretcontent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	head = proCommit(t, repo, "b.go", "package b\n", "pure rename next to a denied file")
+	q, err = r.e.commitContext(repo, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(q, "puresecretcontent") || strings.Contains(q, "pemsecretcontent") ||
+		!strings.Contains(q, "+package b") || !strings.Contains(q, "2 denied file(s)") {
+		t.Fatalf("a pure rename of a denied file next to a denied file:\n%s", q)
+	}
+}
+
+// parseNameStatus pairs a rename's or copy's source with its destination and
+// drops a record the output cap cut short.
+func TestParseNameStatus(t *testing.T) {
+	got := parseNameStatus("M\x00a.go\x00R086\x00.env\x00notes.txt\x00C100\x00k.pem\x00copy.txt\x00D\x00old.go\x00R100\x00x.key\x00cut")
+	want := []commitChange{{path: "a.go"}, {from: ".env", path: "notes.txt"}, {from: "k.pem", path: "copy.txt"}, {path: "old.go"}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	}
+	if got := parseNameStatus("R100\x00x.key\x00"); len(got) != 0 {
+		t.Fatalf("a rename without its destination: %+v", got)
+	}
+	if got := parseNameStatus("A\x00"); len(got) != 0 {
+		t.Fatalf("a status without its path: %+v", got)
+	}
+}
