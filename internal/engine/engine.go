@@ -112,11 +112,13 @@ type Engine struct {
 	sem chan struct{}
 
 	cfg         atomic.Pointer[config.Config] // current settings; read via e.config()
-	cfgMu       sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked, chairWarned, denyWarned
+	cfgMu       sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked, chairWarned, denyWarned, unknownWarned
 	cfgStamp    string
 	cfgChecked  time.Time
 	chairWarned bool // the "chair needs a model" line was logged for the current settings
 	denyWarned  bool // the "invalid tool_deny_globs" line and toast went out for the current settings
+
+	unknownWarned string // the unknown config.toml keys (comma-joined) last logged and toasted
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
@@ -275,6 +277,7 @@ func New(d Deps) *Engine {
 	e.cfgStamp = configStamp(d.ConfigPath)
 	e.noteChairConfig(cfg)
 	e.noteDenyConfig(cfg)
+	e.noteUnknownConfig(cfg)
 	e.ReloadDots()
 	return e
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"herdr-dots/internal/config"
@@ -55,6 +56,7 @@ func (e *Engine) ReloadConfig() {
 	e.cfg.Store(&c)
 	e.noteChairConfig(c)
 	e.noteDenyConfig(c)
+	e.noteUnknownConfig(c)
 	e.broadcast()
 }
 
@@ -72,6 +74,33 @@ func (e *Engine) noteDenyConfig(c config.Config) {
 	}
 	msg := fmt.Sprintf("config.toml tool_deny_globs has %d invalid pattern(s) %q: API and claude-cli repository tools, drafts, research and commit patches are off until it is fixed (codex dots still read the repository through their sandbox)",
 		len(c.InvalidDenyGlobs), c.InvalidDenyGlobs)
+	e.d.Logf("config: %s", msg)
+	if e.d.Herdr == nil {
+		return
+	}
+	e.spawn(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := e.d.Herdr.Notify(ctx, "Herdr Dots", msg); err != nil {
+			e.d.Logf("notify: %v", err)
+		}
+	})
+}
+
+// noteUnknownConfig logs and toasts once per set of config.toml keys no
+// setting reads (L4: a typo is otherwise silent): at engine start and on
+// each reload that changes the set, never while it stays the same. Only the
+// keys are named, never their values.
+func (e *Engine) noteUnknownConfig(c config.Config) {
+	keys := strings.Join(c.UnknownKeys, ",")
+	e.cfgMu.Lock()
+	warn := keys != "" && keys != e.unknownWarned
+	e.unknownWarned = keys
+	e.cfgMu.Unlock()
+	if !warn {
+		return
+	}
+	msg := fmt.Sprintf("config.toml: unknown key(s) %q ignored (a typo?)", c.UnknownKeys)
 	e.d.Logf("config: %s", msg)
 	if e.d.Herdr == nil {
 		return
