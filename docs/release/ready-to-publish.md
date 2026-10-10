@@ -27,7 +27,6 @@ tagged, listed or published. The macOS evidence is in
 
 ## Decisions for the developer
 
-- [ ] **U22: what `enter` does when a dot is deleted.** Deleting a dot asks "Also delete its memory in all projects? (Y/n)" and `enter` answers yes (the spec's default: forgetting is real). A reflexive `enter` loses that dot's memory with no undo. Phase 2 memory is VITAL, so the recommendation is to switch the default to keep (`(y/N)`). Your call.
 - [ ] **Your Claude model setting (triage X13).** A v1 test run rewrote the `model` in `~/.claude/settings.json`; it was restored from an older backup, so the true earlier value is unknown. Confirm it is what you want.
 - [ ] **Old trust entries in `~/.claude.json` (triage X14).** An earlier soak accepted Claude Code's folder-trust prompt, so `~/.claude.json` holds trust entries for deleted `/private/tmp` test directories (`/private/tmp/dots-test-repo`, `/private/tmp/dots-test-repo-p8`). You may remove them.
 - [ ] **The `dots-test` Herdr session.** It still holds six workspaces from earlier test runs, and every start of the session resumes a `claude --resume` in each of their panes. Delete it (`herdr session delete dots-test` while it is stopped) before the next live check, or keep it if you use it.
@@ -61,7 +60,6 @@ USER GATE for all of them.
 | W7 | OneDrive placeholder files and 8.3 short names | triage; P6 T3, T8 | Windows runtime |
 | W16 | CI actions pinned by major tag; CI runs twice on PR branches | triage; P6 T12 | Pin actions |
 | W17 | Herdr resolving `./bin/herdr-dots` to `.exe`; first `build.ps1` run; `-race` with gcc on Windows CI | triage; Phase 6 ledger | Windows runtime; PowerShell tests |
-| U22 | `enter` deletes a deleted dot's memory by default | triage (USER DECISION); P2 T12 | Decisions: U22 |
 | T6-pwsh | PowerShell install tests on a `pwsh` host | Phase 10 ledger (Task 6) | PowerShell install tests |
 | T6-cosign | Real `cosign verify-blob` | Phase 10 ledger (Task 6) | Real cosign |
 | R1 | Repository `.claude/settings.json` must not load (live) | Phase 10 ledger (Task 11), security review | R1 live check |
