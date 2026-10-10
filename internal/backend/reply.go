@@ -15,11 +15,11 @@ func ParseReply(text string) (Verdict, []MemoryOp, error) {
 	if err != nil {
 		return Verdict{}, nil, err
 	}
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	span, _ := jsonSpan(text, "relevant") // the object ParseVerdict parsed
 	var raw struct {
 		Remember json.RawMessage `json:"remember"`
 	}
-	if json.Unmarshal([]byte(text[start:end+1]), &raw) != nil || raw.Remember == nil {
+	if json.Unmarshal([]byte(span), &raw) != nil || raw.Remember == nil {
 		return v, nil, nil
 	}
 	ops, _ := decodeOps(raw.Remember, MaxReviewOps)
@@ -30,14 +30,14 @@ func ParseReply(text string) (Verdict, []MemoryOp, error) {
 // MaxPassOps valid ops. No JSON object, invalid JSON, a missing "remember" or
 // a non-array "remember" is ErrMalformed (a failed run, like a bad verdict).
 func ParseMemoryOps(text string) ([]MemoryOp, error) {
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
+	span, ok := jsonSpan(text, "remember")
+	if !ok {
 		return nil, fmt.Errorf("%w: no JSON object in %q", ErrMalformed, clipErr(text))
 	}
 	var raw struct {
 		Remember json.RawMessage `json:"remember"`
 	}
-	if err := json.Unmarshal([]byte(text[start:end+1]), &raw); err != nil {
+	if err := json.Unmarshal([]byte(span), &raw); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
 	if raw.Remember == nil {

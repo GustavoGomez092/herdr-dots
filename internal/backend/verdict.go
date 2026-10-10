@@ -11,13 +11,13 @@ import (
 
 var ErrMalformed = errors.New("malformed verdict")
 
-// ParseVerdict extracts the first {...} span from model output. It tolerates
-// code fences and surrounding prose, normalizes severity, and rejects a
-// missing "relevant" or a relevant verdict with no message.
+// ParseVerdict extracts the JSON object from model output (jsonSpan). It
+// tolerates code fences and surrounding prose, even prose with braces,
+// normalizes severity, and rejects a missing "relevant" or a relevant
+// verdict with no message.
 func ParseVerdict(text string) (Verdict, error) {
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
+	span, ok := jsonSpan(text, "relevant")
+	if !ok {
 		return Verdict{}, fmt.Errorf("%w: no JSON object in %q", ErrMalformed, clipErr(text))
 	}
 	var raw struct {
@@ -25,7 +25,7 @@ func ParseVerdict(text string) (Verdict, error) {
 		Severity string `json:"severity"`
 		Message  string `json:"message"`
 	}
-	if err := json.Unmarshal([]byte(text[start:end+1]), &raw); err != nil {
+	if err := json.Unmarshal([]byte(span), &raw); err != nil {
 		return Verdict{}, fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
 	if raw.Relevant == nil {
