@@ -29,7 +29,8 @@ Linux, but it has not been run on Windows yet.
   names, alternate data streams, junctions). Cloud placeholder files (for example OneDrive
   files that are not downloaded) may be refused as irregular files.
 - **Keybindings:** `setup-keys` edits `%APPDATA%\herdr\config.toml` (or `HERDR_CONFIG_PATH`).
-- **Glyphs:** if the dot symbols show as boxes, set `HERDR_DOTS_ASCII=1` for ASCII stand-ins.
+- **Glyphs:** if the dot symbols show as boxes, set `HERDR_DOTS_ASCII=1` for ASCII stand-ins
+  (dot symbols, section rules, the selection marker and the `…` of cut text).
 - Herdr's own Windows limits apply (no direct terminal attach, no live server handoff).
 - Windows was compiled and unit-tested on macOS only; nothing in this guide has
   been run on a Windows machine. The PowerShell install (`scripts/build.ps1`)
