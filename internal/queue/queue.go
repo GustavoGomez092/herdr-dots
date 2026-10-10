@@ -135,6 +135,11 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("queue %s: %w", path, err)
 	}
 	s.cards, s.next = f.Cards, f.Next
+	for _, c := range s.cards { // a damaged or edited "next" never reuses an id
+		if n, err := strconv.Atoi(c.ID); err == nil && n > s.next {
+			s.next = n
+		}
+	}
 	return s, nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/herdr"
 	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/lockfile"
 	"herdr-dots/internal/paths"
 )
 
@@ -90,10 +91,22 @@ func loadDotsPanes(path string) (map[string]string, error) {
 	return m, nil
 }
 
+// toggleLockWait bounds how long a toggle waits for one already running
+// (each makes at most three Herdr calls; the action's deadline is 15 s).
+const toggleLockWait = 10 * time.Second
+
 func togglePane(ctx context.Context, p paths.Paths, hc herdr.Client, target string) error {
 	if target == "" {
 		return errors.New("focus an agent pane first")
 	}
+	// Two toggles at once (two key presses, two panes) would each write the
+	// map they read and drop the other's pane: the read-modify-write holds
+	// a file lock, across processes.
+	lock, err := lockfile.Acquire(p.DotsPanesFile()+".lock", toggleLockWait)
+	if err != nil {
+		return fmt.Errorf("another toggle-pane is still running: %w", err)
+	}
+	defer lock.Release()
 	m, err := loadDotsPanes(p.DotsPanesFile())
 	if err != nil {
 		return err

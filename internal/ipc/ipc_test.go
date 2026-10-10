@@ -29,6 +29,15 @@ func (f *fakeHandler) Handle(_ context.Context, cmd string, args json.RawMessage
 	}
 	return nil
 }
+
+// calls copies the commands and args the handler goroutines recorded (under
+// f.mu, as they wrote them).
+func (f *fakeHandler) calls() ([]string, []json.RawMessage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.got...), append([]json.RawMessage(nil), f.args...)
+}
+
 func (f *fakeHandler) Snapshot() view.Snapshot { return view.Snapshot{PausedAll: true} }
 func (f *fakeHandler) Watch() (<-chan view.Snapshot, func()) {
 	return f.updates, func() { f.mu.Lock(); f.stopped = true; f.mu.Unlock() }
@@ -55,9 +64,12 @@ func TestCallRoundTripAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	var a AttachArgs
-	_ = json.Unmarshal(h.args[0], &a)
-	if h.got[0] != CmdAttach || a.PaneID != "w1:p1" || a.Slugs[0] != "security" {
-		t.Fatalf("handler got %v %+v", h.got, a)
+	got, args := h.calls()
+	if err := json.Unmarshal(args[0], &a); err != nil {
+		t.Fatal(err)
+	}
+	if got[0] != CmdAttach || a.PaneID != "w1:p1" || len(a.Slugs) != 1 || a.Slugs[0] != "security" {
+		t.Fatalf("handler got %v %+v", got, a)
 	}
 	if err := c.Call(ctx, "explode", nil); err == nil || err.Error() != "boom" {
 		t.Fatalf("want boom, got %v", err)

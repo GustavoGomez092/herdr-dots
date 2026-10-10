@@ -86,7 +86,11 @@ func TestDismissEditAndInjectResolutions(t *testing.T) {
 	if err := r.e.Dismiss(id); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "dismissed", func() bool { return histRuns(hs, "security")[0].Resolution == history.ResDismissed })
+	// The card can be pending before its run's history record is written.
+	eventually(t, "dismissed", func() bool {
+		rs := histRuns(hs, "security")
+		return len(rs) > 0 && rs[0].Resolution == history.ResDismissed
+	})
 
 	r.turnEnds(t, transcript.Turn{User: "more"})
 	eventually(t, "second security card", func() bool {

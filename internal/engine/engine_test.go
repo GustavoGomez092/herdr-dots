@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,13 +73,19 @@ type fakeReader struct {
 	// Optional gate: after arm(), the next Turns call takes its snapshot, signals
 	// entered and blocks until release is closed (a stale in-flight read).
 	armed   bool
+	match   func(context.Context) bool // armFor: only a read whose context matches is held (nil = any)
 	entered chan struct{}
 	release chan struct{}
 }
 
-func (r *fakeReader) arm() {
+func (r *fakeReader) arm() { r.armFor(nil) }
+
+// armFor is arm for the next Turns call whose context matches only, so
+// another reader (attach's catch-up pass, late on a loaded machine) can't
+// take the gate meant for the caller under test.
+func (r *fakeReader) armFor(match func(context.Context) bool) {
 	r.mu.Lock()
-	r.armed, r.entered, r.release = true, make(chan struct{}), make(chan struct{})
+	r.armed, r.match, r.entered, r.release = true, match, make(chan struct{}), make(chan struct{})
 	r.mu.Unlock()
 }
 
@@ -88,11 +95,13 @@ func (r *fakeReader) Source() string {
 	}
 	return transcript.SourceClaude
 }
-func (r *fakeReader) Turns(context.Context) ([]transcript.Turn, error) {
+func (r *fakeReader) Turns(ctx context.Context) ([]transcript.Turn, error) {
 	r.mu.Lock()
 	ts := append([]transcript.Turn(nil), r.turns...)
-	armed, entered, release := r.armed, r.entered, r.release
-	r.armed = false
+	armed, entered, release := r.armed && (r.match == nil || r.match(ctx)), r.entered, r.release
+	if armed {
+		r.armed = false
+	}
 	r.mu.Unlock()
 	if armed {
 		close(entered)
@@ -486,9 +495,13 @@ func TestAttachDoesNotLoseConcurrentAttachmentUpdates(t *testing.T) {
 	r := newRig(t, dot("Security", dots.ModeQueue), dot("Frontend", dots.ModeQueue))
 	r.attach(t, "security")
 	rd := r.readers["s1"]
-	rd.arm()
+	// Gate this Attach's own read: the first Attach's catch-up pass reads
+	// the transcript too, and taking the gate it would skip the race.
+	type attachCtx struct{}
+	ctx := context.WithValue(context.Background(), attachCtx{}, true)
+	rd.armFor(func(c context.Context) bool { return c.Value(attachCtx{}) != nil })
 	done := make(chan error, 1)
-	go func() { done <- r.e.Attach(context.Background(), pane, []string{"frontend"}) }()
+	go func() { done <- r.e.Attach(ctx, pane, []string{"frontend"}) }()
 	select {
 	case <-rd.entered:
 	case <-time.After(3 * time.Second):
@@ -874,9 +887,12 @@ func TestBudgetResetsOnNewAgentSession(t *testing.T) {
 	eventually(t, "new session reviewed despite the old budget", func() bool {
 		return r.be.n() == 2 && r.be.last().Turns[len(r.be.last().Turns)-1].User == "fresh"
 	})
-	if c := r.usage.Calls(pane, "security"); c != 1 {
-		t.Fatalf("usage after reset + one run = %d, want 1", c)
-	}
+	// The run is charged after the backend returns, not when it is called:
+	// wait for the charge (asserting at once flaked under load).
+	eventuallyWhy(t, "usage after reset + one run is 1", func() (bool, string) {
+		c := r.usage.Calls(pane, "security")
+		return c == 1, fmt.Sprintf("usage %d", c)
+	})
 }
 
 // r (Reset) clears the dot's usage counter, so it runs again.

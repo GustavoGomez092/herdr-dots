@@ -251,17 +251,23 @@ func serveConn(ctx context.Context, conn net.Conn, h Handler) {
 		if err := h.Handle(ctx, req.Cmd, req.Args); err != nil {
 			resp.OK, resp.Error = false, err.Error()
 		}
-		if err := enc.Encode(resp); err != nil {
+		if err := writeResponse(conn, enc, resp); err != nil {
 			return
 		}
 	}
+}
+
+// writeResponse writes one reply under writeTimeout.
+func writeResponse(conn net.Conn, enc *json.Encoder, resp Response) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	return enc.Encode(resp)
 }
 
 func stream(ctx context.Context, conn net.Conn, enc *json.Encoder, id int, h Handler) {
 	ch, stop := h.Watch()
 	defer stop()
 	s := h.Snapshot()
-	if enc.Encode(Response{ID: id, OK: true, Snapshot: &s}) != nil {
+	if writeResponse(conn, enc, Response{ID: id, OK: true, Snapshot: &s}) != nil {
 		return
 	}
 	gone := make(chan struct{})
@@ -272,8 +278,11 @@ func stream(ctx context.Context, conn net.Conn, enc *json.Encoder, id int, h Han
 			return
 		case <-gone:
 			return
-		case s := <-ch:
-			if enc.Encode(Response{ID: id, OK: true, Snapshot: &s}) != nil {
+		case s, open := <-ch:
+			if !open { // the engine stopped this watcher
+				return
+			}
+			if writeResponse(conn, enc, Response{ID: id, OK: true, Snapshot: &s}) != nil {
 				return
 			}
 		}
@@ -284,6 +293,11 @@ func stream(ctx context.Context, conn net.Conn, enc *json.Encoder, id int, h Han
 // default: a dot run can take longer (Phase 5).
 var callTimeout = 30 * time.Second
 
+// writeTimeout bounds each reply and snapshot the server writes: a client
+// that stops reading is dropped instead of holding its connection goroutine
+// (and Serve's shutdown wait). A variable so tests can shrink it.
+var writeTimeout = 10 * time.Second
+
 // maxRequestBytes bounds one request line read by the server.
 const maxRequestBytes = 1 << 20
 
@@ -293,6 +307,8 @@ type Client struct{ Path string }
 
 func (c Client) dial(ctx context.Context) (net.Conn, error) { return Dial(ctx, c.Path) }
 
+// Call sends one command and waits for its reply, until ctx's deadline (or
+// callTimeout when it has none); cancelling ctx aborts it with ctx's error.
 func (c Client) Call(ctx context.Context, cmd string, args any) error {
 	conn, err := c.dial(ctx)
 	if err != nil {
@@ -304,6 +320,8 @@ func (c Client) Call(ctx context.Context, cmd string, args any) error {
 		deadline = d
 	}
 	_ = conn.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 	var raw json.RawMessage
 	if args != nil {
 		if raw, err = json.Marshal(args); err != nil {
@@ -311,11 +329,11 @@ func (c Client) Call(ctx context.Context, cmd string, args any) error {
 		}
 	}
 	if err := json.NewEncoder(conn).Encode(Request{ID: 1, Cmd: cmd, Args: raw}); err != nil {
-		return err
+		return ctxErr(ctx, err)
 	}
 	var resp Response
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return err
+		return ctxErr(ctx, err)
 	}
 	if !resp.OK {
 		return errors.New(resp.Error)

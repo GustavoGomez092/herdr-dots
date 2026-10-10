@@ -269,13 +269,30 @@ func TestCouncilStartingDuringAnAskLeavesTheDotOut(t *testing.T) {
 	cb.on("Security", step{wait: wait})
 	cb.on("Frontend", says("warn", "No loading state."))
 	rd := r.readers["s1"]
-	rd.arm()
+	type councilCtx struct{}
+	rd.armFor(func(ctx context.Context) bool { return ctx.Value(councilCtx{}) != nil })
+	// Attach's catch-up pass reads the transcript too, late on a loaded
+	// machine: that read must not stand in for the council's (the flake:
+	// the council then read freely, planned before the ask, and ran
+	// Security until its deadline).
+	decoy := make(chan struct{})
+	go func() { _, _ = rd.Turns(context.Background()); close(decoy) }()
+	select {
+	case <-decoy:
+	case <-time.After(2 * time.Second):
+		t.Fatal("an unrelated transcript read was held as the council's")
+	}
 	type councilOut struct {
 		digest string
 		err    error
 	}
 	cc := make(chan councilOut, 1)
-	go func() { res, err := askCouncilNow(t, r, "ready?"); cc <- councilOut{res.Digest, err} }()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), councilCtx{}, true), 10*time.Second)
+		defer cancel()
+		res, err := r.e.AskCouncil(ctx, pane, "ready?")
+		cc <- councilOut{res.Digest, err}
+	}()
 	<-rd.entered // planned with Security eligible; now reading the transcript
 	asked := make(chan error, 1)
 	go func() { _, err := mcpAsk(t, r, "security", "q", false); asked <- err }()

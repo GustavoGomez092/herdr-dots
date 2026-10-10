@@ -32,6 +32,10 @@ import (
 
 const maxLogBytes = 5 << 20
 
+// engineReadyWait bounds how long ensureEngine waits for a running engine's
+// endpoint; a variable so tests can shrink it.
+var engineReadyWait = 3 * time.Second
+
 func runEngine(args []string) error {
 	fs := flag.NewFlagSet("engine", flag.ContinueOnError)
 	ensure := fs.Bool("ensure", false, "start the engine in the background if it isn't running, then exit")
@@ -55,7 +59,7 @@ func runEngine(args []string) error {
 // already holds the lock, then waits until its endpoint accepts connections.
 func ensureEngine(p paths.Paths) error {
 	if lockfile.Held(p.EngineLock()) {
-		return waitForEndpoint(p.EngineEndpoint(), 3*time.Second)
+		return seeEngineLog(p, waitForEndpoint(p.EngineEndpoint(), engineReadyWait))
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -82,7 +86,16 @@ func ensureEngine(p paths.Paths) error {
 		return fmt.Errorf("start engine: %w", err)
 	}
 	_ = proc.Release()
-	return waitForEndpoint(p.EngineEndpoint(), 5*time.Second)
+	return seeEngineLog(p, waitForEndpoint(p.EngineEndpoint(), 5*time.Second))
+}
+
+// seeEngineLog points a "not ready" error at engine.log, where a crashing
+// engine says why.
+func seeEngineLog(p paths.Paths, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w (see %s)", err, p.EngineLog())
 }
 
 // engineEnv is a detached engine's environment: the caller's, with the
@@ -236,8 +249,15 @@ func historyStoreFor(p paths.Paths) *history.Store {
 	return history.Open(p.HistoryDir())
 }
 
+// engineLockWait is how long a starting engine waits for the session lock.
+// lockfile.Held probes with the real lock, so a client probing at the same
+// instant must not make the new engine exit as if another one were running.
+const engineLockWait = 500 * time.Millisecond
+
+func lockEngine(path string) (*lockfile.Lock, error) { return lockfile.Acquire(path, engineLockWait) }
+
 func serveEngine(p paths.Paths) error {
-	lock, err := lockfile.TryLock(p.EngineLock())
+	lock, err := lockEngine(p.EngineLock())
 	if errors.Is(err, lockfile.ErrLocked) {
 		return nil // another engine owns this session
 	}

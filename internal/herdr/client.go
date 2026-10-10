@@ -81,15 +81,18 @@ func (c *SocketClient) call(ctx context.Context, method string, params any, out 
 		deadline = d
 	}
 	_ = conn.SetDeadline(deadline)
+	// Cancelling ctx ends the exchange at once (with ctx's error).
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 	if params == nil {
 		params = map[string]any{}
 	}
 	if err := json.NewEncoder(conn).Encode(request{ID: "herdr-dots", Method: method, Params: params}); err != nil {
-		return fmt.Errorf("%s: write: %w", method, err)
+		return fmt.Errorf("%s: write: %w", method, ctxOr(ctx, err))
 	}
 	var resp response
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
-		return fmt.Errorf("%s: read: %w", method, err)
+		return fmt.Errorf("%s: read: %w", method, ctxOr(ctx, err))
 	}
 	if resp.Error != nil {
 		return resp.Error
@@ -100,6 +103,15 @@ func (c *SocketClient) call(ctx context.Context, method string, params any, out 
 		}
 	}
 	return nil
+}
+
+// ctxOr is ctx's error once ctx has ended (the i/o error was caused by it),
+// and err otherwise.
+func ctxOr(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 func (c *SocketClient) Ping(ctx context.Context) error { return c.call(ctx, "ping", nil, nil) }
@@ -207,6 +219,9 @@ func (c *SocketClient) Subscribe(ctx context.Context, paneID string) (<-chan Sta
 	fail := func(err error) (<-chan StatusEvent, error) {
 		close(done)
 		conn.Close()
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("events.subscribe: %w", ctx.Err())
+		}
 		return nil, err
 	}
 	timeout := c.Timeout
