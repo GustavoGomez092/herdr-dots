@@ -168,6 +168,6 @@ User gates that remain (the Blockers of `docs/release/ready-to-publish.md`):
 - Live provider checks (Claude, API backends with keys, the `suppressed` repeat).
 - The R1 live check (a repository `apiKeyHelper` must not run; does `CLAUDE.md` still reach dots).
 - Codex live tests and the P10-R8 dotted MCP name check.
-- The Herdr popup and pane checks (Phase 9 popup, memory approve guard, read-only toast, Phase 4 V6).
+- The Herdr popup and pane checks (Phase 9 popup, memory approve guard, the memory screen's export, import and purge for acceptance row 13, read-only toast, Phase 4 V6).
 - PowerShell install tests on a `pwsh` host; the Windows runtime; real cosign.
 - Decisions: U22 (`enter` deletes a deleted dot's memory; keep is recommended), the Claude model setting (X13), old trust entries in `~/.claude.json` (X14), the `dots-test` session.

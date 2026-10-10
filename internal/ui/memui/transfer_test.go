@@ -325,3 +325,107 @@ func TestNewScreensRefuseATooSmallPopup(t *testing.T) {
 		}
 	})
 }
+
+// fakeHome points the home directory at a temp dir on every OS.
+func fakeHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
+}
+
+// fileField is the whole value of the screen's "file:" field, its
+// continuation lines joined back without touching any space in it.
+func fileField(t *testing.T, v string) string {
+	t.Helper()
+	lines := strings.Split(ansi.Strip(v), "\n")
+	for i, l := range lines {
+		if rest, ok := strings.CutPrefix(l, "file: "); ok {
+			for _, c := range lines[i+1:] {
+				more, ok := strings.CutPrefix(c, "      ")
+				if !ok {
+					break
+				}
+				rest += more
+			}
+			return rest
+		}
+	}
+	t.Fatalf("no file: field:\n%s", v)
+	return ""
+}
+
+// Fix round 1: with no working directory given, E defaults to the home
+// directory (the popup's own cwd is the plugin's install directory).
+func TestEmptyCwdDefaultsToHome(t *testing.T) {
+	home := fakeHome(t)
+	m := New(Deps{Store: seed(t), Project: herdrDots})
+	v := press(run(m, m.Init()), "E").View()
+	if got := fileField(t, v); !strings.HasPrefix(got, filepath.Join(home, "herdr-dots-memory-herdr-dots-")) {
+		t.Fatalf("the export default %q is not in the home directory %s", got, home)
+	}
+}
+
+// A leading ~ is the home directory.
+func TestTildeExpandsToHome(t *testing.T) {
+	home := fakeHome(t)
+	m := typePath(press(openAt(seed(t), herdrDots, "", t.TempDir()), "E"), "~/out.toml")
+	if _, err := os.Stat(filepath.Join(home, "out.toml")); err != nil {
+		t.Fatalf("~/out.toml must land in the home directory: %v (status %q)", err, status(m))
+	}
+}
+
+// The file: field shows a path as it is: spaces are kept, and wrapping
+// cuts by display cells.
+func TestPathFieldKeepsSpaces(t *testing.T) {
+	cwd := t.TempDir()
+	m := press(openAt(seed(t), herdrDots, "", cwd), "E", "ctrl+u", "my  exports   v2.toml")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 40})
+	v := m.View()
+	if got, want := fileField(t, v), filepath.Join(cwd, "my  exports   v2.toml"); got != want {
+		t.Fatalf("file: field %q, want %q:\n%s", got, want, v)
+	}
+	screen, _, _ := strings.Cut(v, "enter writes")
+	for _, l := range strings.Split(screen, "\n") {
+		if w := ansi.StringWidth(l); w > 30 {
+			t.Fatalf("line of %d cells at width 30: %q", w, l)
+		}
+	}
+}
+
+// Y imports a preview without secret-looking entries too: capital Y always
+// imports, lowercase y only when nothing looks like a secret.
+func TestCapitalYImportsAPreviewWithoutSecrets(t *testing.T) {
+	st, cwd := memory.Open(filepath.Join(t.TempDir(), "memory"), memory.DefaultLimits()), t.TempDir()
+	f := writeFile(t, cwd, "backup.toml", packAndNote)
+	m := press(typePath(press(openAt(st, herdrDots, "", cwd), "I"), f), "Y")
+	if es, _ := st.List(pid, memory.Filter{Statuses: everyStatus}); len(es) != 2 {
+		t.Fatalf("Y must import (status %q): %+v", status(m), es)
+	}
+}
+
+// A pack name that looks like a secret counts as a secret-looking entry, and
+// a preview with secret hits shows no pack name at all.
+func TestSecretLookingPackNameIsHidden(t *testing.T) {
+	st, cwd := memory.Open(filepath.Join(t.TempDir(), "memory"), memory.DefaultLimits()), t.TempDir()
+	f := writeFile(t, cwd, "pack.toml", "version = 1\n"+
+		"[[entry]]\nscope = \"project\"\nkind = \"convention\"\nstatus = \"proposed\"\nfrom = \"xoxb-2741963580-kq7rt2vw9xz4\"\ntext = \"Plain convention\"\n"+
+		"[[entry]]\nscope = \"project\"\nkind = \"convention\"\nstatus = \"proposed\"\nfrom = \"team\"\ntext = \"Another plain convention\"\n")
+	v := typePath(press(openAt(st, herdrDots, "", cwd), "I"), f).View()
+	if !strings.Contains(v, "1 entry looks like a secret: entry 1") || !strings.Contains(v, "Y imports") {
+		t.Fatalf("a secret-looking pack name must count as a hit:\n%s", v)
+	}
+	if strings.Contains(v, "xoxb") || strings.Contains(v, `"team"`) || !strings.Contains(v, "<hidden>") {
+		t.Fatalf("a preview with secret hits shows pack names as <hidden>:\n%s", v)
+	}
+}
+
+// The purge answer must be the project id exactly: no trimming.
+func TestPurgeAnswerIsComparedExactly(t *testing.T) {
+	st := seed(t)
+	press(openAt(st, herdrDots, "", t.TempDir()), "P", " "+pid, "enter")
+	if es, _ := st.List(pid, memory.Filter{Statuses: everyStatus}); len(es) != 4 {
+		t.Fatalf("an answer with a leading space purged: %+v", es)
+	}
+}

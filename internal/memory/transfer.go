@@ -9,7 +9,7 @@ import (
 // ImportResult reports what an import did. Skipped lines never contain entry text (it may be a secret).
 type ImportResult struct {
 	Added   int      // added or merged
-	Skipped []string // one line per skipped entry or pack, already sanitized
+	Skipped []string // one line per skipped entry or pack; it may quote a store error, so callers sanitize it before display
 }
 
 // NeedsProject reports whether any entry is non-global, so an import of es

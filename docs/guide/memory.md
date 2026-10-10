@@ -40,16 +40,17 @@ first). It is sent as reference data in the user prompt, never as instructions.
 | `e` / `n` | Edit the selected entry / add a new one to the scope you are viewing |
 | `p` | Pin or unpin |
 | `x` / `X` | Forget one entry / forget everything in the scope you are viewing (type its name) |
-| `E` | Export the entries of the scope you are viewing, archived ones too, to a new TOML file (default `herdr-dots-memory-<project>-<YYYYMMDD>.toml`, private to you; an existing file is never overwritten) |
+| `E` | Export the entries of the scope you are viewing, archived ones too, to a new TOML file (default `herdr-dots-memory-<project>-<YYYYMMDD>.toml` in the pane's checkout, or your home directory when the popup doesn't know it; private to you; an existing file is never overwritten). A relative path starts there too; `~` is your home directory |
 | `I` | Import a TOML export: a preview first, then `y` |
 | `P` | Purge all memory of this project (its dots' memory too); type the project id to confirm. Global memory is kept |
 | `/` / `tab` | Filter / switch scope |
 
 **Import confirm rules.** `I` reads the file (at most 4 MiB) and shows a preview before anything
 is stored: the counts by scope and status (for example `1 project proposal from pack "team"`)
-and how many entries look like secrets, by entry number only, never their text. `y` imports;
-when any entry looks like a secret, the preview says so and only `Y` (capital) imports. A file
-with project or dot memory is refused on a screen with no project. Proposals from a dot pack stay
+and how many entries look like secrets (in their text, paths or pack name), by entry number
+only, never their text. `y` or `Y` imports; when any entry looks like a secret, the preview says
+so, shows every pack name as `<hidden>`, and only `Y` (capital) imports. A file with project or
+dot memory is refused on a screen with no project. Proposals from a dot pack stay
 proposals and wait for your approval. In a popup too small to show the whole preview (or the
 export, import or purge screen), the screen says "Too small" and its confirm key does nothing.
 

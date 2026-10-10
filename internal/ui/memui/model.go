@@ -31,7 +31,7 @@ type Deps struct {
 	DotName string
 	Notify  func() // tells the engine memory changed; may be nil
 	Notice  string // shown as the first status line (e.g. why project memory is missing)
-	Cwd     string // where E exports and relative paths resolve; "" uses the process's working directory
+	Cwd     string // where E exports and relative paths resolve; "" uses the home directory (the popup runs in the plugin's install directory)
 }
 
 // errChanged stops approve/pin when the stored text is no longer the text on screen.
@@ -167,7 +167,7 @@ func New(d Deps) Model {
 		views = []scopeView{viewProject, viewAll}
 	}
 	if d.Cwd == "" {
-		d.Cwd, _ = os.Getwd()
+		d.Cwd, _ = os.UserHomeDir()
 	}
 	m := Model{d: d, views: views, input: textinput.New(), path: textinput.New(), status: d.Notice}
 	m.path.Width = m.pathWidth()
@@ -500,15 +500,7 @@ func wrap(s string, w int) []string {
 			if cur != "" {
 				lines, cur, curW = append(lines, cur), "", 0
 			}
-			head, rest, used := word, "", 0
-			for i, r := range word {
-				rw := ansi.StringWidth(string(r))
-				if used+rw > w && i > 0 { // i > 0: always make progress
-					head, rest = word[:i], word[i:]
-					break
-				}
-				used += rw
-			}
+			head, rest := cutCells(word, w)
 			// Per-rune widths can differ from a grapheme cluster's (an emoji
 			// with VS16): a head still too wide is kept whole, and
 			// approveFits, which measures lines, refuses it.
@@ -529,6 +521,37 @@ func wrap(s string, w int) []string {
 		lines = append(lines, cur)
 	}
 	return lines
+}
+
+// cutCells splits s after at most w display cells, at a rune boundary; the
+// head is never empty, so a caller cutting in a loop always makes progress.
+func cutCells(s string, w int) (head, rest string) {
+	used := 0
+	for i, r := range s {
+		rw := ansi.StringWidth(string(r))
+		if used+rw > w && i > 0 {
+			return s[:i], s[i:]
+		}
+		used += rw
+	}
+	return s, ""
+}
+
+// pathField is a labelled path cut into lines of at most w display cells
+// with every character kept (clean would collapse its spaces): control
+// characters are dropped, and a newline or tab shows as \n or \t.
+func pathField(label, p string, w int) []string {
+	pad := strings.Repeat(" ", ansi.StringWidth(label))
+	s := strings.NewReplacer("\n", `\n`, "\t", `\t`).Replace(textutil.SanitizeModelText(p))
+	var lines []string
+	for prefix := label; ; prefix = pad {
+		var head string
+		head, s = cutCells(s, max(1, w-len(pad)))
+		lines = append(lines, prefix+head)
+		if s == "" {
+			return lines
+		}
+	}
 }
 
 // field is a labelled approve-screen value wrapped to w cells, its
@@ -757,7 +780,7 @@ func (m Model) pathScreen(w int) []string {
 	lines = append(lines, wrap(about, w)...)
 	lines = append(lines, m.path.View())
 	if p := m.resolvePath(m.path.Value()); p != "" {
-		lines = append(lines, field("file: ", p, w)...)
+		lines = append(lines, pathField("file: ", p, w)...)
 	}
 	return lines
 }
@@ -818,13 +841,18 @@ func (m Model) export(path string) tea.Cmd {
 
 // writeNew creates path, private to the developer, and writes data to it. An
 // existing path is never overwritten (fs.ErrExist); a failed write leaves no
-// file behind.
+// file behind. The open file is made 0600 through its handle (on Unix that
+// is the whole job, and no path is followed); platform.SecureFile then gives
+// it an owner-only DACL on Windows (on Unix it repeats the 0600).
 func writeNew(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	err = platform.SecureFile(path)
+	err = f.Chmod(0o600)
+	if err == nil {
+		err = platform.SecureFile(path)
+	}
 	if err == nil {
 		_, err = f.Write(data)
 	}
@@ -837,16 +865,25 @@ func writeNew(path string, data []byte) error {
 	return err
 }
 
-// readImport reads and parses the file I names, for the preview.
+// readImport reads and parses the file I names, for the preview. It checks
+// the path is a regular file before opening it (opening a FIFO with no
+// writer would block for ever), and again through the handle in case the
+// path changed in between.
 func readImport(path string) tea.Cmd {
 	return func() tea.Msg {
+		notRegular := importReadMsg{err: fmt.Errorf("%s is not a regular file", path)}
+		if fi, err := os.Stat(path); err != nil {
+			return importReadMsg{err: err}
+		} else if !fi.Mode().IsRegular() {
+			return notRegular
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return importReadMsg{err: err}
 		}
 		defer f.Close()
 		if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-			return importReadMsg{err: fmt.Errorf("%s is not a regular file", path)}
+			return notRegular
 		}
 		data, err := io.ReadAll(io.LimitReader(f, maxImportBytes+1))
 		if err != nil {
@@ -860,10 +897,12 @@ func readImport(path string) tea.Cmd {
 			return importReadMsg{err: err}
 		}
 		// Scanned here, off the UI goroutine: the preview names these
-		// entries by number, never by text.
+		// entries by number, never by text. The pack name (from) is
+		// shown on the preview, so it is scanned too.
 		var hits []int
-		for i := range es {
-			if len(memory.SecretHits(es[i:i+1])) > 0 {
+		for i, e := range es {
+			fromHit, _ := memory.ScanSecrets(e.From)
+			if fromHit || len(memory.SecretHits(es[i:i+1])) > 0 {
 				hits = append(hits, i+1)
 			}
 		}
@@ -888,6 +927,10 @@ func (m Model) importRead(msg importReadMsg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
+// hiddenPack stands for every pack name on a preview with secret-looking
+// entries (pack names are valid slugs, so no real one is spelled this way).
+const hiddenPack = "<hidden>"
 
 // importGroup is one line of the preview's counts.
 type importGroup struct {
@@ -922,7 +965,11 @@ func (g importGroup) say(n int) string {
 	default:
 		s = fmt.Sprintf("%d %s for %s", n, noun, clean(g.dot))
 	}
-	if g.from != "" {
+	switch g.from {
+	case "":
+	case hiddenPack:
+		s += " from pack " + hiddenPack
+	default:
 		s += fmt.Sprintf(" from pack %q", clean(g.from))
 	}
 	return s
@@ -940,7 +987,7 @@ func (m Model) previewScreen(w int) []string {
 	for _, l := range wrap("IMPORT MEMORY?", w) {
 		lines = append(lines, style.Title.Render(l))
 	}
-	lines = append(lines, field("file: ", m.impPath, w)...)
+	lines = append(lines, pathField("file: ", m.impPath, w)...)
 	lines = append(lines, field("into: ", into, w)...)
 	counts := map[importGroup]int{}
 	var order []importGroup
@@ -948,6 +995,9 @@ func (m Model) previewScreen(w int) []string {
 		g := importGroup{scope: e.Scope, dot: e.Dot, from: e.From, status: e.Status}
 		if g.scope == memory.ScopeProject {
 			g.dot = ""
+		}
+		if g.from != "" && len(m.impHits) > 0 {
+			g.from = hiddenPack // a pack name may be the secret
 		}
 		if counts[g] == 0 {
 			order = append(order, g)
@@ -973,20 +1023,16 @@ func (m Model) previewScreen(w int) []string {
 	return lines
 }
 
-// keysImportPreview imports the previewed file on y (Y when entries look
-// like secrets); any other key cancels.
+// keysImportPreview imports the previewed file on Y, or on y when no entry
+// looks like a secret; any other key cancels.
 func (m Model) keysImportPreview(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	fits, es, secret := m.shownWhole(), m.imp, len(m.impHits) > 0
 	m.mode, m.imp, m.impPath, m.impHits = modeBrowse, nil, "", nil
-	yes := "y"
-	if secret {
-		yes = "Y"
-	}
-	switch {
-	case k.String() == "y" && yes == "Y":
+	switch key := k.String(); {
+	case key == "y" && secret:
 		m.status = "nothing imported: entries look like secrets; press Y (capital) on the preview to import them"
 		return m, nil
-	case k.String() != yes:
+	case key != "y" && key != "Y": // Y always imports, y only without secrets
 		m.status = "nothing imported"
 		return m, nil
 	case !fits:
@@ -1061,7 +1107,7 @@ func (m Model) keysConfirmPurge(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "nothing purged: the popup is too small to show the whole confirmation"
 			return m, nil
 		}
-		if strings.TrimSpace(m.path.Value()) != id {
+		if m.path.Value() != id {
 			m.status = fmt.Sprintf("nothing purged: type the project id %s to confirm", id)
 			return m, nil
 		}
