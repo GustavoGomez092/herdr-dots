@@ -25,6 +25,11 @@ type DotAttachment struct {
 
 	MemorySeenTurn int `json:"memory_seen_turn"` // last turn index a memory pass covered
 	MemoryPasses   int `json:"memory_passes"`    // memory passes run for this attachment
+
+	// TurnParser is the transcript.ParserVersion LastSeenTurn counts in; a
+	// file saved before the field existed reads 0 (T1). Optional, so the
+	// attachments kind stays at version 1 and older engines ignore it.
+	TurnParser int `json:"turn_parser,omitempty"`
 }
 
 type Attachment struct {

@@ -415,7 +415,7 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 		// Catch-up: the newest Context.Turns turns count as "new" for this dot
 		// (memory passes start counting from the same place).
 		seen := max(0, len(turns)-d.Context.Turns)
-		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: seen, MemorySeenTurn: seen})
+		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: seen, MemorySeenTurn: seen, TurnParser: transcript.ParserVersion})
 	}
 	// Update-or-create in one store call: runFailed, cooldown or Detach updates
 	// made while the transcript was read are kept, not overwritten.
@@ -693,6 +693,16 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 			d, ok := e.paneDotLocked(paneID, da.Slug)
 			if !ok {
 				continue
+			}
+			if da.TurnParser != transcript.ParserVersion {
+				// T1: LastSeenTurn was counted by an older parser and can
+				// sit above this transcript's turn count, which would absorb
+				// the next real turns. Re-base it once, like the scrollback
+				// upgrade: this pass runs on an idle event, so the last turn
+				// is the one that just finished and is reviewed (at worst
+				// once more); a lower LastSeenTurn is kept.
+				da.LastSeenTurn = min(da.LastSeenTurn, max(0, len(turns)-1))
+				da.TurnParser = transcript.ParserVersion
 			}
 			start := min(da.LastSeenTurn, len(turns))
 			newTurns := turns[start:]
