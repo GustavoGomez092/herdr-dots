@@ -105,11 +105,11 @@ type Model struct {
 	d         Deps
 	target    string
 	snap      view.Snapshot
-	loaded    bool
 	scr       screen
 	cursor    int
 	tcursor   int
 	selected  map[string]bool
+	touched   map[string]bool // boxes the developer set here; the rest follow the pane
 	attached  map[string]bool
 	templates []dots.Dot
 	form      *Form
@@ -131,7 +131,7 @@ type Model struct {
 }
 
 func New(target string, d Deps) Model {
-	m := Model{d: d, target: target, selected: map[string]bool{}, attached: map[string]bool{}, templates: dots.Templates(), prov: newProviders()}
+	m := Model{d: d, target: target, selected: map[string]bool{}, touched: map[string]bool{}, attached: map[string]bool{}, templates: dots.Templates(), prov: newProviders()}
 	if d.MCPStatus != nil {
 		m.mcpStatus = d.MCPStatus()
 	}
@@ -305,7 +305,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.target != "" {
 			// Like a new dot: pre-checked, so enter attaches it (clamped,
 			// as the preview showed).
-			m.selected[msg.slug] = true
+			m.selected[msg.slug], m.touched[msg.slug] = true, true
 		}
 		return m, m.reload()
 	case exportedMsg:
@@ -348,11 +348,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.attached[d.Slug] = true
 			}
 		}
-		if !m.loaded {
-			for s := range m.attached {
+		// Every box the developer hasn't toggled here follows the pane, so a
+		// dot attached or detached elsewhere meanwhile shows as it is and
+		// apply never undoes it (U13).
+		for s := range m.selected {
+			if !m.touched[s] && !m.attached[s] {
+				delete(m.selected, s)
+			}
+		}
+		for s := range m.attached {
+			if !m.touched[s] {
 				m.selected[s] = true
 			}
-			m.loaded = true
 		}
 		m.cursor = max(0, min(m.cursor, len(m.library())-1))
 	case errMsg:
@@ -371,7 +378,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.target != "" && msg.isNew {
 			// Pre-check a dot just created here; an edited dot keeps its state,
 			// so ⏎ never attaches something the user only edited.
-			m.selected[msg.slug] = true
+			m.selected[msg.slug], m.touched[msg.slug] = true, true
 		}
 		return m, m.reload()
 	case deletedMsg:
@@ -449,7 +456,7 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.status = style.Sym("⚠") + " " + style.Clean(d.Name) + " is an untrusted project dot: press T to review it"
 				return m, nil
 			}
-			m.selected[d.Slug] = !m.selected[d.Slug]
+			m.selected[d.Slug], m.touched[d.Slug] = !m.selected[d.Slug], true
 		}
 	case "enter":
 		if m.target == "" {
