@@ -16,10 +16,11 @@ import (
 )
 
 type claudeRecord struct {
-	Type        string `json:"type"`
-	IsSidechain bool   `json:"isSidechain"`
-	IsMeta      bool   `json:"isMeta"`
-	Message     struct {
+	Type             string `json:"type"`
+	IsSidechain      bool   `json:"isSidechain"`
+	IsMeta           bool   `json:"isMeta"`
+	IsCompactSummary bool   `json:"isCompactSummary"` // the summary /compact writes: not a prompt
+	Message          struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
@@ -52,7 +53,7 @@ func ParseClaude(r io.Reader) ([]Turn, error) {
 
 func applyClaude(turns []Turn, line []byte) []Turn {
 	var rec claudeRecord
-	if json.Unmarshal(line, &rec) != nil || rec.IsSidechain || rec.IsMeta {
+	if json.Unmarshal(line, &rec) != nil || rec.IsSidechain || rec.IsMeta || rec.IsCompactSummary {
 		return turns
 	}
 	switch rec.Type {
@@ -85,8 +86,15 @@ func applyClaude(turns []Turn, line []byte) []Turn {
 	return turns
 }
 
-// userPrompt returns the text of a real prompt. Tool results and interrupt
-// markers are not prompts.
+// commandOutput reports a built-in slash command's output echo, which Claude
+// Code records as a user message.
+func commandOutput(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "<local-command-stdout>") || strings.HasPrefix(s, "<local-command-stderr>")
+}
+
+// userPrompt returns the text of a real prompt. Tool results, interrupt
+// markers and slash-command output are not prompts.
 func userPrompt(raw json.RawMessage) (string, bool) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -94,7 +102,7 @@ func userPrompt(raw json.RawMessage) (string, bool) {
 	}
 	if raw[0] == '"' {
 		var s string
-		if json.Unmarshal(raw, &s) != nil || strings.TrimSpace(s) == "" {
+		if json.Unmarshal(raw, &s) != nil || strings.TrimSpace(s) == "" || commandOutput(s) {
 			return "", false
 		}
 		return s, true
@@ -105,7 +113,7 @@ func userPrompt(raw json.RawMessage) (string, bool) {
 		case "tool_result":
 			return "", false
 		case "text":
-			if strings.HasPrefix(b.Text, "[Request interrupted") {
+			if strings.HasPrefix(b.Text, "[Request interrupted") || commandOutput(b.Text) {
 				return "", false
 			}
 			parts = append(parts, b.Text)
