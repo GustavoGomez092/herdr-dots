@@ -111,8 +111,7 @@ The macOS acceptance evidence is in
 [1.0-acceptance.md](1.0-acceptance.md); what the owner still has to do is in
 [ready-to-publish.md](../../release/ready-to-publish.md).
 
-- **Soak.** 8-hour soak: running (started 2026-10-09 18:07 on c1245f9);
-  result recorded by the controller when it ends. The longest completed soak
+- **Soak.** 8-hour soak, first run (2026-10-09 18:07 → 02:18, commit c1245f9, 8 h busy + 10 min idle): **FAIL** on peak RSS, 579.6 MB against the 80 MB budget. Every other budget passed: idle CPU 0.855% (budget 1%), biggest snapshot 262,144 B (budget 262,144 B), worst burst 8.7 broadcasts a second (cap 10), goroutines 20 -> 21; 138,724 runs, 69,362 cards, at most 210 cards on a pane (189 hidden). Cause, found with a live heap profile: the test's fake Herdr server recorded every request it served, forever. After a GC the engine's whole live heap was 8.8 MB at 8 minutes, about half of it that call log, growing linearly. The engine itself does not leak. With the log off (commit f1fdd30), a 20-minute run peaks at 45.3 MB, against 64.6 MB with it. The soak also polled panes every second, three times the engine's real 3 s default; idle CPU is 1.04% at 1 s and 0.33% at 3 s, so the soak now polls at the real default. Second 8-hour run: running (started 2026-10-10 03:16 on f1fdd30); result recorded when it ends. The longest completed soak
   (Task 4, 60 s busy and 30 s idle) passed in 120.12 s: 454 runs, 227 cards,
   117 broadcasts (worst burst 7.1 a second), biggest snapshot 261,793 B
   (budget 262,144 B), peak RSS 33.3 MB, idle CPU 0.443%, goroutines 20 -> 21.

@@ -47,9 +47,9 @@ what is still open.
   rc.1 (deleting a dot keeps its memory unless the developer presses `y`) and is
   now `FIXED POST-RC`.
 
-**Counts** (rows of the full accounting): FIXED T9: 10 · FIXED T10 (pending
-merge): 10 · FIXED EARLIER: 62 · FIXED FINAL: 1 · FIXED POST-RC: 71 · PARTLY FIXED POST-RC: 18 ·
-ACCEPTED: 141 · USER GATE: 20 · USER DECISION: 0 · total 333. A row may group several sub-items of one ledger line that share
+**Counts** (rows of the full accounting): FIXED T9: 10 · FIXED T10: 10 ·
+FIXED EARLIER: 62 · FIXED FINAL: 1 · FIXED POST-RC: 71 · PARTLY FIXED POST-RC: 18 ·
+ACCEPTED: 142 · USER GATE: 20 · USER DECISION: 0 · total 334. A row may group several sub-items of one ledger line that share
 one status and one reason.
 
 **Corrections to the plan's draft of these notes.** Re-reading the ledgers
@@ -302,6 +302,7 @@ phase's final review or fix wave; "parked" is a "Parked → Phase 10" line;
 | Q16 | The CLI gate (`protectNewerFiles`, a dry run) reports files that need a migration as pending but doesn't keep them read-only, so a writing command could rewrite an older-version file without its migration or backup | P10 T7 parked | ACCEPTED | ledger-only acceptance at Task 7: no kind has a migration yet (every kind is at version 1, and a missing version means 1), so no file can be pending; the rule for the first migration is in `CONTRIBUTING.md` and `internal/migrate/kinds.go` |
 | Q17 | Deleting a dot from the manage popup bypasses `CheckWritable` (the read-only gate for files a newer version wrote) | P10 T7 parked | ACCEPTED | ledger-only acceptance at Task 7, the developer's request: deleting is the developer's explicit action on their own dot file |
 | Q18 | The read-only toast said "written by a newer herdr-dots" for failed migrations too | P10 T7 parked | FIXED FINAL | it says "written by a newer herdr-dots, or could not be migrated; see engine.log" (`TestReadOnlyNoticeNamesTheFiles`) |
+| Q19 | `queue.Store.save` re-marshals the whole queue (indented JSON, every card's full text) on every card change: under the soak's load that allocated about 9.5 GB per 10 minutes. CPU and short-lived memory only, nothing kept | 8-hour soak investigation (post-rc) | ACCEPTED | peak RSS stays within budget (45.3 MB at 20 minutes under soak load); a compact or incremental format is a follow-up |
 
 ### 6. IPC and the Herdr client
 
