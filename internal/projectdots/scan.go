@@ -1,7 +1,6 @@
 package projectdots
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -143,15 +142,17 @@ func stampOf(files []dots.ProjectFile, bad []dots.LoadError, haveStore bool, sto
 
 // MaxKeysAndTables caps the keys and tables of one project dot file (H11).
 // dots.PreScanTOML bounds nesting and key paths, not how many there are; no
-// dot needs more than a few dozen. CheckCounts counts every '=' and '['
-// byte, strings included: an upper bound on keys plus tables that costs one
-// pass and never parses.
+// dot needs more than a few dozen. CheckCounts counts the '=' and '[' bytes
+// outside comments and strings (dots.CountKeysAndTables), so code or
+// Markdown in a prompt doesn't count: an upper bound on keys plus tables
+// that costs one pass and never parses.
 const MaxKeysAndTables = 2048
 
 // CheckCounts refuses a file with more than MaxKeysAndTables '=' and '['
-// bytes. Run it before decoding a project dot file.
+// bytes outside comments and strings. Run it before decoding a project dot
+// file.
 func CheckCounts(data []byte) error {
-	if n := bytes.Count(data, []byte("=")) + bytes.Count(data, []byte("[")); n > MaxKeysAndTables {
+	if keys, tables := dots.CountKeysAndTables(data); keys+tables > MaxKeysAndTables {
 		return fmt.Errorf("too many keys or tables (more than %d '=' and '[' characters)", MaxKeysAndTables)
 	}
 	return nil

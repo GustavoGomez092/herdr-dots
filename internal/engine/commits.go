@@ -278,6 +278,10 @@ func (e *Engine) reviewCommit(a state.Attachment, gen uint64, head string, ds []
 			skipped = append(skipped, fmt.Sprintf("dot %s: %s already reviewed for pane %s", d.Slug, label, other))
 			continue
 		}
+		// Record-on-queue (R4): the commit counts as reviewed for this dot
+		// once one pane's run starts, here, before it is queued. A run that
+		// a later gate skips (daily budget or cap, a closed pane) or that
+		// fails is not retried on another pane.
 		h.reviewed = append(h.reviewed, head)
 		if len(h.reviewed) > seenHeads {
 			h.reviewed = slices.Clone(h.reviewed[len(h.reviewed)-seenHeads:])

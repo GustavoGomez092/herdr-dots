@@ -12,7 +12,8 @@ const maxCandidates = 64
 // is unchanged: the span from the first '{' to the last '}', when it parses.
 // When it doesn't (prose braces around the JSON), a string-aware scan takes
 // the one balanced {...} that parses as an object with key at its top level
-// (B1, ruling P8-R7). ok is false with no span at all; with a span that
+// (B1, ruling P8-R7), and only when the key's token appears nowhere else in
+// the text. ok is false with no span at all; with a span that
 // doesn't parse and no single candidate, span is the v1 span (its parse
 // error is the reported one), so two objects never parse as one.
 func jsonSpan(text, key string) (span string, ok bool) {
@@ -40,7 +41,10 @@ func jsonSpan(text, key string) (span string, ok bool) {
 			i = j // an object nested inside a candidate is not another one
 		}
 	}
-	if len(found) == 1 {
+	// The single candidate is taken only when the key appears nowhere else:
+	// a broken second object with the key (the model's real answer after an
+	// example) keeps the v1 span, so it fails closed.
+	if tok := `"` + key + `"`; len(found) == 1 && strings.Count(text, tok) == strings.Count(found[0], tok) {
 		return found[0], true
 	}
 	return span, true

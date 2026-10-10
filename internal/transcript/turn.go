@@ -17,6 +17,12 @@ const (
 	SourceScrollback = "scrollback"
 )
 
+// ParserVersion numbers how the readers split a transcript into turns. Bump
+// it whenever a change renumbers the turns of an existing transcript: the
+// engine stores it per attached dot and re-bases LastSeenTurn once when it
+// differs (T1). 1: compact summaries and slash-command echoes are not turns.
+const ParserVersion = 1
+
 // MaxFieldChars caps each user/assistant field sent to a dot.
 const MaxFieldChars = 8000
 

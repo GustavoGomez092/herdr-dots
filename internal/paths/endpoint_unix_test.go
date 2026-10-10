@@ -141,12 +141,15 @@ func TestSockFallbackRefusesAnExistingDirOthersCanUse(t *testing.T) {
 	}
 }
 
+// XDG_RUNTIME_DIR at the /run/user/<uid> dir (R8: the only place it counts)
+// is used when it is private.
 func TestSockFallbackPrefersAPrivateXDGRuntimeDir(t *testing.T) {
 	tmp, xdg := shortTemp(t), shortTemp(t)
 	if err := os.Chmod(xdg, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	fallbackEnv(t, tmp, xdg)
+	defaultRuntimeDir = func() string { return xdg } // stands in for /run/user/<uid>
 	p := longStatePaths(t)
 	if err := p.Ensure(); err != nil {
 		t.Fatal(err)
@@ -156,6 +159,47 @@ func TestSockFallbackPrefersAPrivateXDGRuntimeDir(t *testing.T) {
 	}
 	if _, err := os.Lstat(uidDir(tmp)); !os.IsNotExist(err) {
 		t.Fatalf("temp fallback dir made although XDG_RUNTIME_DIR is usable: %v", err)
+	}
+}
+
+// R8 (post-rc hardening fix): every client must compute the same socket
+// path whatever its environment. XDG_RUNTIME_DIR counts only when it is the
+// /run/user/<uid> dir itself; set but unusable, or at another usable dir
+// (WSLg's /mnt/wslg/runtime-dir), the path is the one an unset XDG gives.
+func TestSockPathIsTheSameWithOrWithoutAnotherXDGRuntimeDir(t *testing.T) {
+	loose := shortTemp(t)
+	if err := os.Chmod(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wslg := shortTemp(t)
+	if err := os.Chmod(wslg, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	guess := shortTemp(t)
+	if err := os.Chmod(guess, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, runUser := range []string{"", guess} { // /run/user/<uid> missing, then usable
+		for name, xdg := range map[string]string{"unusable": loose, "another usable dir": wslg} {
+			t.Run(name, func(t *testing.T) {
+				tmp := shortTemp(t)
+				fallbackEnv(t, tmp, "")
+				defaultRuntimeDir = func() string { return runUser }
+				p := longStatePaths(t)
+				unset := p.EngineEndpoint()
+				t.Setenv("XDG_RUNTIME_DIR", xdg)
+				if got := p.EngineEndpoint(); got != unset {
+					t.Fatalf("XDG_RUNTIME_DIR=%s gives %s, unset gives %s", xdg, got, unset)
+				}
+				want := uidDir(tmp)
+				if runUser != "" {
+					want = runUser
+				}
+				if filepath.Dir(unset) != want {
+					t.Fatalf("endpoint %s, want it in %s", unset, want)
+				}
+			})
+		}
 	}
 }
 

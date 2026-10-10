@@ -12,6 +12,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/fsutil"
 	"herdr-dots/internal/history"
+	"herdr-dots/internal/lockfile"
 	"herdr-dots/internal/mcpinstall"
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/patchstore"
@@ -121,6 +122,39 @@ func TestBrokenCredentialsAreReportedWithoutTheirText(t *testing.T) {
 	rep, _ := Default().Run(r, Options{})
 	if len(rep.Corrupt) != 1 || strings.Contains(rep.Summary(), "Zq9x") || !strings.Contains(rep.Corrupt[0], "details withheld") {
 		t.Fatalf("report %q", rep.Summary())
+	}
+}
+
+// A credentials migration runs under the lock `keys set` takes
+// (<file>.lock): while the migration holds it, a key update waits.
+func TestCredentialsMigrationTakesTheKeysSetLock(t *testing.T) {
+	_, p := writerTree(t)
+	var lock func(string) string
+	for _, k := range Default().Kinds {
+		if k.Name == "credentials" {
+			lock = k.Lock
+		}
+	}
+	if lock == nil || lock(p.CredentialsFile()) == "" {
+		t.Fatal("the credentials kind has no lock")
+	}
+	held, err := lockfile.TryLock(lock(p.CredentialsFile()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cf := credentials.File{Path: p.CredentialsFile(), Env: func(string) string { return "" }}
+	done := make(chan error, 1)
+	go func() { done <- cf.Set("openai", "sk-proj-"+strings.Repeat("Ab3d", 12)) }()
+	select {
+	case err := <-done:
+		t.Fatalf("keys set ran while the migration held the lock: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("keys set after the lock was released: %v", err)
 	}
 }
 

@@ -112,11 +112,13 @@ type Engine struct {
 	sem chan struct{}
 
 	cfg         atomic.Pointer[config.Config] // current settings; read via e.config()
-	cfgMu       sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked, chairWarned, denyWarned
+	cfgMu       sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked, chairWarned, denyWarned, unknownWarned
 	cfgStamp    string
 	cfgChecked  time.Time
 	chairWarned bool // the "chair needs a model" line was logged for the current settings
 	denyWarned  bool // the "invalid tool_deny_globs" line and toast went out for the current settings
+
+	unknownWarned string // the unknown config.toml keys (comma-joined) last logged and toasted
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
@@ -147,7 +149,7 @@ type Engine struct {
 	projects  map[string]*projectState // by repository root
 	paneRoots map[string]string        // pane id → the checkout it is in (a project dot is checkout + slug)
 	paneSeen  map[string]time.Time     // pane id → when knowPane last saw it (unattached panes are pruned after lookWindow)
-	scanSeq   map[string]uint64        // checkout root → the last scan started (an older scan never installs over a newer one)
+	scanSeq   map[string]uint64        // one key, scanClock (projectdots.go): the engine-wide scan clock; an older scan never installs over a newer one
 	projOn    bool                     // project dots were on at the last rebuild
 
 	// Drafts (draft.go), guarded by mu. Git and patch I/O never happen under mu.
@@ -275,6 +277,7 @@ func New(d Deps) *Engine {
 	e.cfgStamp = configStamp(d.ConfigPath)
 	e.noteChairConfig(cfg)
 	e.noteDenyConfig(cfg)
+	e.noteUnknownConfig(cfg)
 	e.ReloadDots()
 	return e
 }
@@ -412,7 +415,7 @@ func (e *Engine) Attach(ctx context.Context, paneID string, slugs []string) erro
 		// Catch-up: the newest Context.Turns turns count as "new" for this dot
 		// (memory passes start counting from the same place).
 		seen := max(0, len(turns)-d.Context.Turns)
-		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: seen, MemorySeenTurn: seen})
+		add = append(add, state.DotAttachment{Slug: slug, LastSeenTurn: seen, MemorySeenTurn: seen, TurnParser: transcript.ParserVersion})
 	}
 	// Update-or-create in one store call: runFailed, cooldown or Detach updates
 	// made while the transcript was read are kept, not overwritten.
@@ -690,6 +693,16 @@ func (e *Engine) processPaneLocked(paneID string) ([]job, []budgetNote) {
 			d, ok := e.paneDotLocked(paneID, da.Slug)
 			if !ok {
 				continue
+			}
+			if da.TurnParser != transcript.ParserVersion {
+				// T1: LastSeenTurn was counted by an older parser and can
+				// sit above this transcript's turn count, which would absorb
+				// the next real turns. Re-base it once, like the scrollback
+				// upgrade: this pass runs on an idle event, so the last turn
+				// is the one that just finished and is reviewed (at worst
+				// once more); a lower LastSeenTurn is kept.
+				da.LastSeenTurn = min(da.LastSeenTurn, max(0, len(turns)-1))
+				da.TurnParser = transcript.ParserVersion
 			}
 			start := min(da.LastSeenTurn, len(turns))
 			newTurns := turns[start:]

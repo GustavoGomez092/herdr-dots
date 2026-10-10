@@ -74,6 +74,6 @@ turning memory back on and changing the other `memory_*` settings need an engine
 
 ## Deleting a dot's memory
 
-Deleting a dot asks whether to delete its memory in all projects, and `enter`
-answers yes today (a decision still open for the developer). See
+Deleting a dot asks whether to delete its memory in all projects; only `y`
+deletes it, and `enter` or any other key keeps it. See
 [Dots](dots.md#deleting-a-dot).

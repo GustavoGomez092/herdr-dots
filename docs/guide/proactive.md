@@ -24,7 +24,7 @@ the dot's file. `proactive_enabled` in `config.toml` switches all of it off at o
   `memory_auto_approve_project` is on), and you can add a question yourself to steer the next pass:
   `herdr-dots memory add --scope dot --dot <slug> --kind question "…"`.
 - **Web research.** `[research] web = true` gives research passes web tools: web search only (no
-  page fetching) for `claude-cli` dots, search and fetch for `anthropic-api` dots, hosted search for
+  page fetching) for `claude-cli` dots, web search only for `anthropic-api` dots (no page fetching), hosted search for
   `openai-api` dots. Other backends research without the web (the editor says so). `claude-cli`
   research runs `--restricted` (your user and project Claude settings can't add tools or allow
   rules), and secret files (`.env`, keys, `.ssh`, `.aws`, credentials, `.git`, `.claude`, …) are
@@ -32,7 +32,7 @@ the dot's file. `proactive_enabled` in `config.toml` switches all of it off at o
   provider's search service, and the queries are derived from your code and conversation.** The dot
   is told never to put code, secrets or private names in a query, but that is an instruction to a
   model, not a filter. Results are treated as untrusted data. `anthropic-api` and `openai-api` runs
-  stop at 5 paid web uses (searches and fetches) per run, and web searches are counted in the cost
+  stop at 5 paid web uses (searches) per run, and web searches are counted in the cost
   ($0.01 per Anthropic search, $0.025 per OpenAI call, an upper bound). `claude-cli` web use has no
   per-run cap in the plugin; its cost comes from Claude Code's `total_cost_usd` like any other run.
 - **Schedules.** `[schedule] cron = "0 9 * * 1-5"` with a `task` runs the dot on its projects
@@ -59,7 +59,9 @@ the dot's file. `proactive_enabled` in `config.toml` switches all of it off at o
   one review of the commit `HEAD` points at. The first `HEAD` seen after the engine starts or the dot
   is attached is only recorded, going back to a `HEAD` already seen is not reviewed again, and commits
   made while proactive work is off are never reviewed later. A dot attached to two panes reviews a
-  commit once, for the first pane that sees it. A dot gets at most 24 commit reviews a day. Reviews go through the dot's turn filter (pause, cooldown, `file_globs` matched against the
+  commit once, for the first pane that sees it: the commit counts as reviewed once one pane's run
+  starts, so if that run is then skipped (the daily budget or cap, the pane closing) or fails, the
+  other pane doesn't review it. A dot gets at most 24 commit reviews a day. Reviews go through the dot's turn filter (pause, cooldown, `file_globs` matched against the
   commit's files, call and dollar budgets) and arrive like a turn review, in the dot's delivery mode.
   Nothing is installed in your repository: git runs with hooks, fsmonitor, external diff and textconv
   drivers off, submodule diffs kept short and every transport refused, so a repository's own config

@@ -170,6 +170,9 @@ func Load(path string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	for _, k := range md.Undecoded() {
+		if k.String() == "version" {
+			continue // the file's format version (migrations) is never a typo
+		}
 		c.UnknownKeys = append(c.UnknownKeys, k.String())
 	}
 	for name := range c.Providers {

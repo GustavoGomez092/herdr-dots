@@ -28,10 +28,21 @@ const (
 	ClaudeWriteDenied  = "Bash,WebFetch,WebSearch"
 )
 
-// writeSettings is the draft run's --settings: hooks off, and the worktree's
-// .git file and any .claude/ directory (settings, hooks) are not editable
-// even under acceptEdits.
-const writeSettings = `{"disableAllHooks":true,"permissions":{"deny":["Edit(.git)","Write(.git)","Edit(.git/**)","Write(.git/**)","Edit(.claude/**)","Write(.claude/**)","Edit(**/.git)","Write(**/.git)","Edit(**/.claude/**)","Write(**/.claude/**)"]}}`
+// writeDeny are the draft run's Edit/Write denies: the worktree's .git file
+// and any .claude/ directory (settings, hooks) are not editable even under
+// acceptEdits.
+var writeDeny = []string{
+	"Edit(.git)", "Write(.git)", "Edit(.git/**)", "Write(.git/**)", "Edit(.claude/**)", "Write(.claude/**)",
+	"Edit(**/.git)", "Write(**/.git)", "Edit(**/.claude/**)", "Write(**/.claude/**)",
+}
+
+// writeSettingsFor is the draft run's --settings: hooks off, writeDeny, and
+// Read denied outside the repository like a research run (post-rc
+// hardening): the developer's home secrets (homeDeny) and configDir, the
+// herdr-dots config directory that holds credentials.toml ("" adds none).
+func writeSettingsFor(configDir string) string {
+	return settingsJSON(append(append([]string(nil), writeDeny...), outsideReads(configDir)...))
+}
 
 type ClaudeCLI struct {
 	Runner    Runner
@@ -95,15 +106,36 @@ func researchSettings(extra []string, configDir string) string {
 			add("**/" + g)
 		}
 	}
-	for _, g := range homeDeny {
-		add(g)
-	}
-	if configDir != "" {
-		add(absRule(configDir))
-		if real, err := filepath.EvalSymlinks(configDir); err == nil {
-			add(absRule(real)) // macOS: /var is /private/var
+	for _, r := range outsideReads(configDir) {
+		if !seen[r] {
+			seen[r] = true
+			deny = append(deny, r)
 		}
 	}
+	return settingsJSON(deny)
+}
+
+// outsideReads are the Read denies for paths outside the repository: every
+// homeDeny glob, then configDir as an absolute rule plus its
+// symlink-resolved form ("" adds none).
+func outsideReads(configDir string) []string {
+	var deny []string
+	for _, g := range homeDeny {
+		deny = append(deny, "Read("+g+")")
+	}
+	if configDir != "" {
+		deny = append(deny, "Read("+absRule(configDir)+")")
+		if real, err := filepath.EvalSymlinks(configDir); err == nil {
+			if r := "Read(" + absRule(real) + ")"; r != deny[len(deny)-1] {
+				deny = append(deny, r) // macOS: /var is /private/var
+			}
+		}
+	}
+	return deny
+}
+
+// settingsJSON is a --settings value: hooks off and these deny rules.
+func settingsJSON(deny []string) string {
 	type perms struct {
 		Deny []string `json:"deny"`
 	}
@@ -150,7 +182,7 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	research := r.Pass == PassResearch && !WriteMode(r)
 	switch {
 	case WriteMode(r):
-		settings = writeSettings
+		settings = writeSettingsFor(c.ConfigDir)
 	case research, r.RepoRead:
 		// Read deny rules for secret files on every run that has the read
 		// tools (security review R3), not only research.
@@ -191,7 +223,7 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 		// --settings, confines file tools to the working dir and refuses
 		// bypassPermissions. Verified live on Claude Code 2.1.295 (subscription
 		// auth): with a repo allow-Edit/Write rule, a Write to the parent dir
-		// was denied and an inside edit worked; with writeSettings, Write to
+		// was denied and an inside edit worked; with the write settings, Write to
 		// .git and .claude/settings.local.json was denied in a linked worktree.
 		args = append(args, "--restricted")
 		args = append(args, "--tools", ClaudeWriteTools, "--allowedTools", ClaudeWriteAllowed,

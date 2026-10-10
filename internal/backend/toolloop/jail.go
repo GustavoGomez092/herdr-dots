@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 
 	"herdr-dots/internal/platform"
 )
@@ -37,31 +39,56 @@ var DefaultDeny = []string{
 // deny glob, at the root or in any subdirectory. Unmatchable globs are skipped.
 // Matching uses full Unicode case folding on both sides (APFS folds ſ to s and
 // ß to ss, so ".ENV" and "id_rſa" open the real files); over-denying is the
-// safe side. ResolveInRoot adds a second layer: exact on-disk spellings only.
+// safe side. Both sides are also tried in NFC and NFD form, so a non-ASCII
+// glob denies a name stored decomposed (macOS) or composed alike (G5).
+// ResolveInRoot adds a second layer: exact on-disk spellings only.
 func Denied(rel string, globs []string) bool {
-	rel = fold(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
+	rels := forms(fold(strings.TrimPrefix(filepath.ToSlash(rel), "./")))
 	for _, g := range globs {
-		g = fold(g)
-		if ok, _ := doublestar.Match(g, rel); ok {
-			return true
-		}
-		if !strings.HasPrefix(g, "**/") {
-			if ok, _ := doublestar.Match("**/"+g, rel); ok {
-				return true
-			}
-		}
-		// A denied directory denies itself too (list_files on ".git").
-		if strings.HasSuffix(g, "/**") {
-			dir := strings.TrimSuffix(g, "/**")
-			if ok, _ := doublestar.Match(dir, rel); ok {
-				return true
-			}
-			if ok, _ := doublestar.Match("**/"+strings.TrimPrefix(dir, "**/"), rel); ok {
-				return true
+		for _, g := range forms(fold(g)) {
+			for _, rel := range rels {
+				if deniedBy(g, rel) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// deniedBy is one glob against one name: at the root or at any depth, and a
+// denied directory denies itself too (list_files on ".git").
+func deniedBy(g, rel string) bool {
+	if ok, _ := doublestar.Match(g, rel); ok {
+		return true
+	}
+	if !strings.HasPrefix(g, "**/") {
+		if ok, _ := doublestar.Match("**/"+g, rel); ok {
+			return true
+		}
+	}
+	if strings.HasSuffix(g, "/**") {
+		dir := strings.TrimSuffix(g, "/**")
+		if ok, _ := doublestar.Match(dir, rel); ok {
+			return true
+		}
+		if ok, _ := doublestar.Match("**/"+strings.TrimPrefix(dir, "**/"), rel); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// forms is s as given, in NFC and in NFD form, without repeats (ASCII is
+// one entry).
+func forms(s string) []string {
+	out := []string{s}
+	for _, f := range []string{norm.NFC.String(s), norm.NFD.String(s)} {
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // fold applies Unicode case folding. A fresh folder per call: they are stateful.

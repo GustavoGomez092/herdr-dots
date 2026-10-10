@@ -33,6 +33,7 @@ func TestTwoCandidateObjectsStayMalformed(t *testing.T) {
 		`Example {"relevant":false} then {"relevant":true,"severity":"critical","message":"real"} {x}`,
 		`{"relevant":true,"message":"a"} {oops} {"relevant":true,"message":"b"}`,
 		`no object {here} at all {`,
+		`Format: {"relevant": true, "message": "..."}. My answer: {"relevant": false, "message": "none",}`,
 	} {
 		if _, err := ParseVerdict(text); !errors.Is(err, ErrMalformed) {
 			t.Errorf("ParseVerdict(%q) err = %v, want ErrMalformed", text, err)
@@ -40,5 +41,9 @@ func TestTwoCandidateObjectsStayMalformed(t *testing.T) {
 	}
 	if _, err := ParseMemoryOps(`{"remember":[]} {x} {"remember":[]}`); !errors.Is(err, ErrMalformed) {
 		t.Errorf("two memory objects: err = %v", err)
+	}
+	example := `Example: {"remember":[{"op":"add","scope":"dot","kind":"note","text":"example text"}]} Real: {"remember": [],}`
+	if ops, err := ParseMemoryOps(example); !errors.Is(err, ErrMalformed) {
+		t.Errorf("example object then a broken real one: ops = %+v, err = %v, want ErrMalformed", ops, err)
 	}
 }

@@ -89,6 +89,35 @@ func PreScanTOML(data []byte) error {
 	return nil
 }
 
+// CountKeysAndTables counts the '=' and '[' bytes outside comments and all
+// four kinds of TOML string, skipped exactly as PreScanTOML skips them: an
+// upper bound on a file's keys and tables that never parses (H11). From an
+// unterminated string on, every byte counts, so the bound still holds.
+func CountKeysAndTables(data []byte) (keys, tables int) {
+	s := string(data)
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '#':
+			j := strings.IndexByte(s[i:], '\n')
+			if j < 0 {
+				return keys, tables
+			}
+			i += j
+		case '"', '\'':
+			end := tomlStringEnd(s, i)
+			if end < 0 {
+				return keys + strings.Count(s[i:], "="), tables + strings.Count(s[i:], "[")
+			}
+			i = end - 1
+		case '=':
+			keys++
+		case '[':
+			tables++
+		}
+	}
+	return keys, tables
+}
+
 func bareKeyByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 }

@@ -41,6 +41,17 @@ func TestLoadRecordsUnknownKeysAndProviders(t *testing.T) {
 	}
 }
 
+// The file's format version (written by migrations) is never a typo.
+func TestLoadNeverFlagsVersion(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte("version = 1\nmax_parallel_runs = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := Load(p); err != nil || c.UnknownKeys != nil {
+		t.Fatalf("unknown keys = %q, err %v", c.UnknownKeys, err)
+	}
+}
+
 func TestLoadWithOnlyKnownKeysRecordsNone(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
 	body := "max_parallel_runs = 5\n[mcp]\ntools = []\n[providers.ollama]\nbase_url = \"http://localhost:11434\"\n[providers.openai.extra_headers]\nX-Org = \"o\"\n"
