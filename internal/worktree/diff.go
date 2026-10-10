@@ -38,6 +38,9 @@ type Patch struct {
 	Bytes   int
 	Flags   []string
 	Changes []Change
+	// Truncated: CaptureMax cut Diff at its cap (Bytes is then cap+1).
+	// Validate rejects such a patch as too large; it is never applied.
+	Truncated bool
 }
 
 // Paths returns the changed paths in diff order.
@@ -61,7 +64,14 @@ func (p Patch) Paths() []string {
 //
 // The Git parameter is unused (the draft's own runner, inside co, does the
 // work) and kept so callers need not change.
-func Capture(ctx context.Context, _ Git, co Checkout, s Snapshot) (Patch, error) {
+func Capture(ctx context.Context, g Git, co Checkout, s Snapshot) (Patch, error) {
+	return CaptureMax(ctx, g, co, s, 0)
+}
+
+// CaptureMax is Capture keeping at most maxBytes+1 bytes of the patch text
+// (0 = no cap): git's output past that is read and dropped, never buffered.
+// A longer patch comes back Truncated, for Validate to reject as too large.
+func CaptureMax(ctx context.Context, _ Git, co Checkout, s Snapshot, maxBytes int) (Patch, error) {
 	kept, err := restoreDefanged(co)
 	if err != nil {
 		return Patch{}, fmt.Errorf("restore symlinks: %w", err)
@@ -96,7 +106,11 @@ func Capture(ctx context.Context, _ Git, co Checkout, s Snapshot) (Patch, error)
 	if err != nil {
 		return Patch{}, err
 	}
-	diff, err := co.GitOutput(ctx, with("--binary")...)
+	capped := co
+	if maxBytes > 0 {
+		capped.git.MaxOutput = maxBytes + 1
+	}
+	diff, err := capped.GitOutput(ctx, with("--binary")...)
 	if err != nil {
 		return Patch{}, err
 	}
@@ -105,7 +119,7 @@ func Capture(ctx context.Context, _ Git, co Checkout, s Snapshot) (Patch, error)
 		return Patch{}, err
 	}
 	counts := parseNumstat(num)
-	p := Patch{Diff: diff, Files: len(changes), Bytes: len(diff)}
+	p := Patch{Diff: diff, Files: len(changes), Bytes: len(diff), Truncated: maxBytes > 0 && len(diff) > maxBytes}
 	add, del := 0, 0
 	flags := map[string]bool{}
 	for i := range changes {
