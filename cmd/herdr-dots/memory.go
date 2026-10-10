@@ -179,15 +179,67 @@ func (c *memCLI) project(arg string) (memory.Project, error) {
 	dir := arg
 	if dir == "" {
 		dir = c.cwd
+	} else if !filepath.IsAbs(dir) && c.cwd != "" {
+		dir = filepath.Join(c.cwd, dir)
 	}
-	if m, ok, err := c.store.FindProject(dir); err == nil && ok {
+	// Git first: a repository's g- id is the project, even when it sits inside
+	// another recorded project (a vendored repo or submodule nobody attached
+	// yet) or under a stale deeper path project. The recorded roots are only
+	// asked for a path identity (no repository, git missing), where a recorded
+	// project (say, a moved or not-yet-committed checkout) beats a fresh
+	// path hash, but only one recorded inside the repository the path
+	// belongs to (insideRepoBoundary), never an outer project.
+	pr, err := c.resolve(dir)
+	if strings.HasPrefix(pr.ID, "g-") {
+		return pr, nil
+	}
+	if m, ok, ferr := c.store.FindProject(dir); ferr == nil && ok && insideRepoBoundary(m, dir) {
 		return memory.Project{ID: m.ID, Name: m.Name}, nil
 	}
-	pr, err := c.resolve(dir)
 	if pr.ID == "" {
 		return pr, fmt.Errorf("can't identify the project for %s: %v", dir, err)
 	}
 	return pr, nil
+}
+
+// insideRepoBoundary reports whether recorded project m may stand for dir
+// when git gave dir only a path identity (no commits, a shallow clone, git
+// failing or timing out). The nearest directory at or above dir that holds a
+// .git entry is the repository dir belongs to; a recorded root above it is
+// another (outer) project and doesn't count. With no .git on the way up, any
+// recorded root that holds dir counts, as before.
+func insideRepoBoundary(m memory.ProjectMeta, dir string) bool {
+	real := realDir(dir)
+	boundary := ""
+	for d := real; ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			boundary = d
+			break
+		}
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	for _, r := range m.Roots {
+		holds := real == r || strings.HasPrefix(real, r+string(filepath.Separator))
+		atOrBelow := boundary == "" || r == boundary || strings.HasPrefix(r, boundary+string(filepath.Separator))
+		if holds && atOrBelow {
+			return true
+		}
+	}
+	return false
+}
+
+// realDir is dir made absolute with symlinks resolved, as the store records
+// project roots (a path that doesn't exist is only cleaned).
+func realDir(dir string) string {
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		return r
+	}
+	return filepath.Clean(dir)
 }
 
 func (c *memCLI) pidFor(sc memory.Scope, project string) (string, error) {
@@ -806,6 +858,16 @@ func (c *memCLI) purge(args []string) error {
 	}
 	if f.project == "" {
 		return errors.New("purge: --project is required (a path or an id)")
+	}
+	if !memory.ValidProjectID(f.project) {
+		// A mistyped path must not resolve to whatever project holds it.
+		p := f.project
+		if !filepath.IsAbs(p) && c.cwd != "" {
+			p = filepath.Join(c.cwd, p)
+		}
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("purge: %s doesn't exist (give an existing path, or the project id from `memory projects`)", f.project)
+		}
 	}
 	pr, err := c.project(f.project)
 	if err != nil {

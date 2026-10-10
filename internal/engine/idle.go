@@ -182,7 +182,7 @@ func (e *Engine) maybeResearch(a state.Attachment, now time.Time) {
 	gen := e.gens[a.PaneID] // the attachment these runs are for
 	for _, da := range a.Dots {
 		d, ok := e.paneDotLocked(a.PaneID, da.Slug)
-		if !ok || !d.Research.Enabled {
+		if !ok || !d.Research.Enabled || cfg.RepoToolsOff() { // an invalid deny glob: research is off (P10-R7)
 			continue
 		}
 		k := key{a.PaneID, da.Slug}

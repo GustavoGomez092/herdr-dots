@@ -112,10 +112,11 @@ type Engine struct {
 	sem chan struct{}
 
 	cfg         atomic.Pointer[config.Config] // current settings; read via e.config()
-	cfgMu       sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked, chairWarned
+	cfgMu       sync.Mutex                    // leaf lock: guards cfgStamp, cfgChecked, chairWarned, denyWarned
 	cfgStamp    string
 	cfgChecked  time.Time
 	chairWarned bool // the "chair needs a model" line was logged for the current settings
+	denyWarned  bool // the "invalid tool_deny_globs" line and toast went out for the current settings
 
 	paneMu map[string]*sync.Mutex // per-pane; guarded by mu
 
@@ -273,6 +274,7 @@ func New(d Deps) *Engine {
 	e.cfg.Store(&cfg)
 	e.cfgStamp = configStamp(d.ConfigPath)
 	e.noteChairConfig(cfg)
+	e.noteDenyConfig(cfg)
 	e.ReloadDots()
 	return e
 }
@@ -878,6 +880,9 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 			return // no project: the pass's ops could not be stored, so skip the call
 		}
 		req.Pass, req.RepoRead, req.Question, req.Force = backend.PassMemory, false, "", false
+	}
+	if e.config().RepoToolsOff() {
+		req.RepoRead = false // an invalid deny glob: no run reads the repository (P10-R7)
 	}
 	ctx, cancel := context.WithTimeout(base, e.config().RunTimeout())
 	defer cancel()

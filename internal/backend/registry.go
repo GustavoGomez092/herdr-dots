@@ -90,6 +90,6 @@ func NewWith(kind string, o Options) (Backend, error) {
 func New(kind string, r Runner) (Backend, error) { return NewWith(kind, Options{Runner: r}) }
 
 func init() {
-	Register(KindClaudeCLI, func(o Options) (Backend, error) { return ClaudeCLI{Runner: o.Runner}, nil })
+	Register(KindClaudeCLI, func(o Options) (Backend, error) { return ClaudeCLI{Runner: o.Runner, Deny: o.Deny}, nil })
 	Register(KindCodexCLI, func(o Options) (Backend, error) { return CodexCLI{Runner: o.Runner}, nil })
 }

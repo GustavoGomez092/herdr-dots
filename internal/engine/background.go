@@ -329,7 +329,7 @@ func (e *Engine) runBackground(j bgJob) {
 	mem := e.loadMemory(&att, j.dot, j.turns) // memory goes in the user prompt only
 	req := requestFor(j.dot, j.cwd)
 	req.Turns, req.Question, req.Memory, req.Learn = j.turns, j.question, mem.block, mem.learn
-	req.RepoRead = j.cwd != "" && (j.kind != state.RunCommit || j.dot.Context.RepoRead)
+	req.RepoRead = j.cwd != "" && (j.kind != state.RunCommit || j.dot.Context.RepoRead) && !e.config().RepoToolsOff()
 	switch j.kind {
 	case state.RunResearch:
 		req.Pass = backend.PassResearch // read-only, like a review (draft_astguard_test.go allows exactly this)
@@ -761,6 +761,9 @@ func (e *Engine) nextLocked(d dots.Dot, paneID string, now time.Time) string {
 	}
 	if e.dailyClosedLocked(now) || OverUSD(e.todayLocked(now).CostUSD, dailyBudget(e.config().DailyBudgetUSD)) {
 		return "paused · daily budget"
+	}
+	if d.Research.Enabled && e.config().RepoToolsOff() {
+		return researchOffHint
 	}
 	if s := e.researchNextLocked(d, paneID, now); s != "" {
 		return s

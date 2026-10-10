@@ -1167,13 +1167,19 @@ func (s *Store) FindProject(arg string) (ProjectMeta, bool, error) {
 			}
 		}
 	} else {
+		// The deepest matching root wins: a repository nested inside another
+		// one (a submodule, a vendored checkout) is its own project.
 		real := realPath(arg)
-		for _, p := range ps {
+		best, bestLen := -1, -1
+		for i, p := range ps {
 			for _, r := range p.Roots {
-				if real == r || strings.HasPrefix(real, r+string(filepath.Separator)) {
-					return p, true, nil
+				if (real == r || strings.HasPrefix(real, r+string(filepath.Separator))) && len(r) > bestLen {
+					best, bestLen = i, len(r)
 				}
 			}
+		}
+		if best >= 0 {
+			return ps[best], true, nil
 		}
 	}
 	// Nothing matched: say why instead of claiming there is no memory.

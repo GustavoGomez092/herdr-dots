@@ -35,6 +35,7 @@ type ClaudeCLI struct {
 	Runner  Runner
 	Bin     string          // default "claude"
 	Environ func() []string // default os.Environ
+	Deny    []string        // extra deny globs (config tool_deny_globs) for research runs
 }
 
 func (c ClaudeCLI) Kind() string { return "claude-cli" }
@@ -65,12 +66,14 @@ const hooklessSettings = `{"disableAllHooks":true}`
 
 // researchSettings is a research pass's --settings: hooks off, and Read
 // denied for every secret file the API tools deny (toolloop.DefaultDeny),
-// the agent configuration drafts may not touch (toolloop.DraftDeny), and
-// credential files under any name. Each glob is denied at the root and at
+// the agent configuration drafts may not touch (toolloop.DraftDeny),
+// credential files under any name, and the developer's extra globs (config
+// tool_deny_globs, ruling P10-R7). Each glob is denied at the root and at
 // any depth, like toolloop.Denied.
-var researchSettings = func() string {
+func researchSettings(extra []string) string {
 	globs := append(append([]string(nil), toolloop.DefaultDeny...), toolloop.DraftDeny...)
 	globs = append(globs, "credentials*")
+	globs = append(globs, extra...)
 	var deny []string
 	seen := map[string]bool{}
 	add := func(g string) {
@@ -93,10 +96,10 @@ var researchSettings = func() string {
 		Permissions     perms `json:"permissions"`
 	}{true, perms{deny}})
 	if err != nil {
-		panic(err) // static data: never fails
+		panic(err) // strings only: never fails
 	}
 	return string(b)
-}()
+}
 
 // BuildCmd: print mode, JSON output, no saved session, no MCP servers, hooks
 // disabled (so Herdr's integration hooks never fire for a dot), read-only tools.
@@ -115,7 +118,7 @@ func (c ClaudeCLI) BuildCmd(r Request) Cmd {
 	case WriteMode(r):
 		settings = writeSettings
 	case research:
-		settings = researchSettings
+		settings = researchSettings(c.Deny)
 	}
 	settingsArg, promptFlag, promptArg := settings, "--append-system-prompt", sys
 	shim := false

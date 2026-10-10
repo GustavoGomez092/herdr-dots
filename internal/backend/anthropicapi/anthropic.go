@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -77,6 +79,38 @@ func (b *Backend) client() (anthropic.Client, string, error) {
 	return anthropic.NewClient(opts...), key, nil
 }
 
+// known is what credentials.Redact must remove by value from an error: the
+// key from credentials.toml, or, on the SDK's own chain (key ""), the
+// environment values that chain reads (API key, auth token, federation
+// identity token, custom header values), which may have no key shape Redact
+// knows (ruling P10-R7). They are never the returned key. Tokens the SDK
+// reads from files (an `ant auth` profile, ANTHROPIC_IDENTITY_TOKEN_FILE) or
+// gets by exchange are not covered (a known issue).
+func (b *Backend) known(key string) []string {
+	if key != "" {
+		return []string{key}
+	}
+	if !b.o.SDKCreds {
+		return nil
+	}
+	var out []string
+	for _, name := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_IDENTITY_TOKEN"} {
+		if v := os.Getenv(name); v != "" {
+			out = append(out, v)
+		}
+	}
+	// ANTHROPIC_CUSTOM_HEADERS holds "Name: value" lines; a value can be a
+	// gateway key. (Redact ignores values under 8 characters.)
+	for _, line := range strings.Split(os.Getenv("ANTHROPIC_CUSTOM_HEADERS"), "\n") {
+		if _, v, ok := strings.Cut(line, ":"); ok {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
 // Check validates the key with the cheapest call: list one model.
 func (b *Backend) Check(ctx context.Context) error {
 	c, key, err := b.client()
@@ -84,7 +118,7 @@ func (b *Backend) Check(ctx context.Context) error {
 		return err
 	}
 	_, err = c.Models.List(ctx, anthropic.ModelListParams{Limit: anthropic.Int(1)})
-	return mapErr(err, key, "")
+	return mapErr(err, b.known(key), "")
 }
 
 // CheckModel confirms r.Model (or the default) is available to this key.
@@ -98,7 +132,7 @@ func (b *Backend) CheckModel(ctx context.Context, r backend.Request) error {
 		return err
 	}
 	_, err = c.Models.Get(ctx, model, anthropic.ModelGetParams{})
-	return mapErr(err, key, model)
+	return mapErr(err, b.known(key), model)
 }
 
 // Models lists the model ids this key can use.
@@ -112,7 +146,7 @@ func (b *Backend) Models(ctx context.Context, _ backend.Request) ([]string, erro
 	for pager.Next() {
 		ids = append(ids, pager.Current().ID)
 	}
-	return ids, mapErr(pager.Err(), key, "")
+	return ids, mapErr(pager.Err(), b.known(key), "")
 }
 
 // Run reviews one turn. Request shape: model, max_tokens, the system prompt
@@ -242,10 +276,10 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 		}
 		if err != nil {
 			if u == (pricing.Usage{}) {
-				return toolloop.Reply{}, mapErr(err, key, model)
+				return toolloop.Reply{}, mapErr(err, b.known(key), model)
 			}
 			// Calls already paid for (earlier pauses) keep their spend.
-			return toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}, mapErr(err, key, model)
+			return toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}, mapErr(err, b.known(key), model)
 		}
 		reply := toolloop.Reply{Usage: u, CostUSD: usd, CostKnown: known, Model: served}
 		if resp.StopReason == anthropic.BetaStopReasonRefusal {
@@ -297,7 +331,7 @@ func requiredOf(schema map[string]any) []string {
 }
 
 // mapErr turns SDK errors into actionable, redacted run errors.
-func mapErr(err error, key, model string) error {
+func mapErr(err error, known []string, model string) error {
 	if err == nil {
 		return nil
 	}
@@ -316,10 +350,10 @@ func mapErr(err error, key, model string) error {
 		case code == 529 || code >= 500:
 			return fmt.Errorf("provider overloaded (anthropic %d, after retries)", code)
 		default:
-			return fmt.Errorf("anthropic rejected the request (%d): %s", code, clip(credentials.Redact(apierr.Error(), key), 300))
+			return fmt.Errorf("anthropic rejected the request (%d): %s", code, clip(credentials.Redact(apierr.Error(), known...), 300))
 		}
 	}
-	msg := errors.New(clip(credentials.Redact(err.Error(), key), 300))
+	msg := errors.New(clip(credentials.Redact(err.Error(), known...), 300))
 	if platform.ConnRefused(err) {
 		return backend.MarkUnreachable(msg)
 	}

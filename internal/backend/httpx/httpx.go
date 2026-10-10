@@ -38,7 +38,7 @@ func (e *StatusError) Error() string {
 
 // Client sends JSON requests.
 type Client struct {
-	HTTP    *http.Client      // nil → http.DefaultClient
+	HTTP    *http.Client      // nil → a client that follows redirects only to the same host and scheme (SameHostClient)
 	Headers map[string]string // sent on every request
 	Retries int               // extra attempts on 408/409/429/5xx and network errors
 	Secret  string            // redacted from every error
@@ -218,12 +218,13 @@ func SameHostClient() *http.Client {
 }
 
 // SameHostRedirect is an http.Client CheckRedirect policy: follow at most 10
-// redirects, and only to the original host.
+// redirects, and only to the original host with the original scheme (an
+// https → http hop on the same host would send the key in clear text).
 func SameHostRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
-	if req.URL.Host != via[0].URL.Host {
+	if req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme {
 		return http.ErrUseLastResponse
 	}
 	return nil
