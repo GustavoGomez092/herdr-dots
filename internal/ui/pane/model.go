@@ -472,7 +472,7 @@ func trunc(s string, n int) string {
 
 func rule(title string, w int) string {
 	d := style.Sym("─")
-	return style.Dim.Render(d+d+" "+title+" "+strings.Repeat(d, max(0, w-len(title)-4))) + "\n"
+	return style.Dim.Render(trunc(d+d+" "+title+" "+strings.Repeat(d, max(0, w-len(title)-4)), w)) + "\n"
 }
 
 const helpText = `j/k move   tab roster/queue   t next agent
@@ -598,7 +598,7 @@ func (m Model) View() string {
 		glyph := style.Sym(c.Glyph)
 		room := max(10, w) - lipgloss.Width(marker+glyph+" "+label+"  ")
 		who := trunc(fmt.Sprintf("%s · %s%s", oneLine(c.DotName), cardWhere(c), tags), max(1, room))
-		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", marker, glyph, style.Severity(c.Severity).Render(label), who))
+		b.WriteString(trunc(fmt.Sprintf("%s%s %s  %s", marker, glyph, style.Severity(c.Severity).Render(label), who), w) + "\n")
 		text := patchText(c)
 		if !sel {
 			text = trunc(strings.ReplaceAll(text, "\n", " "), max(20, w*2))
