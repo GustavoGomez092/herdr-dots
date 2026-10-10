@@ -4,9 +4,12 @@
 package keys
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -102,12 +105,18 @@ func Plan(want []Binding, existing map[string]string) (add, already []Binding, c
 		builtin[k] = true
 	}
 	for _, b := range want {
-		if cur, ok := existing[b.Key]; ok {
-			if cur == b.Action {
-				already = append(already, b)
-			} else {
-				conflicts = append(conflicts, Conflict{Binding: b, With: cur})
-			}
+		cur, ok := existing[b.Key]
+		if ok && cur == b.Action {
+			already = append(already, b)
+			continue
+		}
+		if k := boundKey(existing, b.Action); k != "" { // bound to another key: never a second one
+			b.Key = k
+			already = append(already, b)
+			continue
+		}
+		if ok {
+			conflicts = append(conflicts, Conflict{Binding: b, With: cur})
 			continue
 		}
 		if builtin[b.Key] {
@@ -117,6 +126,21 @@ func Plan(want []Binding, existing map[string]string) (add, already []Binding, c
 		add = append(add, b)
 	}
 	return add, already, conflicts
+}
+
+// boundKey is the first key (sorted) that already runs action, or "".
+func boundKey(existing map[string]string, action string) string {
+	var ks []string
+	for k, cmd := range existing {
+		if cmd == action {
+			ks = append(ks, k)
+		}
+	}
+	sort.Strings(ks)
+	if len(ks) == 0 {
+		return ""
+	}
+	return ks[0]
 }
 
 func Block(bs []Binding) string {
@@ -149,9 +173,39 @@ func Append(path string, bs []Binding, now time.Time) (string, error) {
 	if _, err := toml.Decode(next, &check); err != nil {
 		return "", fmt.Errorf("adding the keybindings would make %s invalid TOML (%v); nothing changed: add them by hand", path, err)
 	}
-	backup := path + ".bak-" + now.Format("20060102-150405")
-	if err := os.WriteFile(backup, orig, 0o600); err != nil {
-		return "", err
+	backup := ""
+	if orig != nil { // no config yet: nothing to back up
+		if backup, err = writeBackup(path+".bak-"+now.Format("20060102-150405"), orig); err != nil {
+			return "", err
+		}
 	}
 	return backup, fsutil.WriteFileAtomic(path, []byte(next), mode)
+}
+
+// writeBackup writes data to base, or base-2, base-3, … when an earlier run
+// in the same second took the name: a backup is never overwritten.
+func writeBackup(base string, data []byte) (string, error) {
+	for i := 1; i <= 100; i++ {
+		name := base
+		if i > 1 {
+			name = fmt.Sprintf("%s-%d", base, i)
+		}
+		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, werr := f.Write(data)
+		if cerr := f.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			_ = os.Remove(name)
+			return "", werr
+		}
+		return name, nil
+	}
+	return "", fmt.Errorf("no free backup name next to %s", base)
 }

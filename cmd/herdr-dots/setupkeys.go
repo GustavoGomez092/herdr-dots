@@ -52,7 +52,7 @@ func runSetupKeys(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Appended. Backup: %s\n", backup)
+	fmt.Println(appendedLine(backup))
 	bin := os.Getenv("HERDR_BIN_PATH")
 	if bin == "" {
 		bin = "herdr"
@@ -63,6 +63,15 @@ func runSetupKeys(args []string) error {
 		fmt.Println("Herdr config reloaded.")
 	}
 	return nil
+}
+
+// appendedLine reports where the original config was saved ("" when there
+// was no config yet, so nothing to back up).
+func appendedLine(backup string) string {
+	if backup == "" {
+		return "Appended. There was no config to back up."
+	}
+	return "Appended. Backup: " + backup
 }
 
 // reloadHerdrConfig runs `<bin> server reload-config` with the child
