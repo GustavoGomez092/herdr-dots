@@ -73,7 +73,16 @@ func (e *Engine) SetPaused(paneID, slug string, paused bool) error {
 		return fmt.Errorf("dot %q is not attached to %s", slug, paneID)
 	}
 	if !paused {
-		e.setStatus(key{paneID, slug}, view.StatusIdle)
+		// A review or ask still running (pausing doesn't stop it) shows as
+		// thinking until it ends.
+		k := key{paneID, slug}
+		e.mu.Lock()
+		e.status[k] = view.StatusIdle
+		if e.running[k] || e.asking[k] {
+			e.status[k] = view.StatusThinking
+		}
+		e.mu.Unlock()
+		e.broadcast()
 		return nil
 	}
 	e.mu.Lock()
