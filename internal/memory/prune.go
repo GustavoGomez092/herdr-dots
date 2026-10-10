@@ -16,7 +16,7 @@ type PruneReport struct{ Archived, Deleted, LedgerTrimmed int }
 // unused for RetentionDays are archived, scopes over their cap archive their
 // lowest-value entries, archived entries older than ArchiveDays are deleted,
 // and the ledger keeps its newest MaxLedger lines. Pinned and developer
-// entries are never archived. Unreadable files are skipped, never rewritten.
+// entries are never archived, and pinned entries are never deleted. Unreadable files are skipped, never rewritten.
 // Global scope is developer-only and is not pruned.
 func (s *Store) Prune(p string, now time.Time) (PruneReport, error) {
 	var rep PruneReport
@@ -60,7 +60,8 @@ func (s *Store) Prune(p string, now time.Time) (PruneReport, error) {
 			}
 			kept := f.Entries[:0]
 			for _, e := range f.Entries {
-				if e.Status == StatusArchived && s.Limits.ArchiveDays > 0 && now.Sub(e.UpdatedAt) > archiveTTL {
+				if archivedAt := archivedSince(e); e.Status == StatusArchived && !e.Pinned && !archivedAt.IsZero() &&
+					s.Limits.ArchiveDays > 0 && now.Sub(archivedAt) > archiveTTL {
 					rep.Deleted++
 					changed = true
 					continue
@@ -79,4 +80,13 @@ func (s *Store) Prune(p string, now time.Time) (PruneReport, error) {
 		return err
 	})
 	return rep, err
+}
+
+// archivedSince is when an archived entry was last touched: UpdatedAt, or
+// CreatedAt when UpdatedAt is zero. Zero means unknown, and Prune keeps it.
+func archivedSince(e Entry) time.Time {
+	if !e.UpdatedAt.IsZero() {
+		return e.UpdatedAt
+	}
+	return e.CreatedAt
 }
