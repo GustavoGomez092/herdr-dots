@@ -11,7 +11,7 @@ import (
 // must say so and what to do instead, since some raw-file hosts redirect to
 // a CDN.
 func TestREADMEExplainsSameHostRedirects(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "guide", "profiles-and-sharing.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

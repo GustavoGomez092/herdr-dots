@@ -28,7 +28,7 @@ func TestREADMEUpgradeNoteNamesEveryNewlyDeniedArg(t *testing.T) {
 		{"codex-cli", "`--enable`/`--disable`", []string{"--enable", "x"}},
 		{"codex-cli", "`--enable`/`--disable`", []string{"--disable", "x"}},
 	}
-	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "guide", "profiles-and-sharing.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

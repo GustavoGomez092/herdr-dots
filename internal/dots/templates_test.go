@@ -44,7 +44,7 @@ func TestTemplateCapabilitiesMatchTheREADME(t *testing.T) {
 			t.Errorf("%s: research %+v schedule %q on_commit %v", d.Slug, d.Research, d.Schedule.Cron, d.Trigger.OnCommit)
 		}
 	}
-	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	readme, err := os.ReadFile(filepath.Join("..", "..", "docs", "guide", "profiles-and-sharing.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
