@@ -55,6 +55,21 @@ func TestClaudeIsErrorOnExitZeroGetsTheHint(t *testing.T) {
 	}
 }
 
+// B7 (post-rc hardening, test gap): a null "relevant" and non-string fields
+// are malformed, never a verdict.
+func TestVerdictWithNullOrWrongTypedFieldsIsMalformed(t *testing.T) {
+	for _, text := range []string{
+		`{"relevant":null,"message":"x"}`,
+		`{"relevant":"yes","message":"x"}`,
+		`{"relevant":true,"message":5}`,
+		`{"relevant":true,"severity":["warn"],"message":"x"}`,
+	} {
+		if v, err := ParseVerdict(text); !errors.Is(err, ErrMalformed) {
+			t.Errorf("ParseVerdict(%s) = %+v, %v; want ErrMalformed", text, v, err)
+		}
+	}
+}
+
 // B12 (post-rc hardening): the unknown-kind error names the kinds there are.
 func TestUnknownKindListsTheKinds(t *testing.T) {
 	_, err := NewWith("claude-api", Options{})
