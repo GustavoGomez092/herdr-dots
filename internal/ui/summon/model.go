@@ -31,6 +31,7 @@ type Model struct {
 	cursor  int
 	asking  bool
 	askSlug string
+	sending bool // a summon call is in flight
 	input   textinput.Model
 	status  string
 	width   int // terminal size from tea.WindowSizeMsg; 0 until known
@@ -76,6 +77,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case errMsg:
 		m.status = msg.err.Error()
+		m.sending = false
 		if m.council != nil {
 			m.council.sending = false
 		}
@@ -85,13 +87,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.asking {
 			switch msg.String() {
+			case "ctrl+c":
+				return m, tea.Quit
 			case "esc":
-				m.asking = false
+				m.asking, m.status = false, ""
+				m.input.Reset()
+				m.input.Blur()
 				return m, nil
 			case "enter":
-				if len(m.dots) == 0 {
-					return m, nil
+				if len(m.dots) == 0 || m.sending {
+					return m, nil // a second enter must not summon twice
 				}
+				m.sending = true
 				q := strings.TrimSpace(m.input.Value())
 				c, target, slug := m.caller, m.target, m.askSlug
 				return m, func() tea.Msg {
