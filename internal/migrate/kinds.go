@@ -12,8 +12,8 @@ func memoryLock(file string) string {
 	return filepath.Join(dir, "memory.lock")
 }
 
-// siblingLock is <file>.lock, the lock daily.json, inbox.json and
-// trusted.json are written under.
+// siblingLock is <file>.lock, the lock daily.json, inbox.json,
+// trusted.json and credentials.toml are written under.
 func siblingLock(file string) string { return file + ".lock" }
 
 // Default is every persisted file kind herdr-dots 1.0 knows. Every kind is
@@ -42,7 +42,9 @@ func Default() Set {
 		// credentials.toml is a table per provider: it can never hold a
 		// top-level version key, so it stays at 1 until its format changes
 		// shape. It holds keys, so a parse error's text is never reported.
-		{Name: "credentials", Root: ConfigRoot, Globs: []string{"credentials.toml"}, Format: TOML, Current: 1, Secret: true},
+		// Its lock is <file>.lock, the one `keys set` takes (credentials.File).
+		{Name: "credentials", Root: ConfigRoot, Globs: []string{"credentials.toml"}, Format: TOML, Current: 1, Secret: true,
+			Lock: siblingLock},
 		{Name: "prices", Root: ConfigRoot, Globs: []string{"prices.toml"}, Format: TOML, Current: 1},
 		{Name: "mcp-install", Root: ConfigRoot, Globs: []string{"mcp-install.json"}, Format: JSON, Current: 1,
 			SelfGuarded: true}, // mcpinstall.ErrRecordsVersion; no lock yet, so no migration can be registered
