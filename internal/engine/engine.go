@@ -149,7 +149,7 @@ type Engine struct {
 	projects  map[string]*projectState // by repository root
 	paneRoots map[string]string        // pane id → the checkout it is in (a project dot is checkout + slug)
 	paneSeen  map[string]time.Time     // pane id → when knowPane last saw it (unattached panes are pruned after lookWindow)
-	scanSeq   map[string]uint64        // checkout root → the last scan started (an older scan never installs over a newer one)
+	scanSeq   map[string]uint64        // one key, scanClock (projectdots.go): the engine-wide scan clock; an older scan never installs over a newer one
 	projOn    bool                     // project dots were on at the last rebuild
 
 	// Drafts (draft.go), guarded by mu. Git and patch I/O never happen under mu.
