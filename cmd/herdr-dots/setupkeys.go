@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -47,6 +49,7 @@ func runSetupKeys(args []string) error {
 // screen, so all three make the same change.
 type keysSetup struct {
 	path      string // Herdr's config.toml
+	before    []byte // the config as planned (nil: there was none)
 	add       []keys.Binding
 	already   []keys.Binding
 	conflicts []keys.Conflict
@@ -63,7 +66,7 @@ func planKeys(path string) (keysSetup, error) {
 	if err != nil {
 		return keysSetup{}, fmt.Errorf("%s is not valid TOML: %w", path, err)
 	}
-	k := keysSetup{path: path}
+	k := keysSetup{path: path, before: data}
 	k.add, k.already, k.conflicts = keys.Plan(keys.Defaults(), existing)
 	return k, nil
 }
@@ -86,8 +89,17 @@ func (k keysSetup) print(out io.Writer) bool {
 }
 
 // apply appends the planned bindings (after a backup) and asks Herdr to
-// reload its config (herdrReload; tests pass a fake).
+// reload its config (herdrReload; tests pass a fake). A config that changed
+// since the plan was shown is refused, as mcpinstall.Apply refuses a stale
+// preview: nothing is appended.
 func (k keysSetup) apply(out io.Writer, now time.Time, reload func() ([]byte, error)) error {
+	cur, err := os.ReadFile(k.path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if !bytes.Equal(cur, k.before) || (cur == nil) != (k.before == nil) {
+		return fmt.Errorf("%s changed since the preview; nothing changed: run setup again", k.path)
+	}
 	backup, err := keys.Append(k.path, k.add, now)
 	if err != nil {
 		return err
@@ -117,14 +129,14 @@ func herdrReload() ([]byte, error) {
 	if bin == "" {
 		bin = "herdr"
 	}
-	return reloadHerdrConfig(bin)
+	return reloadHerdrConfig(context.Background(), bin)
 }
 
 // reloadHerdrConfig runs `<bin> server reload-config` with the child
 // environment every product child gets (platform.ChildEnv), without a Claude
 // Code session's variables (platform.WithoutClaudeEnv).
-func reloadHerdrConfig(bin string) ([]byte, error) {
-	cmd, err := platform.Command(bin, []string{"server", "reload-config"})
+func reloadHerdrConfig(ctx context.Context, bin string) ([]byte, error) {
+	cmd, err := platform.CommandContext(ctx, bin, []string{"server", "reload-config"})
 	if err != nil {
 		return nil, err
 	}

@@ -105,8 +105,8 @@ func runPane([]string) error {
 	if err != nil {
 		return err
 	}
-	setupDeps, first := onboardingFor(p) // the first-run Setup screen, if it has anything to ask
-	m := pane.New(resolveTarget(p.DotsPanesFile()), cl).WithOpener(paneOpener).WithSetup(setupDeps, first)
+	_, setupPending := onboardingFor(p) // the pane only says setup is pending (ruling P10-R14)
+	m := pane.New(resolveTarget(p.DotsPanesFile()), cl).WithOpener(paneOpener).WithSetupPending(setupPending)
 	if hc, err := herdr.NewFromEnv(); err == nil {
 		m = m.WithPatchViewer(patchViewer(hc)) // v and A on a patch card open the diff pane
 	}
@@ -142,22 +142,21 @@ func runManage([]string) error {
 	prices := set.Prices()
 	client := &http.Client{Timeout: 20 * time.Second}
 	home, _ := os.UserHomeDir()
-	setupDeps, first := onboardingFor(p) // the first-run Setup screen, if it has anything to ask
+	setupDeps, _ := onboardingFor(p) // the Setup screen: detection runs in Init
 	prog := tea.NewProgram(manage.New(resolveTarget(p.DotsPanesFile()), manage.Deps{Caller: cl, DotsDir: p.DotsDir(), Check: check, NewDot: newDot,
 		Memory: memoryStoreFor(p, cfg, nil), Project: paneProject,
 		History: historyStoreFor(p), SessionKey: paths.SessionKey(p.SocketPath), ExportDir: home,
 		Fetch: func(ctx context.Context, url string) ([]byte, string, error) {
 			return dotpack.Fetch(ctx, client, url, dotpack.MaxBytes)
 		},
-		MCPStatus:  func() string { return mcpinstall.StatusLine(p.ConfigDir) },
-		CheckDot:   set.CheckDot,
-		Models:     set.Models,
-		Estimate:   func(d dots.Dot) string { return estimateLine(prices, d) },
-		Keys:       set.creds(cfg),
-		TestKey:    set.TestProvider,
-		OllamaURL:  set.OllamaURL(),
-		Setup:      setupDeps,
-		SetupFirst: first,
+		MCPStatus: func() string { return mcpinstall.StatusLine(p.ConfigDir) },
+		CheckDot:  set.CheckDot,
+		Models:    set.Models,
+		Estimate:  func(d dots.Dot) string { return estimateLine(prices, d) },
+		Keys:      set.creds(cfg),
+		TestKey:   set.TestProvider,
+		OllamaURL: set.OllamaURL(),
+		Setup:     setupDeps,
 	}), tea.WithAltScreen())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

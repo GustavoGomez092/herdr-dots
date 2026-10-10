@@ -56,7 +56,7 @@ session folder whose engine isn't running (a running engine migrates its own
 session at its next start). A file is rewritten atomically, after its
 original is saved as `<file>.bak-v<old>` (mode 0600). A failed migration
 leaves the file untouched and read-only. Commands that write files (`keys`,
-`dots`, `memory`, `setup-mcp`, `manage`, `uninstall-extras`) treat a file from
+`dots`, `memory`, `setup-mcp`, `setup`, `manage`, `uninstall-extras`) treat a file from
 a newer version as read-only too.
 
 ## Uninstall

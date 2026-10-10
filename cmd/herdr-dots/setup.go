@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -38,19 +39,37 @@ func newOnboardIO(in io.Reader, out io.Writer, p paths.Paths) (onboardIO, error)
 		store: onboarding.Store{Path: p.OnboardingFile()}, reload: herdrReload}, nil
 }
 
-// onboardingFor is the Setup screen for a UI process (manage, the Dots
-// pane): its effects, and the first-run offer (nil: the screen stays shut).
-// It only reads, except that an MCP server found installed is recorded.
-func onboardingFor(p paths.Paths) (setup.Deps, *setup.Offer) {
+// onboardingFor is the Setup screen's effects for a UI process, and the
+// Dots pane's "setup pending" check. Nothing is read here: detection runs
+// later, inside a tea.Cmd (manage's and the pane's Init). The children it
+// starts are bounded by uiChildTimeout.
+func onboardingFor(p paths.Paths) (setup.Deps, func() bool) {
 	o, err := newOnboardIO(nil, io.Discard, p)
 	if err != nil {
 		return setup.Deps{}, nil
 	}
-	return o.deps(), o.firstRun()
+	o.s.run = setupChildRunner(uiChildTimeout)
+	o.reload = func() ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), uiChildTimeout)
+		defer cancel()
+		bin := os.Getenv("HERDR_BIN_PATH")
+		if bin == "" {
+			bin = "herdr"
+		}
+		out, err := reloadHerdrConfig(ctx, bin)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			err = fmt.Errorf("timed out after %s", uiChildTimeout)
+		}
+		return out, err
+	}
+	return o.deps(), o.pending
 }
 
 func (o onboardIO) deps() setup.Deps {
-	return setup.Deps{Check: o.check, Apply: o.apply, Record: o.store.Mark}
+	return setup.Deps{
+		FirstRun: func() (*setup.Offer, error) { return o.firstRun(true) },
+		Check:    o.check, Apply: o.apply, Record: o.store.Mark,
+	}
 }
 
 // onboardPlan is what check planned; the screen hands it back to apply, so
@@ -58,6 +77,23 @@ func (o onboardIO) deps() setup.Deps {
 type onboardPlan struct {
 	mcp  *mcpSetup // nil: no client to install for
 	keys *keysSetup
+}
+
+// mcpChange is a plan's change as the screen shows it, in setup-mcp's
+// words: the commands it runs, the file it edits with the diff, the file
+// Claude Code writes, and the backups.
+func mcpChange(pl mcpinstall.Plan) []string {
+	out := mcpWillLines(pl)
+	preview := strings.Split(strings.TrimSuffix(pl.Preview, "\n"), "\n")
+	if len(pl.Edits) > 0 { // a file edit: its diff is the change
+		out = append(out, preview...)
+	} else if len(preview) > 0 && preview[0] != "" { // the CLI edits its own file: name it
+		out = append(out, strings.TrimSuffix(preview[0], ":"))
+	}
+	for _, b := range pl.Backups {
+		out = append(out, "Backs up "+b+" first.")
+	}
+	return out
 }
 
 // check reads the state of every item and plans what y would change, as
@@ -70,11 +106,9 @@ func (o onboardIO) check() (setup.Offer, error) {
 	var offer setup.Offer
 	plan := onboardPlan{}
 	m := &mcpSetup{s: o.s, p: p}
-	planErr := ""
-	if strings.Contains(o.s.exe, string(os.PathSeparator)+"go-build") {
-		planErr = "run the built plugin binary, not `go run`: the clients would point at a temporary file"
-	} else if _, err := mcpinstall.LoadRecords(mcpinstall.RecordPath(p.ConfigDir)); errors.Is(err, mcpinstall.ErrRecordsVersion) {
-		planErr = err.Error() + "; update herdr-dots first"
+	planErr := o.s.goRunErr()
+	if planErr == nil {
+		planErr = recordsNewerErr(p)
 	}
 	claudeOK, codexOK := o.s.detected()
 	for _, c := range []struct {
@@ -84,22 +118,17 @@ func (o onboardIO) check() (setup.Offer, error) {
 		if !c.ok {
 			continue
 		}
-		cl := setup.Client{Title: c.client.Title(), Err: planErr}
-		if cl.Err == "" {
-			pl, err := mcpinstall.PlanInstall(c.client, o.s.env, o.s.exe, p.ConfigDir, p.StateDir)
-			switch {
-			case err != nil:
-				cl.Err = err.Error()
-			case pl.Nothing:
-				cl.Installed = true
-				m.plans = append(m.plans, pl)
-			default:
-				cl.Change = mcpWillLines(pl)
-				if len(pl.Edits) > 0 { // a file edit: its diff is the change
-					cl.Change = append(cl.Change, strings.Split(strings.TrimSuffix(pl.Preview, "\n"), "\n")...)
-				}
-				m.plans = append(m.plans, pl)
+		cl := setup.Client{Title: c.client.Title()}
+		if planErr != nil {
+			cl.Err = planErr.Error()
+		} else if pl, err := mcpinstall.PlanInstall(c.client, o.s.env, o.s.exe, p.ConfigDir, p.StateDir); err != nil {
+			cl.Err = err.Error()
+		} else {
+			cl.Installed = pl.Nothing
+			if !pl.Nothing {
+				cl.Change = mcpChange(pl)
 			}
+			m.plans = append(m.plans, pl)
 		}
 		offer.Clients = append(offer.Clients, cl)
 	}
@@ -113,14 +142,13 @@ func (o onboardIO) check() (setup.Offer, error) {
 	} else {
 		plan.keys = &k
 		offer.Keys.Installed = len(k.already) > 0
-		for _, b := range k.add {
-			offer.Keys.Change = append(offer.Keys.Change, fmt.Sprintf("%-15s %s", b.Key, b.Description))
-		}
-		for _, c := range k.conflicts {
-			offer.Keys.Change = append(offer.Keys.Change, fmt.Sprintf("(%s is taken by %s: %s is skipped)", c.Binding.Key, c.With, c.Binding.Action))
-		}
-		if len(k.add) == 0 {
-			offer.Keys.Change = nil
+		if len(k.add) > 0 {
+			for _, b := range k.add {
+				offer.Keys.Change = append(offer.Keys.Change, fmt.Sprintf("%-15s %s", b.Key, b.Description))
+			}
+			for _, c := range k.conflicts {
+				offer.Keys.Change = append(offer.Keys.Change, fmt.Sprintf("(%s is taken by %s: %s is skipped)", c.Binding.Key, c.With, c.Binding.Action))
+			}
 		}
 	}
 	offer.Plan = plan
@@ -173,27 +201,43 @@ func mcpInstalled(o setup.Offer) bool {
 	return len(o.Clients) > 0
 }
 
-// firstRun is the offer the screen opens with on this open, or nil. A
-// record a newer herdr-dots wrote (or one that doesn't parse) keeps the
-// screen shut and is never written. An MCP server installed by any route is
-// recorded as installed.
-func (o onboardIO) firstRun() *setup.Offer {
+// firstRun is what the first-run screen asks on this open (nil: nothing).
+// A record a newer herdr-dots wrote keeps the screen shut and is never
+// written; one that can't be read or parsed is returned as the error (the
+// manage footer names it). When the record forbids both topics nothing is
+// checked at all. With record (the manage popup, never the Dots pane), an
+// MCP server installed by any route is recorded as installed.
+func (o onboardIO) firstRun(record bool) (*setup.Offer, error) {
 	rec, _, err := o.store.Load()
+	if errors.Is(err, onboarding.ErrNewer) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
+	}
+	now := o.s.now()
+	if !rec.Asks(onboarding.MCP, now) && !rec.Asks(onboarding.Keys, now) {
+		return nil, nil
 	}
 	offer, err := o.check()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	if mcpInstalled(offer) && rec.MCP.State != onboarding.Installed {
+	if record && mcpInstalled(offer) && rec.MCP.State != onboarding.Installed {
 		_ = o.store.Mark(onboarding.Installed, onboarding.MCP)
 	}
-	f := offer.FirstRun(rec, o.s.now())
+	f := offer.FirstRun(rec, now)
 	if !f.Show() {
-		return nil
+		return nil, nil
 	}
-	return &f
+	return &f, nil
+}
+
+// pending is the Dots pane's check: the first-run screen has something to
+// ask. It records nothing (ruling P10-R14).
+func (o onboardIO) pending() bool {
+	f, _ := o.firstRun(false)
+	return f != nil
 }
 
 func runSetup(args []string) error {

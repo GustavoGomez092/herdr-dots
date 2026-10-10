@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,14 +66,35 @@ func runSetupMCP(args []string) error {
 // child gets no CLAUDE* variable but CLAUDE_CONFIG_DIR
 // (platform.WithoutClaudeEnv): a plugin process can inherit a Claude Code
 // session's variables, and `claude mcp add` must not join that session.
-func runSetupChild(a []string) (string, error) {
-	cmd, err := platform.Command(a[0], a[1:])
+func runSetupChild(a []string) (string, error) { return runSetupChildCtx(context.Background(), a) }
+
+func runSetupChildCtx(ctx context.Context, a []string) (string, error) {
+	cmd, err := platform.CommandContext(ctx, a[0], a[1:])
 	if err != nil {
 		return "", err
 	}
 	cmd.Env = platform.ChildEnv(platform.WithoutClaudeEnv(os.Environ()))
+	cmd.WaitDelay = 2 * time.Second // a grandchild holding the output can't keep a killed child's Wait open
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// uiChildTimeout bounds each child the Setup screen starts: a client CLI
+// that hangs (a login prompt, a dead network) can't hold the popup.
+const uiChildTimeout = 60 * time.Second
+
+// setupChildRunner is runSetupChild with a timeout per child; a timeout is
+// an error that names the command.
+func setupChildRunner(timeout time.Duration) func([]string) (string, error) {
+	return func(a []string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		out, err := runSetupChildCtx(ctx, a)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return out, fmt.Errorf("`%s` timed out after %s", strings.Join(a[:min(3, len(a))], " "), timeout)
+		}
+		return out, err
+	}
 }
 
 func setupMCP(args []string, s setupIO) error {
@@ -116,14 +138,32 @@ type mcpSetup struct {
 	plans  []mcpinstall.Plan
 }
 
+// goRunErr refuses a `go run` binary: the clients would point at a
+// temporary file.
+func (s setupIO) goRunErr() error {
+	if strings.Contains(s.exe, string(filepath.Separator)+"go-build") {
+		return errors.New("run the built plugin binary (./bin/herdr-dots setup-mcp), not `go run`: the clients would point at a temporary file")
+	}
+	return nil
+}
+
+// recordsNewerErr refuses an install record file a newer herdr-dots wrote:
+// it can't be updated afterwards, so nothing is planned, asked or changed.
+func recordsNewerErr(p paths.Paths) error {
+	if _, err := mcpinstall.LoadRecords(mcpinstall.RecordPath(p.ConfigDir)); errors.Is(err, mcpinstall.ErrRecordsVersion) {
+		return fmt.Errorf("%w; nothing changed: update herdr-dots first", err)
+	}
+	return nil
+}
+
 // errNoClients: neither client CLI (nor a Codex config) was found.
 var errNoClients = errors.New("neither Claude Code nor Codex found; nothing changed")
 
 // planMCP plans installing (or removing) the server for --client. Nothing
 // is changed.
 func (s setupIO) planMCP(client string, remove bool) (*mcpSetup, error) {
-	if strings.Contains(s.exe, string(filepath.Separator)+"go-build") {
-		return nil, errors.New("run the built plugin binary (./bin/herdr-dots setup-mcp), not `go run`: the clients would point at a temporary file")
+	if err := s.goRunErr(); err != nil {
+		return nil, err
 	}
 	clients, err := s.pickClients(client, remove)
 	if err != nil {
@@ -133,10 +173,8 @@ func (s setupIO) planMCP(client string, remove bool) (*mcpSetup, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A record file a newer herdr-dots wrote can't be updated afterwards:
-	// fail before anything is planned or asked, so no client config changes.
-	if _, err := mcpinstall.LoadRecords(mcpinstall.RecordPath(p.ConfigDir)); errors.Is(err, mcpinstall.ErrRecordsVersion) {
-		return nil, fmt.Errorf("%w; nothing changed: update herdr-dots first", err)
+	if err := recordsNewerErr(p); err != nil {
+		return nil, err
 	}
 	m := &mcpSetup{s: s, p: p, remove: remove}
 	for _, c := range clients {

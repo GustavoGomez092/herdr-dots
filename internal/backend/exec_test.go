@@ -68,3 +68,17 @@ func TestHint(t *testing.T) {
 		t.Fatalf("hint not truncated: %d", len(h))
 	}
 }
+
+// Post-rc review: CleanEnv has engineEnv's rule, so an engine started
+// straight from a Claude Code session can't hand a dot's `claude -p` a
+// session marker or a messaging token. Only the settings that pick the
+// provider or carry auth (USE_, SKIP_, CLIENT_, OAUTH_TOKEN) and
+// CLAUDE_CODE_GIT_BASH_PATH (Windows claude needs it) stay.
+func TestCleanEnvDropsEveryClaudeCodeSessionVariable(t *testing.T) {
+	keep := []string{"PATH=/bin", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CODE_SKIP_VERTEX_AUTH=1",
+		"CLAUDE_CODE_CLIENT_CERT=/cert", "CLAUDE_CODE_OAUTH_TOKEN=t", "CLAUDE_CODE_GIT_BASH_PATH=C:/git/bin/bash.exe"}
+	in := append([]string{"CLAUDE_CODE_SSE_PORT=4242", "CLAUDE_CODE_MESSAGING_TOKEN=m", "CLAUDE_CODE_SESSION_ID=s"}, keep...)
+	if got := CleanEnv(in); !slices.Equal(got, keep) {
+		t.Fatalf("CleanEnv = %v, want %v", got, keep)
+	}
+}

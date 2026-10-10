@@ -106,8 +106,8 @@ func seeEngineLog(p paths.Paths, err error) error {
 // The engine serves every pane, so it drops the starting pane's id and the
 // Claude Code session markers (CLAUDECODE, CLAUDE_CODE_*) of the agent whose
 // MCP server started it. It keeps the CLAUDE_CODE_* settings that choose a
-// provider or carry auth, which claude-cli dots need (backend.CleanEnv keeps
-// them too).
+// provider or carry auth, and the Git Bash path, which claude-cli dots need
+// (platform.ClaudeCodeSetting; backend.CleanEnv keeps them too).
 //
 // An engine first started by Codex's MCP launch gets Codex's minimal
 // environment (only the variables Codex passes to MCP servers), so API keys
@@ -125,20 +125,12 @@ func engineEnv(env []string, p paths.Paths) []string {
 		case k == "HERDR_PLUGIN_CONFIG_DIR", k == "HERDR_PLUGIN_STATE_DIR", k == "HERDR_SOCKET_PATH",
 			k == "HERDR_PANE_ID", k == "CLAUDECODE":
 			continue
-		case strings.HasPrefix(k, "CLAUDE_CODE_") && !claudeProviderSetting(k):
+		case strings.HasPrefix(k, "CLAUDE_CODE_") && !platform.ClaudeCodeSetting(k):
 			continue
 		}
 		out = append(out, kv)
 	}
 	return append(out, "HERDR_PLUGIN_CONFIG_DIR="+p.ConfigDir, "HERDR_PLUGIN_STATE_DIR="+p.StateDir, "HERDR_SOCKET_PATH="+p.SocketPath)
-}
-
-// claudeProviderSetting reports a CLAUDE_CODE_* variable that picks the
-// model provider or carries auth (CLAUDE_CODE_USE_BEDROCK,
-// CLAUDE_CODE_SKIP_VERTEX_AUTH, CLAUDE_CODE_OAUTH_TOKEN, client certs).
-func claudeProviderSetting(k string) bool {
-	return strings.HasPrefix(k, "CLAUDE_CODE_USE_") || strings.HasPrefix(k, "CLAUDE_CODE_SKIP_") ||
-		strings.HasPrefix(k, "CLAUDE_CODE_CLIENT_") || k == "CLAUDE_CODE_OAUTH_TOKEN"
 }
 
 // waitForEndpoint polls until the engine accepts connections at endpoint.

@@ -36,10 +36,10 @@ func TestNoCwdExeSearchEnv(t *testing.T) {
 func TestWithoutClaudeEnvDropsEveryClaudeVariableButTheConfigDir(t *testing.T) {
 	in := []string{"PATH=/bin", "CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=cli", "CLAUDE_CODE_SSE_PORT=1",
 		"CLAUDE_CODE_CHILD_SESSION=1", "CLAUDE_CODE_OAUTH_TOKEN=t", "CLAUDE_CODE_USE_BEDROCK=1", "claude_x=1",
-		"Claude_Session=2", "CLAUDE_CONFIG_DIR=/c", "HOME=/h", "MY_CLAUDE=keep", "NOEQUALS"}
+		"Claude_Session=2", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_GIT_BASH_PATH=/g", "HOME=/h", "MY_CLAUDE=keep", "NOEQUALS"}
 	orig := slices.Clone(in)
 	got := WithoutClaudeEnv(in)
-	want := []string{"PATH=/bin", "CLAUDE_CONFIG_DIR=/c", "HOME=/h", "MY_CLAUDE=keep", "NOEQUALS"}
+	want := []string{"PATH=/bin", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_GIT_BASH_PATH=/g", "HOME=/h", "MY_CLAUDE=keep", "NOEQUALS"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}

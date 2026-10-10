@@ -11,7 +11,8 @@ Post-rc hardening: about 90 accepted known issues and security findings R2, R3, 
 
 - Licensed under the Apache License 2.0 (`LICENSE`).
 - Security reports go through GitHub's private vulnerability reporting (`SECURITY.md`).
-- First-run Setup screen: the first time you open the manage popup or the Dots pane, it offers to install the MCP server (Claude Code, Codex) and the keybindings, shows the exact change, and applies it only on `y` (`n` asks again in 7 days, `x` never). `S` in the manage popup reopens it; `herdr-dots setup` does the same from a shell. Answers are kept in `onboarding.json` (a new versioned config file). The setup commands start `claude`, `codex` and `herdr` without any inherited `CLAUDE*` variable except `CLAUDE_CONFIG_DIR`.
+- First-run Setup screen: the first time you open the manage popup, it offers to install the MCP server (Claude Code, Codex) and the keybindings, shows the exact change in a scrollable screen, and applies it only on `y` after every line has been on screen (`n` asks again in 7 days, `x` never). The Dots pane only shows a one-line hint while setup is pending. `S` in the manage popup reopens it; `herdr-dots setup` does the same from a shell. Answers are kept in `onboarding.json` (a new versioned config file). The setup commands start `claude`, `codex` and `herdr` without any inherited `CLAUDE*` variable except `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_GIT_BASH_PATH`.
+- `claude-cli` dots no longer receive Claude Code session variables (every `CLAUDE_CODE_*` except the provider, auth and Git Bash path settings), even from an engine started straight from a Claude Code session.
 
 ### Security
 

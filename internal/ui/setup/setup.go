@@ -1,16 +1,15 @@
-// Package setup is the first-run Setup screen (post-rc): it offers to
-// install the herdr-dots MCP server for the detected agent CLIs and the
-// keybindings in Herdr's config. It opens before the manage popup or the
-// Dots pane the first time, and from manage's S at any time. Nothing is
-// written without y; the whole screen must be on screen (display cells,
-// style.ScreenFits) before y or x acts.
+// Package setup holds the first-run Setup screen's content and rules
+// (post-rc): what it offers (installing the herdr-dots MCP server for the
+// detected agent CLIs and the keybindings in Herdr's config), what it shows,
+// what y installs and what n and x answer. The manage popup shows it in a
+// pager (y only after every line has been on screen, ruling P10-R14); the
+// Dots pane only says that setup is pending. Nothing is written without y.
 package setup
 
 import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"herdr-dots/internal/onboarding"
@@ -82,8 +81,11 @@ type Result struct {
 	Note  string
 }
 
-// Deps are the screen's effects; each runs inside a tea.Cmd.
+// Deps are the screen's effects; each runs inside a tea.Cmd, never in Update.
 type Deps struct {
+	// FirstRun detects what the first-run screen asks about: nil when it
+	// has nothing to ask. An error is a damaged onboarding.json.
+	FirstRun func() (*Offer, error)
 	// Check reads the current state of every item (manage's S).
 	Check func() (Offer, error)
 	// Apply runs setup-mcp --yes for every detected client (mcp) and
@@ -93,182 +95,40 @@ type Deps struct {
 	Record func(state onboarding.State, topics ...onboarding.Topic) error
 }
 
-// DoneMsg: the screen is finished; the parent shows what was opened.
-type DoneMsg struct{}
-
-type (
-	appliedMsg  struct{ results []Result }
-	answeredMsg struct{ err error }
-)
-
-type phase int
-
-const (
-	asking phase = iota
-	applying
-	finished
-)
-
-// Model is the Setup screen.
-type Model struct {
-	d           Deps
-	o           Offer
-	forced      bool // opened with S: every item shown, n/esc only close
-	includeKeys bool
-	ph          phase
-	results     []Result
-	status      string
-	width       int
-	height      int
-}
-
-// New opens the screen. forced is manage's S: every item is shown with its
-// state, and closing records nothing.
-func New(d Deps, o Offer, forced bool) Model {
-	return Model{d: d, o: o, forced: forced, includeKeys: true}
-}
-
 // Title is the screen's title.
 const Title = "Let your agent consult your dots?"
 
-const restartLine = "Restart the agent in its pane so it loads the server."
+// Screen is what one open Setup screen shows and does.
+type Screen struct {
+	Offer       Offer
+	Forced      bool // opened with S: every item shown, n/esc only close
+	IncludeKeys bool // k: the keybindings go in with y
+}
 
-const waitingForSize = "waiting for the window size before anything counts as read"
+func (s Screen) showMCP() bool  { return s.Forced || s.Offer.AskMCP }
+func (s Screen) showKeys() bool { return s.Forced || s.Offer.AskKeys }
 
-func (m Model) showMCP() bool  { return m.forced || m.o.AskMCP }
-func (m Model) showKeys() bool { return m.forced || m.o.AskKeys }
-
-// mcpPending and keysPending are the shown items that are missing: what y
+// MCPPending and KeysPending are the shown items that are missing: what y
 // installs and what n and x answer for.
-func (m Model) mcpPending() bool  { return m.showMCP() && m.o.MCPMissing() }
-func (m Model) keysPending() bool { return m.showKeys() && m.o.KeysMissing() }
+func (s Screen) MCPPending() bool  { return s.showMCP() && s.Offer.MCPMissing() }
+func (s Screen) KeysPending() bool { return s.showKeys() && s.Offer.KeysMissing() }
 
-func (m Model) pending() []onboarding.Topic {
+// Pending are the topics n and x answer for.
+func (s Screen) Pending() []onboarding.Topic {
 	var ts []onboarding.Topic
-	if m.mcpPending() {
+	if s.MCPPending() {
 		ts = append(ts, onboarding.MCP)
 	}
-	if m.keysPending() {
+	if s.KeysPending() {
 		ts = append(ts, onboarding.Keys)
 	}
 	return ts
 }
 
-func (m Model) measured() bool { return m.width > 0 && m.height > 0 }
-
-func (m Model) screenWidth() int {
-	if m.width <= 0 {
-		return 80
-	}
-	return m.width
-}
-
-// tail is the status line under the screen.
-const tail = 1
-
-func (m Model) fits() bool {
-	return m.measured() && style.ScreenFits(m.screen(m.screenWidth()), m.screenWidth(), m.height, tail)
-}
-
-func done() tea.Msg { return DoneMsg{} }
-
-func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-	case appliedMsg:
-		m.ph, m.results = finished, msg.results
-	case answeredMsg:
-		if msg.err == nil {
-			return m, done
-		}
-		m.ph = finished
-		m.results = []Result{{Item: "Your answer", Err: msg.err}}
-	case tea.KeyMsg:
-		switch m.ph {
-		case applying:
-			return m, nil
-		case finished:
-			return m, done
-		}
-		return m.keys(msg)
-	}
-	return m, nil
-}
-
-func (m Model) keys(k tea.KeyMsg) (Model, tea.Cmd) {
-	m.status = ""
-	switch k.String() {
-	case "n", "esc", "ctrl+c":
-		if m.forced || len(m.pending()) == 0 {
-			return m, done
-		}
-		return m, m.answer(onboarding.Snoozed, m.pending()...)
-	case "x", "y", "k":
-		if !m.measured() {
-			m.status = waitingForSize
-			return m, nil
-		}
-		if !m.fits() {
-			m.status = "enlarge the popup: the whole screen must be visible first"
-			return m, nil
-		}
-	default:
-		return m, nil
-	}
-	switch k.String() {
-	case "k":
-		if m.keysPending() {
-			m.includeKeys = !m.includeKeys
-		}
-	case "x":
-		if len(m.pending()) == 0 {
-			return m, done
-		}
-		return m, m.answer(onboarding.Never, m.pending()...)
-	case "y":
-		mcp, keys := m.mcpPending(), m.keysPending() && m.includeKeys
-		if !mcp && !keys {
-			m.status = "nothing to install"
-			return m, nil
-		}
-		m.ph = applying
-		return m, m.apply(mcp, keys, m.keysPending() && !m.includeKeys && !m.forced)
-	}
-	return m, nil
-}
-
-func (m Model) answer(state onboarding.State, topics ...onboarding.Topic) tea.Cmd {
-	rec := m.d.Record
-	return func() tea.Msg { return answeredMsg{err: rec(state, topics...)} }
-}
-
-// apply installs, then records what went in; keybindings left out with k on
-// the first-run screen are "not now".
-func (m Model) apply(mcp, keys, snoozeKeys bool) tea.Cmd {
-	apply, rec, plan := m.d.Apply, m.d.Record, m.o.Plan
-	return func() tea.Msg {
-		results := apply(plan, mcp, keys)
-		ok := map[onboarding.Topic]bool{onboarding.MCP: mcp, onboarding.Keys: keys}
-		for _, r := range results {
-			if r.Err != nil {
-				ok[r.Topic] = false
-			}
-		}
-		for _, t := range []onboarding.Topic{onboarding.MCP, onboarding.Keys} {
-			if ok[t] {
-				if err := rec(onboarding.Installed, t); err != nil {
-					results = append(results, Result{Item: "Record", Err: err})
-				}
-			}
-		}
-		if snoozeKeys {
-			if err := rec(onboarding.Snoozed, onboarding.Keys); err != nil {
-				results = append(results, Result{Item: "Record", Err: err})
-			}
-		}
-		return appliedMsg{results: results}
-	}
+// Install is what y does: install the MCP server, the keybindings, and
+// whether keybindings left out with k on the first-run screen are "not now".
+func (s Screen) Install() (mcp, keys, snoozeKeys bool) {
+	return s.MCPPending(), s.KeysPending() && s.IncludeKeys, s.KeysPending() && !s.IncludeKeys && !s.Forced
 }
 
 // hard breaks each line of s at w display cells, keeping its spaces (plan
@@ -286,19 +146,20 @@ func hard(s string, w, indent int) []string {
 
 func dot() string { return " " + style.Sym("·") + " " }
 
-// screen is the whole asking screen at width w, footer included.
-func (m Model) screen(w int) []string {
+// Lines is the whole screen at width w, its key help included: everything
+// that must have been on screen before y or x acts.
+func (s Screen) Lines(w int) []string {
 	var lines []string
 	for _, l := range style.Wrap(Title, w) {
 		lines = append(lines, style.Title.Render(l))
 	}
 	lines = append(lines, style.Wrap("With the herdr-dots MCP server, your agent can ask a dot, convene a council, and read the queue and memory whenever it wants.", w)...)
-	if m.showMCP() {
+	if s.showMCP() {
 		lines = append(lines, "")
-		if len(m.o.Clients) == 0 {
+		if len(s.Offer.Clients) == 0 {
 			lines = append(lines, style.Wrap("MCP server: neither Claude Code nor Codex found (claude or codex on PATH, or ~/.codex/config.toml).", w)...)
 		}
-		for _, c := range m.o.Clients {
+		for _, c := range s.Offer.Clients {
 			switch {
 			case c.Err != "":
 				lines = append(lines, hard(c.Title+": can't plan the install: "+c.Err, w, 0)...)
@@ -312,9 +173,9 @@ func (m Model) screen(w int) []string {
 			}
 		}
 	}
-	if m.showKeys() {
+	if s.showKeys() {
 		lines = append(lines, "")
-		k := m.o.Keys
+		k := s.Offer.Keys
 		switch {
 		case k.Err != "":
 			lines = append(lines, hard("Keybindings: "+k.Err, w, 0)...)
@@ -324,7 +185,7 @@ func (m Model) screen(w int) []string {
 			lines = append(lines, hard("Keybindings: none to add in "+k.Path+" (their keys are taken)", w, 0)...)
 		default:
 			head := "Keybindings: will append to " + k.Path + ":"
-			if !m.includeKeys {
+			if !s.IncludeKeys {
 				head = "Keybindings (left out): would append to " + k.Path + ":"
 			}
 			lines = append(lines, hard(head, w, 0)...)
@@ -336,42 +197,45 @@ func (m Model) screen(w int) []string {
 	lines = append(lines, "")
 	lines = append(lines, style.Wrap("Backups are made first. Undo with herdr-dots setup-mcp --remove / uninstall-extras.", w)...)
 	lines = append(lines, "")
-	for _, l := range style.Wrap(m.help(), w) {
+	for _, l := range style.Wrap(s.help(), w) {
 		lines = append(lines, style.Dim.Render(l))
 	}
 	return lines
 }
 
-func (m Model) help() string {
+func (s Screen) help() string {
 	var parts []string
-	if len(m.pending()) > 0 {
+	if len(s.Pending()) > 0 {
 		parts = append(parts, "y install")
-		if !m.forced {
+		if !s.Forced {
 			parts = append(parts, "n not now")
 		}
 		parts = append(parts, "x don't ask again")
 	}
-	if m.keysPending() {
-		if m.includeKeys {
+	if s.KeysPending() {
+		if s.IncludeKeys {
 			parts = append(parts, "k leave out keybindings")
 		} else {
 			parts = append(parts, "k include keybindings")
 		}
 	}
-	if m.forced || len(m.pending()) == 0 {
+	if s.Forced || len(s.Pending()) == 0 {
 		parts = append(parts, "esc close")
 	}
 	return strings.Join(parts, dot())
 }
 
-// resultLines is the screen after y (or a failed answer).
-func (m Model) resultLines(w int) []string {
+const restartLine = "Restart the agent in its pane so it loads the server."
+
+// ResultLines is the screen after y: each item's result, the restart line
+// when the server went in, and how to go on.
+func ResultLines(results []Result, w int) []string {
 	var lines []string
 	for _, l := range style.Wrap("Setup", w) {
 		lines = append(lines, style.Title.Render(l))
 	}
 	mcpOK := false
-	for _, r := range m.results {
+	for _, r := range results {
 		line := r.Item + ": ok"
 		if r.Note != "" {
 			line += dot() + r.Note
@@ -394,25 +258,28 @@ func (m Model) resultLines(w int) []string {
 	return lines
 }
 
-func (m Model) View() string {
-	w := m.screenWidth()
-	var lines []string
-	switch m.ph {
-	case applying:
-		lines = style.Wrap("Installing"+style.Sym("…"), w)
-	case finished:
-		lines = m.resultLines(w)
-	default:
-		lines = m.screen(w)
-		if m.measured() && !m.fits() {
-			lines = style.TooSmall(Title, len(lines)+tail, w, m.height, "setup screen", "review and install")
-			for _, l := range style.Wrap("n not now"+dot()+"esc close", w) {
-				lines = append(lines, style.Dim.Render(l))
+// ApplyAndRecord installs (Deps.Apply), then records what went in, and
+// keybindings left out on the first-run screen as "not now". It does I/O:
+// call it inside a tea.Cmd.
+func ApplyAndRecord(d Deps, plan any, mcp, keys, snoozeKeys bool) []Result {
+	results := d.Apply(plan, mcp, keys)
+	ok := map[onboarding.Topic]bool{onboarding.MCP: mcp, onboarding.Keys: keys}
+	for _, r := range results {
+		if r.Err != nil {
+			ok[r.Topic] = false
+		}
+	}
+	for _, t := range []onboarding.Topic{onboarding.MCP, onboarding.Keys} {
+		if ok[t] {
+			if err := d.Record(onboarding.Installed, t); err != nil {
+				results = append(results, Result{Item: "Record", Err: err})
 			}
 		}
 	}
-	if m.status != "" {
-		lines = append(lines, style.Wrap(m.status, w)...)
+	if snoozeKeys {
+		if err := d.Record(onboarding.Snoozed, onboarding.Keys); err != nil {
+			results = append(results, Result{Item: "Record", Err: err})
+		}
 	}
-	return strings.Join(lines, "\n")
+	return results
 }

@@ -53,9 +53,9 @@ type Deps struct {
 	TestKey   func(ctx context.Context, provider string) error                  // Providers screen "t"
 	OllamaURL string                                                            // shown on the ollama row
 
-	// Post-rc: the Setup screen (MCP server + keybindings).
-	Setup      setupui.Deps   // Setup.Check nil: no S
-	SetupFirst *setupui.Offer // non-nil: the first-run screen opens before the library
+	// Post-rc: the Setup screen (MCP server + keybindings, setup.go).
+	// Setup.FirstRun runs from Init; Setup.Check nil: no S.
+	Setup setupui.Deps
 }
 
 type SnapshotMsg view.Snapshot
@@ -105,14 +105,9 @@ const (
 	scrSetup         // the Setup screen: first run, or S (post-rc)
 )
 
-// setupOpenMsg carries a fresh Setup offer for S.
-type setupOpenMsg struct {
-	offer setupui.Offer
-	err   error
-}
-
 type Model struct {
-	mcpStatus string // Deps.MCPStatus, read once when the popup opens
+	mcpStatus   string // Deps.MCPStatus, read when the popup opens and after the Setup screen
+	onboardNote string // a damaged onboarding.json (setup.go)
 
 	d         Deps
 	target    string
@@ -141,7 +136,7 @@ type Model struct {
 	trust *trustState     // scrTrust
 	input textinput.Model // the import, rename and export prompts
 
-	setup *setupui.Model // scrSetup
+	setup *setupState // scrSetup
 }
 
 func New(target string, d Deps) Model {
@@ -149,34 +144,23 @@ func New(target string, d Deps) Model {
 	if d.MCPStatus != nil {
 		m.mcpStatus = d.MCPStatus()
 	}
-	if d.SetupFirst != nil {
-		s := setupui.New(d.Setup, *d.SetupFirst, false)
-		m.setup, m.scr = &s, scrSetup
-	}
 	return m
 }
 
-// openSetup reads every item's state off the UI goroutine for S.
-func (m Model) openSetup() tea.Cmd {
-	check := m.d.Setup.Check
-	return func() tea.Msg {
-		o, err := check()
-		return setupOpenMsg{offer: o, err: err}
-	}
-}
-
 // Init asks the engine to reload dots and scan the target pane's repository,
-// so its project dots show up before anything is attached.
+// so its project dots show up before anything is attached, and runs the
+// Setup screen's first-run detection.
 func (m Model) Init() tea.Cmd {
-	if m.target == "" {
-		return nil
-	}
-	return func() tea.Msg {
-		if err := m.call(ipc.CmdReloadDots, ipc.ReloadArgs{PaneID: m.target}); err != nil {
-			return errMsg{err}
+	var reload tea.Cmd
+	if m.target != "" {
+		reload = func() tea.Msg {
+			if err := m.call(ipc.CmdReloadDots, ipc.ReloadArgs{PaneID: m.target}); err != nil {
+				return errMsg{err}
+			}
+			return nil
 		}
-		return nil
 	}
+	return tea.Batch(reload, m.detectSetup())
 }
 
 // library is what this popup lists: your dots, plus the project dots of the
@@ -210,21 +194,11 @@ func (m Model) reload() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.scr == scrSetup && m.setup != nil {
-		switch msg.(type) {
-		case SnapshotMsg: // the library keeps tracking snapshots below
-		case errMsg: // Init's reload failed: the library's status line shows it
-		case setupui.DoneMsg:
-			m.scr, m.setup = scrLibrary, nil
-			return m, nil
-		default:
-			if ws, ok := msg.(tea.WindowSizeMsg); ok {
-				m.width, m.height = ws.Width, ws.Height
-			}
-			sm, cmd := m.setup.Update(msg)
-			m.setup = &sm
-			return m, cmd
-		}
+	if mm, cmd, ok := m.setupMsg(msg); ok {
+		return mm, cmd
+	}
+	if k, ok := msg.(tea.KeyMsg); ok && m.scr == scrSetup && m.setup != nil {
+		return m.keysSetup(k)
 	}
 	if ws, ok := msg.(tea.WindowSizeMsg); ok && m.prof != nil && m.scr != scrProfile {
 		// A profile kept under its export or memory browser stays sized.
@@ -282,17 +256,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch msg := msg.(type) {
-	case setupOpenMsg:
-		if msg.err != nil {
-			m.status = style.Clean(msg.err.Error())
-			return m, nil
-		}
-		s := setupui.New(m.d.Setup, msg.offer, true)
-		if m.width > 0 || m.height > 0 {
-			s, _ = s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
-		}
-		m.setup, m.scr, m.status = &s, scrSetup, ""
-		return m, nil
 	case memOpenMsg:
 		if msg.deps.Store == nil {
 			if msg.err != nil {
@@ -384,6 +347,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.imp != nil {
 			m.imp.pg.fit(len(m.importLines()), m.bodyHeight(), m.measured())
+		}
+		if m.setup != nil {
+			m.setup.pg.fit(len(m.setupLines()), m.bodyHeight(), m.measured())
 		}
 	case SnapshotMsg:
 		m.snap = view.Snapshot(msg)
@@ -899,7 +865,7 @@ func (m Model) View() string {
 		}
 	case scrSetup:
 		if m.setup != nil {
-			return m.setup.View()
+			return m.setupView()
 		}
 	}
 	var b strings.Builder
@@ -934,6 +900,9 @@ func (m Model) View() string {
 	}
 	if m.mcpStatus != "" {
 		b.WriteString("\n" + style.Dim.Render(m.mcpStatus) + "\n")
+	}
+	if m.onboardNote != "" {
+		b.WriteString(strings.Join(m.fitLines([]string{style.Err.Render(m.onboardNote)}), "\n") + "\n")
 	}
 	help := "space toggle · enter apply · n new · t template · e edit · D delete · i profile · I import · T trust · K providers · esc close"
 	if m.d.Memory != nil {

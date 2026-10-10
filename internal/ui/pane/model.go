@@ -18,7 +18,6 @@ import (
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
-	setupui "herdr-dots/internal/ui/setup"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -79,7 +78,8 @@ type Model struct {
 	ticking bool             // a once-a-second tick runs while drafts run
 	clock   func() time.Time // nil = time.Now
 
-	setup *setupui.Model // the first-run Setup screen, while open (setup.go)
+	setupPending func() bool // WithSetupPending (setup.go); nil = no check
+	showSetup    bool        // the check found something to ask: show setupHint
 }
 
 const offlineHint = "offline: actions unavailable until the engine restarts"
@@ -97,7 +97,7 @@ func New(target string, c Caller) Model {
 	return Model{target: target, caller: c, editor: ta, question: ti, reason: ri, opened: map[string]int{}}
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return m.setupCheck() }
 
 func (m Model) pane() view.Pane {
 	p, _ := m.snap.Pane(m.target)
@@ -193,12 +193,10 @@ func (m Model) call(cmd string, args any) tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.setup != nil {
-		if mm, cmd, ok := m.setupUpdate(msg); ok {
-			return mm, cmd
-		}
-	}
 	switch msg := msg.(type) {
+	case setupPendingMsg:
+		m.showSetup = bool(msg)
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.editor.SetWidth(max(20, msg.Width-2))
@@ -511,9 +509,6 @@ func feedOutcome(e state.FeedEntry) string {
 }
 
 func (m Model) View() string {
-	if m.setup != nil {
-		return m.setup.View()
-	}
 	w := m.width
 	if w <= 0 {
 		w = 46
@@ -557,6 +552,11 @@ func (m Model) View() string {
 	}
 	if m.seen && !m.connected {
 		b.WriteString(style.Err.Render(engineDownMsg) + "\n")
+	}
+	if m.showSetup {
+		for _, l := range style.Wrap(setupHint, max(10, w)) {
+			b.WriteString(style.Dim.Render(l) + "\n")
+		}
 	}
 	if len(p.Dots) == 0 {
 		b.WriteString(style.Dim.Render("No dots here yet. Press prefix+d to add some.") + "\n")

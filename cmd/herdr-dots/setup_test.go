@@ -1,13 +1,12 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	tea "github.com/charmbracelet/bubbletea"
 
 	"herdr-dots/internal/mcpinstall"
 	"herdr-dots/internal/onboarding"
@@ -22,11 +21,14 @@ type onboardRig struct {
 	*mcpSetupRig
 	o       onboardIO
 	reloads int
+	looks   int
 }
 
 func newOnboardRig(t *testing.T, onPath ...string) *onboardRig {
 	t.Helper()
 	r := &onboardRig{mcpSetupRig: newMCPSetupRig(t, onPath...)}
+	look := r.io.lookPath
+	r.io.lookPath = func(bin string) (string, error) { r.looks++; return look(bin) }
 	r.o = onboardIO{
 		s:        r.io,
 		keysPath: filepath.Join(r.home, ".config", "herdr", "config.toml"),
@@ -56,45 +58,56 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// drive presses a key on the Setup screen and runs what it returns, as
-// Bubble Tea would; done reports the screen handing control back.
-func drive(m setup.Model, k string) (setup.Model, bool) {
-	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
-	for cmd != nil {
-		msg := cmd()
-		if _, ok := msg.(setup.DoneMsg); ok {
-			return m, true
-		}
-		m, cmd = m.Update(msg)
-	}
-	return m, false
-}
-
-func screen(t *testing.T, r *onboardRig) setup.Model {
+// first runs the manage popup's first-run detection (it may record an
+// install found by another route).
+func (r *onboardRig) first(t *testing.T) *setup.Offer {
 	t.Helper()
-	offer := r.o.firstRun()
-	if offer == nil {
-		t.Fatal("expected the Setup screen")
+	o, err := r.o.firstRun(true)
+	if err != nil {
+		t.Fatalf("firstRun: %v", err)
 	}
-	m, _ := setup.New(r.o.deps(), *offer, false).Update(tea.WindowSizeMsg{Width: 200, Height: 120})
-	return m
+	return o
 }
 
-func TestFirstOpenWithNothingInstalledShowsSetupAndWritesNothing(t *testing.T) {
+// pressY applies what y on the screen would, with the plan it showed.
+func (r *onboardRig) pressY(o setup.Offer) []setup.Result {
+	mcp, keys, snooze := setup.Screen{Offer: o, IncludeKeys: true}.Install()
+	return setup.ApplyAndRecord(r.o.deps(), o.Plan, mcp, keys, snooze)
+}
+
+func TestNothingIsReadBeforeTheDetectionRuns(t *testing.T) {
 	r := newOnboardRig(t, "claude", "codex")
-	offer := r.o.firstRun()
+	d := r.o.deps()
+	if r.looks != 0 || d.FirstRun == nil {
+		t.Fatalf("building the deps looked up %d programs", r.looks)
+	}
+	if _, err := d.FirstRun(); err != nil || r.looks == 0 {
+		t.Fatalf("FirstRun detects: looks %d err %v", r.looks, err)
+	}
+}
+
+func TestFirstOpenWithNothingInstalledOffersEverythingAndWritesNothing(t *testing.T) {
+	r := newOnboardRig(t, "claude", "codex")
+	if err := os.WriteFile(r.io.env.ClaudeConfigPath(), []byte(`{"numStartups": 1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	offer := r.first(t)
 	if offer == nil || !offer.AskMCP || !offer.AskKeys || len(offer.Clients) != 2 {
 		t.Fatalf("offer %+v", offer)
 	}
-	if !strings.Contains(strings.Join(offer.Clients[0].Change, "\n"), "Will run: claude mcp add --scope user") ||
-		!strings.Contains(strings.Join(offer.Clients[1].Change, "\n"), "+ "+mcpinstall.BlockBegin) {
-		t.Fatalf("the change is setup-mcp's plan text: %+v", offer.Clients)
+	claude := strings.Join(offer.Clients[0].Change, "\n")
+	cfg := r.io.env.ClaudeConfigPath()
+	for _, want := range []string{"Will run: claude mcp add --scope user", `stores this under "mcpServers" in ` + cfg + " (user scope)", "Backs up " + cfg + " first."} {
+		if !strings.Contains(claude, want) {
+			t.Errorf("Claude's change lacks %q:\n%s", want, claude)
+		}
+	}
+	if !strings.Contains(strings.Join(offer.Clients[1].Change, "\n"), "+ "+mcpinstall.BlockBegin) {
+		t.Fatalf("Codex's change is setup-mcp's diff: %+v", offer.Clients[1])
 	}
 	if len(offer.Keys.Change) != 4 || offer.Keys.Path != r.o.keysPath {
 		t.Fatalf("keys %+v", offer.Keys)
 	}
-	m := screen(t, r)
-	_ = m.View()
 	for _, f := range []string{r.codexConfig(), r.o.keysPath, r.p.OnboardingFile(), mcpinstall.RecordPath(r.p.ConfigDir)} {
 		if exists(f) {
 			t.Errorf("%s written before y", f)
@@ -107,9 +120,11 @@ func TestFirstOpenWithNothingInstalledShowsSetupAndWritesNothing(t *testing.T) {
 
 func TestYRunsSetupMCPAndSetupKeysAndRecordsInstalled(t *testing.T) {
 	r := newOnboardRig(t, "claude", "codex")
-	m, done := drive(screen(t, r), "y")
-	if done {
-		t.Fatal("the results stay on screen")
+	results := r.pressY(*r.first(t))
+	for _, res := range results {
+		if res.Err != nil {
+			t.Fatalf("%s: %v", res.Item, res.Err)
+		}
 	}
 	ranAdd := false
 	for _, a := range r.ran {
@@ -131,66 +146,73 @@ func TestYRunsSetupMCPAndSetupKeysAndRecordsInstalled(t *testing.T) {
 	if got := mcpinstall.StatusLine(r.p.ConfigDir); got != "MCP: installed for Claude Code, Codex" {
 		t.Fatalf("status %q", got)
 	}
-	if v := m.View(); !strings.Contains(v, "Restart the agent in its pane so it loads the server.") {
-		t.Fatalf("view:\n%s", v)
-	}
 }
 
 func TestYAppliesWhatTheScreenShowed(t *testing.T) {
 	r := newOnboardRig(t, "codex")
-	m := screen(t, r)
+	offer := r.first(t)
 	if err := os.MkdirAll(filepath.Dir(r.codexConfig()), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(r.codexConfig(), []byte("model = \"o3\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m, _ = drive(m, "y")
+	results := r.pressY(*offer)
 	if b, _ := os.ReadFile(r.codexConfig()); string(b) != "model = \"o3\"\n" {
 		t.Fatalf("a config changed after the screen showed it must not be edited: %q", b)
 	}
-	if v := m.View(); !strings.Contains(v, "changed since the preview") {
-		t.Fatalf("view:\n%s", v)
+	if results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "changed since the preview") {
+		t.Fatalf("results %+v", results)
 	}
 	if rec, _, _ := r.o.store.Load(); rec.MCP.State == onboarding.Installed {
 		t.Fatal("a failed install is not recorded as installed")
 	}
 }
 
-func TestNSnoozesTheScreenForSevenDays(t *testing.T) {
-	r := newOnboardRig(t, "claude")
-	if _, done := drive(screen(t, r), "n"); !done {
-		t.Fatal("n closes")
+// Fix round 1: the keybindings plan is checked like setup-mcp's: Herdr's
+// config changed between the preview and y means nothing is appended.
+func TestAStaleKeysPlanIsRefused(t *testing.T) {
+	r := newOnboardRig(t)
+	r.writeKeys(t, "[keys]\nprefix = \"ctrl+b\"\n")
+	offer := r.first(t)
+	edited := "[keys]\nprefix = \"ctrl+a\"\n"
+	r.writeKeys(t, edited)
+	results := r.pressY(*offer)
+	if len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "changed since the preview; nothing changed") {
+		t.Fatalf("results %+v", results)
 	}
-	rec, _, _ := r.o.store.Load()
-	if rec.MCP.State != onboarding.Snoozed || rec.Keys.State != onboarding.Snoozed {
-		t.Fatalf("record %+v", rec)
+	if b, _ := os.ReadFile(r.o.keysPath); string(b) != edited || r.reloads != 0 {
+		t.Fatalf("nothing may be appended: %q reloads %d", b, r.reloads)
 	}
-	r.at(time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC))
-	if r.o.firstRun() != nil {
-		t.Fatal("snoozed: no screen before 7 days")
-	}
-	r.at(time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC))
-	if r.o.firstRun() == nil {
-		t.Fatal("snoozed: the screen is back after 7 days")
-	}
-	if len(r.ran) != 0 || exists(r.o.keysPath) {
-		t.Fatal("n installs nothing")
+	if rec, _, _ := r.o.store.Load(); rec.Keys.State == onboarding.Installed {
+		t.Fatal("not recorded as installed")
 	}
 }
 
-func TestXRecordsNever(t *testing.T) {
+func TestASnoozeHidesTheOfferForSevenDays(t *testing.T) {
 	r := newOnboardRig(t, "claude")
-	if _, done := drive(screen(t, r), "x"); !done {
-		t.Fatal("x closes")
+	if err := r.o.store.Mark(onboarding.Snoozed, onboarding.MCP, onboarding.Keys); err != nil {
+		t.Fatal(err)
 	}
-	rec, _, _ := r.o.store.Load()
-	if rec.MCP.State != onboarding.Never || rec.Keys.State != onboarding.Never {
-		t.Fatalf("record %+v", rec)
+	r.at(time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC))
+	if r.first(t) != nil {
+		t.Fatal("snoozed: no screen before 7 days")
 	}
-	r.at(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
-	if r.o.firstRun() != nil {
-		t.Fatal("never means never")
+	r.at(time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC))
+	if r.first(t) == nil {
+		t.Fatal("snoozed: the screen is back after 7 days")
+	}
+}
+
+// Fix round 1: when the record forbids both topics, nothing is checked.
+func TestNeverForBothSkipsTheDetection(t *testing.T) {
+	r := newOnboardRig(t, "claude")
+	if err := r.o.store.Mark(onboarding.Never, onboarding.MCP, onboarding.Keys); err != nil {
+		t.Fatal(err)
+	}
+	r.looks = 0
+	if r.first(t) != nil || r.looks != 0 {
+		t.Fatalf("never for both: no screen and no detection (looks %d)", r.looks)
 	}
 }
 
@@ -200,12 +222,26 @@ func TestMCPAlreadyInstalledMeansNoScreenAndIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.writeKeys(t, "[[keys.command]]\nkey = \"prefix+m\"\ntype = \"plugin_action\"\ncommand = \"herdr-dots.manage\"\n")
-	if o := r.o.firstRun(); o != nil {
+	if o := r.first(t); o != nil {
 		t.Fatalf("everything installed: no screen, got %+v", o)
 	}
 	rec, _, err := r.o.store.Load()
 	if err != nil || rec.MCP.State != onboarding.Installed {
 		t.Fatalf("an install by any route is recorded: %+v %v", rec, err)
+	}
+}
+
+// Ruling P10-R14: the Dots pane's check records nothing.
+func TestThePaneCheckRecordsNothing(t *testing.T) {
+	r := newOnboardRig(t, "codex")
+	if err := setupMCP([]string{"--yes"}, r.io); err != nil {
+		t.Fatal(err)
+	}
+	if !r.o.pending() {
+		t.Fatal("the keybindings are still missing: pending")
+	}
+	if exists(r.p.OnboardingFile()) {
+		t.Fatal("the pane wrote onboarding.json")
 	}
 }
 
@@ -218,12 +254,48 @@ func TestANewerRecordMeansNoScreenAndNoWrite(t *testing.T) {
 	if err := os.WriteFile(r.p.OnboardingFile(), []byte(newer), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if o := r.o.firstRun(); o != nil {
+	if o := r.first(t); o != nil {
 		t.Fatalf("a newer record: no screen, got %+v", o)
 	}
 	if b, _ := os.ReadFile(r.p.OnboardingFile()); string(b) != newer {
 		t.Fatalf("a newer record is never rewritten: %s", b)
 	}
+}
+
+func TestADamagedRecordIsReported(t *testing.T) {
+	r := newOnboardRig(t, "codex")
+	if err := os.WriteFile(r.p.OnboardingFile(), []byte("{nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := r.o.firstRun(true); o != nil || !errors.Is(err, onboarding.ErrCorrupt) {
+		t.Fatalf("offer %+v err %v", o, err)
+	}
+	if b, _ := os.ReadFile(r.p.OnboardingFile()); string(b) != "{nope" {
+		t.Fatalf("rewritten: %s", b)
+	}
+}
+
+// Fix round 1: a setup child on the UI path that hangs is stopped after its
+// timeout, and the timeout is an error the screen shows.
+func TestAHangingSetupChildTimesOut(t *testing.T) {
+	t.Setenv("HERDR_DOTS_TEST_SLEEP", "1")
+	start := time.Now()
+	_, err := setupChildRunner(200 * time.Millisecond)([]string{os.Args[0], "-test.run=^TestSetupChildSleeps$"})
+	if err == nil || !strings.Contains(err.Error(), "timed out after") {
+		t.Fatalf("err %v", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("the child was not stopped")
+	}
+}
+
+// TestSetupChildSleeps is not a test: TestAHangingSetupChildTimesOut starts
+// this test binary as a hanging child.
+func TestSetupChildSleeps(t *testing.T) {
+	if os.Getenv("HERDR_DOTS_TEST_SLEEP") != "1" {
+		t.Skip("helper process for TestAHangingSetupChildTimesOut")
+	}
+	time.Sleep(30 * time.Second)
 }
 
 // `herdr-dots setup` runs both plans as setup-mcp and setup-keys print
