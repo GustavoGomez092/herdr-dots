@@ -495,9 +495,13 @@ func TestAttachDoesNotLoseConcurrentAttachmentUpdates(t *testing.T) {
 	r := newRig(t, dot("Security", dots.ModeQueue), dot("Frontend", dots.ModeQueue))
 	r.attach(t, "security")
 	rd := r.readers["s1"]
-	rd.arm()
+	// Gate this Attach's own read: the first Attach's catch-up pass reads
+	// the transcript too, and taking the gate it would skip the race.
+	type attachCtx struct{}
+	ctx := context.WithValue(context.Background(), attachCtx{}, true)
+	rd.armFor(func(c context.Context) bool { return c.Value(attachCtx{}) != nil })
 	done := make(chan error, 1)
-	go func() { done <- r.e.Attach(context.Background(), pane, []string{"frontend"}) }()
+	go func() { done <- r.e.Attach(ctx, pane, []string{"frontend"}) }()
 	select {
 	case <-rd.entered:
 	case <-time.After(3 * time.Second):
