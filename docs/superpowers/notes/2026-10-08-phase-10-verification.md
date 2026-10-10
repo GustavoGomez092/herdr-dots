@@ -106,4 +106,67 @@ Only the developer can do these; Phase 10 prepares each one.
 
 ## Phase 10 wrap-up
 
-(Task 13)
+Phase 10 ends at `1.0.0-rc.1`, a release candidate: not released, not done.
+The macOS acceptance evidence is in
+[1.0-acceptance.md](1.0-acceptance.md); what the owner still has to do is in
+[ready-to-publish.md](../../release/ready-to-publish.md).
+
+- **Soak.** 8-hour soak: running (started 2026-10-09 18:07 on c1245f9);
+  result recorded by the controller when it ends. The longest completed soak
+  (Task 4, 60 s busy and 30 s idle) passed in 120.12 s: 454 runs, 227 cards,
+  117 broadcasts (worst burst 7.1 a second), biggest snapshot 261,793 B
+  (budget 262,144 B), peak RSS 33.3 MB, idle CPU 0.443%, goroutines 20 -> 21.
+- **Fuzz.** Task 13 run (2026-10-09, c1245f9): `fuzzed 26 targets for 60s
+  each`, no crasher (26 targets × 60 s, 27 minutes). Crashers found and fixed in Phase 10 (Task 3), each
+  kept as a regression input: `FuzzImportTOML/8a748f204ecc8c6f` (an export
+  wrote `ref` for an entry without an id), `FuzzCodexBlock/a763424096dd21b2`,
+  `FuzzCodexBlock/816ef7fa033511c9` (a developer's own end-marker line) and
+  `FuzzCodexBlock/2d9d465bd56e31b4` (mixed line endings left a blank line
+  after `setup-mcp --remove`, a product bug in `internal/mcpinstall/codex.go`).
+  Short runs are random: two of those crashers were missed by a 60 s run and
+  found by a 1 s or 5 s one; the release workflow's 10 minutes per target is
+  the real gate.
+- **govulncheck.** Not clean. In the Task 13 run it couldn't reach its
+  database (`lookup vuln.go.dev: i/o timeout`, twice). The last result
+  (Task 11, go1.25.7): no reachable vulnerability in a third-party module,
+  24 reachable ones in the standard library (review R2). A patched Go in the
+  workflows and a clean run before any tag are user gates; the release
+  workflow's candidate job runs govulncheck and stops on a finding.
+- **Security review** (`docs/security/2026-10-08-security-review.md`):
+  Critical 0; High 1, fixed (R1: claude-cli runs loaded the repository's
+  `.claude/settings.json`; now `--setting-sources user`); Medium 6 (R2 the
+  workflows' Go toolchain, a user gate enforced on a tag; R3 partly fixed,
+  the rest a follow-up; R5 a follow-up; R4, R6, R7 accepted known issues);
+  Low 4 (R8 a follow-up; R9, R10, R11 accepted).
+- **Acceptance run (macOS).** `gofmt`, `go vet`, `go test -race -count=1
+  ./...` (48 packages `ok`), `make cross`, the local release end to end and
+  actionlint/shellcheck passed. Of the 41 checklist rows, 33 have macOS
+  evidence (11 of them with a live or Windows part as a user gate), 1 fails
+  (row 13: memory export, import and purge are CLI only), 7 wait on user
+  gates or the running soak. Linux and Windows columns: user gates.
+- **Live smoke.** `--version`, a fresh engine start without `migrate:`
+  warnings, and a `queue.json` a newer version wrote (read-only, unchanged,
+  the engine still starts) passed. The toast and the memory approve guard in
+  a tiny popup need a running `dots-test` Herdr session, which resumes six
+  Claude Code panes from earlier runs on every start, so they are user gates.
+- **Parked from Task 7 (notes, not user gates):** word the read-only toast by
+  reason when the first real migration lands; deleting a dot from the manage
+  popup skips `CheckWritable` (requested by the user); files a migration
+  would upgrade are not protected until the first migration exists.
+
+User gates that remain (the Blockers of `docs/release/ready-to-publish.md`):
+
+- License.
+- Name and listing.
+- The acceptance run on Linux and Windows hardware, and on macOS with a real `herdr plugin install`.
+- Acceptance row 13: memory export, import and purge in the TUI (or a checklist change).
+- The 8-hour soak result review.
+- A patched Go in every workflow and a clean govulncheck before any tag (no `toolchain` line in `go.mod`).
+- GitHub Actions pinned by commit SHA.
+- `SECURITY.md` `TODO(publish)` placeholders.
+- Live provider checks (Claude, API backends with keys, the `suppressed` repeat).
+- The R1 live check (a repository `apiKeyHelper` must not run; does `CLAUDE.md` still reach dots).
+- Codex live tests and the P10-R8 dotted MCP name check.
+- The Herdr popup and pane checks (Phase 9 popup, memory approve guard, read-only toast, Phase 4 V6).
+- PowerShell install tests on a `pwsh` host; the Windows runtime; real cosign.
+- Decisions: U22 (`enter` deletes a deleted dot's memory; keep is recommended), the Claude model setting (X13), old trust entries in `~/.claude.json` (X14), the `dots-test` session.
