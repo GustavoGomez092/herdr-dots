@@ -194,6 +194,9 @@ func (p Preflight) Select(slugs []string) Preflight {
 }
 
 func (p Preflight) finish(empty string) Preflight {
+	if p.Members == nil {
+		p.Members = []string{} // "members": [] in the snapshot, never null (K2)
+	}
 	p.EstimatedCalls = EstimateCalls(len(p.Members), p.Rounds, p.Chair)
 	p.Allowed, p.Refusal = true, ""
 	switch {

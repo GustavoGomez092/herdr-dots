@@ -76,6 +76,19 @@ bundle; the live check is pending, a user gate). Drafts and research already
 ran with `--restricted`, which ignores both your and the repository's
 settings files.
 
+## claude-cli dots are denied your home secrets
+
+Claude Code's read tools can name any path, not only files in the
+repository. Every `claude-cli` run that has them (reviews, asks, memory
+passes, council members and research) gets `Read` deny rules for the
+repository's secret files (the list above plus `tool_deny_globs`) and for
+secrets outside it: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`,
+`~/.netrc`, `~/.docker/config.json`, `~/.kube`, `~/.claude.json`,
+`~/.claude`, `~/.codex`, and the herdr-dots config directory that holds
+`credentials.toml`. Other files outside the repository are not denied. How
+Claude Code applies these rules to `Grep` and `Glob` has not been verified
+live.
+
 ## Codex dots and your other MCP servers
 
 A codex dot run switches off every MCP server declared in your Codex

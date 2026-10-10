@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -83,9 +84,9 @@ func (b *Backend) client() (anthropic.Client, string, error) {
 // key from credentials.toml, or, on the SDK's own chain (key ""), the
 // environment values that chain reads (API key, auth token, federation
 // identity token, custom header values), which may have no key shape Redact
-// knows (ruling P10-R7). They are never the returned key. Tokens the SDK
-// reads from files (an `ant auth` profile, ANTHROPIC_IDENTITY_TOKEN_FILE) or
-// gets by exchange are not covered (a known issue).
+// knows (ruling P10-R7), and the content of ANTHROPIC_IDENTITY_TOKEN_FILE.
+// They are never the returned key. Tokens the SDK reads from an `ant auth`
+// profile or gets by exchange are not covered (a known issue, S23).
 func (b *Backend) known(key string) []string {
 	if key != "" {
 		return []string{key}
@@ -97,6 +98,16 @@ func (b *Backend) known(key string) []string {
 	for _, name := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_IDENTITY_TOKEN"} {
 		if v := os.Getenv(name); v != "" {
 			out = append(out, v)
+		}
+	}
+	// The federation identity token can come from a file instead (S23).
+	if p := os.Getenv("ANTHROPIC_IDENTITY_TOKEN_FILE"); p != "" {
+		if f, err := os.Open(p); err == nil {
+			b, _ := io.ReadAll(io.LimitReader(f, 64<<10))
+			f.Close()
+			if v := strings.TrimSpace(string(b)); v != "" {
+				out = append(out, v)
+			}
 		}
 	}
 	// ANTHROPIC_CUSTOM_HEADERS holds "Name: value" lines; a value can be a
@@ -201,14 +212,15 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 	// run: every tool-loop turn and every pause_turn resume (ruling P8-R6).
 	webUsed := 0
 	// declareTools gives each call only what is left of the budget; at zero
-	// the web tools are dropped and the repo tools stay.
+	// the web tool is dropped and the repo tools stay. Research gets
+	// web_search only, never web_fetch (security review R5, as claude-cli
+	// research, P8-R14): with the repo tools in the same run, a fetched URL
+	// chosen by an injected page could carry repository data out.
 	declareTools := func() {
 		params.Tools = repoTools
 		if left := webMaxUses - webUsed; webOn && left > 0 {
 			params.Tools = append(append([]anthropic.BetaToolUnionParam(nil), repoTools...),
 				anthropic.BetaToolUnionParam{OfWebSearchTool20260209: &anthropic.BetaWebSearchTool20260209Param{MaxUses: anthropic.Int(int64(left))}},
-				anthropic.BetaToolUnionParam{OfWebFetchTool20260209: &anthropic.BetaWebFetchTool20260209Param{
-					MaxUses: anthropic.Int(int64(left)), MaxContentTokens: anthropic.Int(webFetchMaxTokens)}},
 			)
 		}
 	}
@@ -242,7 +254,10 @@ func (b *Backend) Run(ctx context.Context, r backend.Request) (backend.Result, e
 			if resp.StopReason != anthropic.BetaStopReasonPauseTurn {
 				return resp, u, searches, nil
 			}
-			if n == maxPauses || webUsed >= webMaxUses {
+			if webUsed >= webMaxUses {
+				return resp, u, searches, fmt.Errorf("web research used its %d web uses without finishing", webMaxUses)
+			}
+			if n == maxPauses {
 				return resp, u, searches, fmt.Errorf("web research paused %d times without finishing", n+1)
 			}
 		}
@@ -335,8 +350,11 @@ func mapErr(err error, known []string, model string) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("anthropic-api timed out: %w", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("anthropic-api cancelled: %w", err) // not a timeout (B18)
 	}
 	var apierr *anthropic.Error
 	if errors.As(err, &apierr) {

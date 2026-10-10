@@ -27,6 +27,8 @@ var redactions = []struct {
 	{regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=\-]{16,}`), "${1}" + Redacted},
 	// api_key=…, "api_key": "…", x-api-key: …, authorization: …
 	{regexp.MustCompile(`(?i)((?:api[_-]?key|x-api-key|access[_-]?token)["']?\s*[:=]\s*["']?)[^\s"'&,;}]{6,}`), "${1}" + Redacted},
+	// A query-string credential by parameter name (S13): ?key=…, &token=…
+	{regexp.MustCompile(`(?i)([?&](?:key|token|auth|secret|client_secret|password|passwd|sig|signature)=)[^\s"'&#]{6,}`), "${1}" + Redacted},
 	// authorization: [scheme] credential (Basic, token, Bearer, ...)
 	{regexp.MustCompile(`(?i)(authorization["']?\s*[:=]\s*["']?)(?:\w+\s+)?[^\s"'&,;}]{6,}`), "${1}" + Redacted},
 }

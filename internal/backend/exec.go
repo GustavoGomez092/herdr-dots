@@ -41,7 +41,13 @@ type Runner interface {
 // before anything starts (platform.ErrUnsafeBatchArg, platform.ErrCmdTooLong).
 type ExecRunner struct{}
 
+// ErrNoRunner fails a CLI run whose backend was built without a Runner (B6).
+var ErrNoRunner = errors.New("backend has no command runner")
+
 func (ExecRunner) Run(ctx context.Context, c Cmd) ([]byte, []byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err // already cancelled: start nothing (B5)
+	}
 	cmd, err := platform.Command(c.Name, c.Args)
 	if err != nil {
 		return nil, nil, err
@@ -51,9 +57,11 @@ func (ExecRunner) Run(ctx context.Context, c Cmd) ([]byte, []byte, error) {
 	if env == nil {
 		env = os.Environ()
 	}
-	// Windows: the child starts in the project, and an npm shim's bare "node"
-	// must not find a repo-local node.exe/.cmd there (platform.ChildEnv).
-	cmd.Env = platform.ChildEnv(env)
+	// CleanEnv here too (S6), not only in the backends that build Env:
+	// Herdr's variables never reach a dot's CLI. Windows: the child starts
+	// in the project, and an npm shim's bare "node" must not find a
+	// repo-local node.exe/.cmd there (platform.ChildEnv).
+	cmd.Env = platform.ChildEnv(CleanEnv(env))
 	cmd.Stdin = strings.NewReader(c.Stdin)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out

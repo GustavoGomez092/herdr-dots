@@ -40,7 +40,10 @@ func TestLiveCodex(t *testing.T) {
 	r := req()
 	r.Model = ""
 	r.Cwd = t.TempDir()
-	b, _ := New("codex-cli", ExecRunner{})
+	b, err := New("codex-cli", ExecRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, err := b.Run(ctx, r)
 	if err != nil {
 		t.Fatalf("live codex: %v", err)

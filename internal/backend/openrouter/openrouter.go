@@ -278,8 +278,11 @@ func mapErr(err error, model string) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("openrouter timed out: %w", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("openrouter cancelled: %w", err) // not a timeout (B18)
 	}
 	var se *httpx.StatusError
 	if errors.As(err, &se) {

@@ -35,6 +35,9 @@ Every rule about what leaves your machine, what dots may touch and what needs yo
   repository can't run a credential helper or redirect a dot; the repository's `CLAUDE.md`
   probably doesn't reach them either (live check pending; see
   [Backends](backends.md#claude-cli-dots-ignore-the-repositorys-claude-settings)).
+- `claude-cli` runs that read files are denied secret files in the repository and your home
+  secrets outside it (`~/.ssh`, `~/.aws`, `~/.claude`, the herdr-dots config directory with
+  `credentials.toml`, and more; see [Backends](backends.md#claude-cli-dots-are-denied-your-home-secrets)).
 - Queue mode (you approve) is the default. Inject mode is opt-in per dot and can be turned off for
   all dots with `inject_enabled = false` in `config.toml`.
 - Changes to `config.toml` apply within a few seconds, without a restart (except `max_parallel_runs`, the `memory_*` limits and turning `memory_enabled` back on);
@@ -66,8 +69,8 @@ Every rule about what leaves your machine, what dots may touch and what needs yo
   when it is read, like the feed.
 - Proactive dots are opt-in per dot and read-only, even when the dot is write-capable: research,
   scheduled runs and commit reviews never draft. With `[research] web = true`, research sends search
-  queries derived from your code to the backend's web search provider. `claude-cli` research uses web
-  search only, with no page fetching, and secret files are denied to its reads. Background spend is capped by
+  queries derived from your code to the backend's web search provider. `claude-cli` and `anthropic-api` research use web
+  search only, with no page fetching, and secret files are denied to their reads. Background spend is capped by
   `daily_budget_usd` (default $1.00) across every Herdr session.
 - Commit reviews never install git hooks; they only read `HEAD` and `git log`/`git show` output, with
   the repository's hooks, fsmonitor, diff drivers and transports disabled.
