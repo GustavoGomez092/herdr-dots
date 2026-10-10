@@ -43,7 +43,8 @@ func TestClaudeRepoReadRunsDenyHomeSecretsAndTheConfigDir(t *testing.T) {
 	question.Question = "is this token check safe?"
 	research := req()
 	research.Pass, research.Web = PassResearch, true
-	for name, r := range map[string]Request{"review": review, "memory pass": memory, "ask": question, "research": research} {
+	draft := writeReq() // a draft keeps its Edit/Write rules and gets the Read denies too
+	for name, r := range map[string]Request{"review": review, "memory pass": memory, "ask": question, "research": research, "draft": draft} {
 		t.Run(name, func(t *testing.T) {
 			cmd := c.BuildCmd(r)
 			defer cmd.Close()

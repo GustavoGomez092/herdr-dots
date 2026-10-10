@@ -16,7 +16,9 @@ func writeReq() Request {
 	return r
 }
 
-const writeSettingsWant = `{"disableAllHooks":true,"permissions":{"deny":["Edit(.git)","Write(.git)","Edit(.git/**)","Write(.git/**)","Edit(.claude/**)","Write(.claude/**)","Edit(**/.git)","Write(**/.git)","Edit(**/.claude/**)","Write(**/.claude/**)"]}}`
+// writeSettingsWant: the draft's Edit/Write denies, then the home-secret
+// Read denies (no config dir here).
+const writeSettingsWant = `{"disableAllHooks":true,"permissions":{"deny":["Edit(.git)","Write(.git)","Edit(.git/**)","Write(.git/**)","Edit(.claude/**)","Write(.claude/**)","Edit(**/.git)","Write(**/.git)","Edit(**/.claude/**)","Write(**/.claude/**)","Read(~/.ssh/**)","Read(~/.aws/**)","Read(~/.gnupg/**)","Read(~/.config/gh/**)","Read(~/.netrc)","Read(~/.docker/config.json)","Read(~/.kube/**)","Read(~/.claude.json)","Read(~/.claude/**)","Read(~/.codex/**)"]}}`
 
 func TestClaudeDraftGetsFileToolsAndNoShell(t *testing.T) {
 	cmd := ClaudeCLI{Environ: func() []string { return nil }}.BuildCmd(writeReq())
