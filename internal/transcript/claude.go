@@ -167,19 +167,29 @@ func (r ClaudeReader) Turns(context.Context) ([]Turn, error) {
 func ResolveClaudePath(home, kind, value string) (string, error) {
 	switch kind {
 	case "path":
-		if _, err := os.Stat(value); err != nil {
+		st, err := os.Stat(value)
+		if err != nil {
 			return "", err
+		}
+		if st.IsDir() {
+			return "", fmt.Errorf("claude session path %s is a directory", value)
 		}
 		return value, nil
 	case "id":
 		if value == "" || strings.ContainsAny(value, `/\*?[]`) || strings.Contains(value, "..") {
 			return "", fmt.Errorf("invalid claude session id %q", value)
 		}
-		matches, _ := filepath.Glob(filepath.Join(platform.ClaudeProjectsDir(home), "*", value+".jsonl"))
-		if len(matches) == 0 {
-			return "", fmt.Errorf("no transcript for claude session %s", value)
+		// Each project folder is listed rather than globbed, so a glob
+		// metacharacter in the home path can't make the lookup miss.
+		root := platform.ClaudeProjectsDir(home)
+		dirs, _ := os.ReadDir(root) // sorted by name, like a glob's matches
+		for _, d := range dirs {
+			p := filepath.Join(root, d.Name(), value+".jsonl")
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return p, nil
+			}
 		}
-		return matches[0], nil
+		return "", fmt.Errorf("no transcript for claude session %s", value)
 	}
 	return "", fmt.Errorf("unknown session kind %q", kind)
 }

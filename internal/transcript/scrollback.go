@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 )
@@ -29,6 +30,9 @@ func NewScrollback(p PaneReader, paneID string, lines int) *ScrollbackReader {
 func (r *ScrollbackReader) Source() string { return SourceScrollback }
 
 func (r *ScrollbackReader) Turns(ctx context.Context) ([]Turn, error) {
+	if r.pane == nil {
+		return nil, errors.New("no pane reader for the scrollback")
+	}
 	text, err := r.pane.PaneRead(ctx, r.paneID, "recent_unwrapped", r.lines)
 	if err != nil {
 		return nil, err
