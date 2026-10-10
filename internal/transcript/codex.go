@@ -43,6 +43,9 @@ func (f *codexField) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// rolloutStamp is the timestamp in rollout-<stamp>-<id>.jsonl.
+var rolloutStamp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$`)
+
 var patchFileRe = regexp.MustCompile(`(?m)^\*\*\* (?:Add|Update|Delete) File: (.+)$`)
 
 func ParseCodex(r io.Reader) ([]Turn, error) {
@@ -138,8 +141,13 @@ func ResolveCodexPath(home, kind, value string) (string, error) {
 		}
 		for _, dir := range codexSessionsDirs(home) {
 			matches, _ := filepath.Glob(filepath.Join(dir, "*", "*", "*", "rollout-*-"+value+".jsonl"))
-			if len(matches) > 0 {
-				return matches[len(matches)-1], nil
+			// The glob's * can span dashes ("abc-c1" ends in "-c1"): keep
+			// only files whose whole tail after the timestamp is the id (T6).
+			for i := len(matches) - 1; i >= 0; i-- {
+				stamp := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(matches[i]), "rollout-"), "-"+value+".jsonl")
+				if rolloutStamp.MatchString(stamp) {
+					return matches[i], nil
+				}
 			}
 		}
 		return "", fmt.Errorf("no transcript for codex session %s", value)

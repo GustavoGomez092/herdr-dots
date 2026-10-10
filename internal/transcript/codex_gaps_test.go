@@ -20,6 +20,30 @@ func TestResolveCodexPathRejectsUnsafeIDs(t *testing.T) {
 	}
 }
 
+// T6 (post-rc hardening): the id must be the whole session id after the
+// rollout timestamp, so "c1" never matches another session "abc-c1".
+func TestResolveCodexPathDoesNotMatchAnIDSuffix(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	home := t.TempDir()
+	dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "08")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mine := filepath.Join(dir, "rollout-2026-10-08T09-00-00-c1.jsonl")
+	other := filepath.Join(dir, "rollout-2026-10-08T10-00-00-abc-c1.jsonl")
+	for _, f := range []string{mine, other} {
+		if err := os.WriteFile(f, []byte(codexSample), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p, err := ResolveCodexPath(home, "id", "c1"); err != nil || p != mine {
+		t.Fatalf("c1 resolved to %q (%v), want %q", p, err, mine)
+	}
+	if p, err := ResolveCodexPath(home, "id", "abc-c1"); err != nil || p != other {
+		t.Fatalf("abc-c1 resolved to %q (%v)", p, err)
+	}
+}
+
 func TestParseCodexHandlesHugeLines(t *testing.T) {
 	huge := `{"type":"response_item","payload":{"type":"function_call_output","output":"` + strings.Repeat("z", 3<<20) + `"}}`
 	src := `{"type":"event_msg","payload":{"type":"user_message","message":"first"}}` + "\n" + huge + "\n" +
