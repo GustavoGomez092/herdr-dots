@@ -38,7 +38,7 @@ The agent sees these tools (as `mcp__herdr-dots__<tool>`):
 | `ask_dot` | Ask one attached dot a question and wait for its answer (up to the run timeout) |
 | `ask_council` | Ask every attached dot at once and get the merged council digest |
 | `list_queue` | Read the dots' cards waiting for you in this pane |
-| `read_memory` | Read the project's approved dot memory |
+| `read_memory` | Read the project's approved dot memory; a dot's global (all-project) memory only for the dots attached to the pane |
 | `propose_memory` | Propose a convention, decision or note; it waits for your approval in the memory screen |
 
 > **Warning: MCP answers bypass the approval queue.** Whatever `ask_dot`, `ask_council` and `list_queue`

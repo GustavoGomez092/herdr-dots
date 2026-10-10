@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -354,7 +355,7 @@ func (t *tools) readMemory(ctx context.Context, _ *mcp.CallToolRequest, in ReadM
 	if err := t.guard("read_memory"); err != nil {
 		return nil, ReadMemoryOut{}, err
 	}
-	pid, err := t.project(ctx)
+	pid, attached, err := t.projectDots(ctx)
 	if err != nil {
 		return nil, ReadMemoryOut{}, t.fail("read_memory", err)
 	}
@@ -380,6 +381,12 @@ func (t *tools) readMemory(ctx context.Context, _ *mcp.CallToolRequest, in ReadM
 	}
 	limit = min(limit, maxMemoryLimit)
 	entries, err := t.d.Memory.List(pid, f)
+	// Global entries are a dot's memory across every project: only the
+	// pane's own dots' are shown (S16), so an agent in one project can't
+	// read what an unattached dot learned in another.
+	entries = slices.DeleteFunc(entries, func(e memory.Entry) bool {
+		return e.Scope == memory.ScopeGlobal && !attached[e.Dot]
+	})
 	out := ReadMemoryOut{Entries: []MemoryItem{}, Total: len(entries)}
 	if err != nil {
 		if len(entries) == 0 {
@@ -442,19 +449,29 @@ func (t *tools) proposeMemory(ctx context.Context, _ *mcp.CallToolRequest, in Pr
 
 // project is the pane's memory project, as the engine resolved it.
 func (t *tools) project(ctx context.Context) (string, error) {
+	pid, _, err := t.projectDots(ctx)
+	return pid, err
+}
+
+// projectDots is project plus the slugs of the dots attached to the pane.
+func (t *tools) projectDots(ctx context.Context) (string, map[string]bool, error) {
 	if t.d.Memory == nil {
-		return "", errors.New("dot memory is turned off (memory_enabled = false in config.toml)")
+		return "", nil, errors.New("dot memory is turned off (memory_enabled = false in config.toml)")
 	}
 	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
 	res, err := t.d.Engine.ListDots(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if !memory.ValidProjectID(res.ProjectID) {
-		return "", errors.New("this pane's project is unknown: attach a dot to the pane first (prefix+d)")
+		return "", nil, errors.New("this pane's project is unknown: attach a dot to the pane first (prefix+d)")
 	}
-	return res.ProjectID, nil
+	attached := map[string]bool{}
+	for _, d := range res.Dots {
+		attached[d.Slug] = true
+	}
+	return res.ProjectID, attached, nil
 }
 
 // ---- helpers
