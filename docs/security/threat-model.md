@@ -83,8 +83,10 @@ triage rows (the full reasons are in the triage notes).
   - Read-only runs (T1): `internal/backend/claude.go` (`BuildCmd`: `--tools
     Read,Grep,Glob`, `--strict-mcp-config`, `--settings` with
     `disableAllHooks` and, when the read tools are on, Read deny rules for
-    secret files (`researchSettings`, review R3,
-    `TestClaudeRepoReadRunsDenySecretFiles`), `--setting-sources user`),
+    secret files, home secrets and the herdr-dots config directory
+    (`researchSettings` and, for drafts, `writeSettingsFor`; review R3,
+    `TestClaudeRepoReadRunsDenySecretFiles`,
+    `TestClaudeRepoReadRunsDenyHomeSecretsAndTheConfigDir`), `--setting-sources user`),
     `internal/backend/codex.go` (`--sandbox read-only`, never drafts:
     `ErrCodexCannotDraft`), `internal/backend/toolloop` (jail: `ResolveInRoot`,
     `openVerified`, `Unavailable` for `/`, `$HOME` and its ancestors,
@@ -102,10 +104,11 @@ triage rows (the full reasons are in the triage notes).
     the project source). Confirming it is part of the R1 live gate.
 - **Residual risk:** a dot can still *say* something wrong; it can't act on
   it, and memory written from it waits for approval (Known gaps). claude-cli
-  review, ask and memory runs now get the secret-file Read deny rules, but
-  they are not confined to the repository: they can read other files outside
-  it, and whether Read deny rules also bind Grep and Glob is unverified
-  (review R3, triage X9). Codex dots read
+  review, ask, memory and draft runs deny reads of secret files, home secrets
+  (`~/.ssh`, `~/.aws`, `~/.claude` and the like) and the herdr-dots config
+  directory, but they are not confined to the repository: they can read other
+  files outside it, and whether Read deny rules also bind Grep and Glob is
+  unverified (review R3 post-rc status, triage X9). Codex dots read
   through Codex's own sandbox, so `tool_deny_globs` doesn't limit them
   [triage S24], and Codex may load repository instructions (review R6). Local dot
   args can still use some claude/codex flags the denylist doesn't name [triage B9].
@@ -190,7 +193,7 @@ triage rows (the full reasons are in the triage notes).
     `TestClaudeResearchDeniesSecretsAndFetch`,
     `TestClaudeResearchDeniesTheConfiguredGlobs`); at most 5 paid web uses per
     run (P8-R6, `TestWebUsesAreCappedAcrossPauses`,
-    `TestWebUsesAreCappedAcrossToolTurns`, `TestWebFetchCarriesContentCap`);
+    `TestWebUsesAreCappedAcrossToolTurns`);
     an invalid `tool_deny_globs` entry turns research off
     (`TestInvalidDenyGlobTurnsResearchOff`).
   - Git: T8; `worktree.Git` adds `diff.submodule=short`, filters off in
@@ -199,10 +202,10 @@ triage rows (the full reasons are in the triage notes).
     `TestNoLazyFetchWhereGitIgnoresNoLazyFetch`,
     `TestGitEnvDropsRedirectsAndPinsSafety`).
 - **Residual risk:** a search query can carry repository text to the search
-  provider (accepted, P8-R14). anthropic-api research pairs repository reading
-  with server-side web fetch; Anthropic only fetches URLs already in the
-  context, and 5 uses cap a link-following leak, but this is provider
-  behaviour, not live-verified here (review R5). No cross-session daily
+  provider (accepted, P8-R14). anthropic-api research declares
+  `web_search` only (no `web_fetch`, so no link following from a page; review
+  R5, `TestWebResearchNeverDeclaresWebFetch`), with the repository tools when
+  the dot has them. No cross-session daily
   reservation (at most one extra run per session) [triage Q13]; `--max-budget-usd`
   stop behaviour is a user gate [triage X10].
 
@@ -297,9 +300,10 @@ triage rows (the full reasons are in the triage notes).
   talk to the engine socket directly (B9). An `ask_dot` to a claude-cli dot
   runs it with the read tools in the pane's directory, and those reads are
   not confined to it: the dot can read files outside the repository (secret
-  files are denied by name, review R3), and its answer goes straight to the
-  agent without the approval queue. `read_memory` returns global
-  entries of dots not attached to the pane [triage S16]. A project-level
+  files, home secrets and the config directory are denied, review R3), and its
+  answer goes straight to the agent without the approval queue. `read_memory`
+  returns global entries only of dots attached to the pane (S16 fixed after
+  rc.1, `TestReadMemoryLeavesOutGlobalEntriesOfUnattachedDots`). A project-level
   `.codex/config.toml` server isn't detected [triage P1]. Codex paths are not
   live-verified [triage X3].
 
@@ -346,9 +350,13 @@ triage rows (the full reasons are in the triage notes).
   patch (it can read the hash from a snapshot). The approval gates protect
   against the plugin's own models and against acting on unseen text in the
   UI; they are not a boundary against other programs of the same user, who
-  could edit the files directly anyway [triage I8]. On Linux, a local user who
-  pre-creates the temp-dir fallback directory stops the engine from starting
-  (denial of service, review R8). There are no server write deadlines [triage I6].
+  could edit the files directly anyway [triage I8]. On Linux, the socket
+  fallback directory is a private runtime directory (`/run/user/<uid>`) when
+  that exists, else `$TMPDIR/herdr-dots-<uid>`; a symlink, a directory another
+  user owns or one with loose permissions is refused with an error naming it
+  (review R8 post-rc status), so a local user who pre-creates it still stops
+  the engine from starting, but with a message, and can't be dialled into.
+  Server writes have a 10 s deadline.
 
 ### B10. Install and update (checksums, cosign optional, source fallback)
 
@@ -397,8 +405,8 @@ triage rows (the full reasons are in the triage notes).
 - **Residual risk:** none of this has run on Windows here: it is compiled
   and unit-tested (cross-compiled, plus CI when pushed), a user gate [triage X1,
   X2, W6, W7, W17] (P6-R1). Known: a residual `Purge` race [triage W1, W2],
-  inherited ACLs on `CreateFile` [triage W4], an aliased `os/exec` import would pass
-  the guard [triage W13], user names with `%` or `!` can't run npm shims [triage W15].
+  inherited ACLs on `CreateFile` [triage W4], the portability guard now follows an aliased `os/exec` import
+  and flags a dot import [triage W13], user names with `%` or `!` can't run npm shims [triage W15].
 
 ## Known gaps
 
@@ -409,7 +417,7 @@ triage rows (the full reasons are in the triage notes).
 - A dot file the developer writes can still pass some `claude`/`codex` flags the denylist doesn't name (short forms, combined flags; see the triage notes). Imported and project dots keep no args but `--model`/`--effort`.
 - Linux and Windows privacy (modes, DACLs, pipes) is tested in CI only; not run on those systems here.
 - The engine endpoint is unauthenticated for processes of the same user, the coding agent included (B9).
-- claude-cli review, ask, memory and council runs deny secret files by name but can still read other files outside the repository; whether Read deny rules also bind Grep and Glob is unverified (review R3, triage X9).
+- claude-cli review, ask, memory, council and draft runs deny secret files, home secrets and the herdr-dots config directory but can still read other files outside the repository; whether Read deny rules also bind Grep and Glob is unverified (review R3 post-rc status, triage X9).
 - Codex dots may read repository instructions and project config that the plugin doesn't control (review R6, [triage S24]).
 - `--setting-sources user` (T22) is pinned by argv tests and the flag is present in the installed Claude Code 2.1.295, but a live run that shows a repository `apiKeyHelper` is ignored is a user gate, like the `--restricted` re-check [triage X8].
 - Release binaries must be built with a patched Go toolchain: set an explicit `go-version` in every workflow (review R2, [triage X12]).

@@ -60,6 +60,20 @@ R11 accepted).
 High and Critical findings are fixed in this task with a test each; the
 others are listed in the triage notes' known issues.
 
+## Post-rc status
+
+Status after the post-rc hardening wave and its fix wave (merged at
+`e4e38ea`). The table above is the review as written for 1.0.0-rc.1 and is
+not changed.
+
+| # | Post-rc status | Tests and what remains |
+|---|---|---|
+| R3 | FIXED POST-RC | claude-cli runs that read the repository (review, ask, memory, research, council members with repo read, and drafts) deny `Read` of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.netrc`, `~/.docker/config.json`, `~/.kube`, `~/.claude.json`, `~/.claude` and `~/.codex`, and of the herdr-dots config directory (and the symlink-resolved form when it differs). `TestClaudeRepoReadRunsDenyHomeSecretsAndTheConfigDir` (review, memory pass, ask, research and draft subtests), `TestClaudeHomeDenyNeedsNoConfigDir`. Not live-verified for Grep and Glob (triage X9); reads are still not confined to the working directory |
+| R5 | FIXED POST-RC | anthropic-api research declares `web_search` only and never `web_fetch`, with or without the repository tools: `TestWebResearchNeverDeclaresWebFetch`, `TestWebResearchDeclaresServerToolsWithoutStructuredOutput`. Search queries can still carry repository text to the search provider (accepted, P8-R14) |
+| R8 | FIXED POST-RC | the fallback directory is `/run/user/<uid>` when that exists and is private (an `XDG_RUNTIME_DIR` counts only at that path, so every client computes the same socket path), else `$TMPDIR/herdr-dots-<uid>`, made with `Mkdir` and checked with `Lstat` (a real directory, this user's, mode 0700); a symlink, a foreign owner or loose permissions is refused with an error naming the path: `TestSockFallbackHappyPathMakesAPrivateDir`, `TestSockFallbackRefusesASymlink`, `TestSockFallbackRefusesADirAnotherUserOwns`, `TestSockFallbackRefusesAnExistingDirOthersCanUse`, `TestSockFallbackPrefersAPrivateXDGRuntimeDir`, `TestSockPathIsTheSameWithOrWithoutAnotherXDGRuntimeDir`. Upgrade note (Linux only, deep state paths only): an old engine and a new client can miss each other until Herdr restarts |
+| R1, R2 | unchanged | as in the table above (R2 is still a user gate) |
+| R4, R6, R7, R9, R10, R11 | unchanged | accepted or follow-up as in the table above |
+
 ## Checked and found sound
 
 No finding in: the jail (`ResolveInRoot`, `openVerified`, `Unavailable`,
