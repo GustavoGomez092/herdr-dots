@@ -8,9 +8,9 @@ import (
 )
 
 // P9-R4 and P9-R10 refuse these args for every dot, local ones included, so
-// a local dot that used one stops loading after an upgrade. The README's
+// a local dot that used one stops loading after an upgrade. The guide's
 // upgrade note must name each one, and each must really be refused.
-func TestREADMEUpgradeNoteNamesEveryNewlyDeniedArg(t *testing.T) {
+func TestGuideUpgradeNoteNamesEveryNewlyDeniedArg(t *testing.T) {
 	cases := []struct {
 		kind, readme string
 		args         []string
@@ -28,25 +28,25 @@ func TestREADMEUpgradeNoteNamesEveryNewlyDeniedArg(t *testing.T) {
 		{"codex-cli", "`--enable`/`--disable`", []string{"--enable", "x"}},
 		{"codex-cli", "`--enable`/`--disable`", []string{"--disable", "x"}},
 	}
-	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "guide", "profiles-and-sharing.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := strings.Join(strings.Fields(string(data)), " ")
 	if !strings.Contains(r, "Upgrading from 0.8") {
-		t.Error("README has no upgrade note")
+		t.Error("guide has no upgrade note")
 	}
 	for _, c := range cases {
 		if len(DeniedArgs(c.kind, c.args)) == 0 {
 			t.Errorf("%s %v is not refused", c.kind, c.args)
 		}
 		if !strings.Contains(r, c.readme) {
-			t.Errorf("README upgrade note doesn't name %s", c.readme)
+			t.Errorf("guide upgrade note doesn't name %s", c.readme)
 		}
 	}
 	for _, k := range codexConfigKeys {
 		if !strings.Contains(r, "`"+k+"`") {
-			t.Errorf("README doesn't list the allowed codex -c key %s", k)
+			t.Errorf("guide doesn't list the allowed codex -c key %s", k)
 		}
 	}
 }
