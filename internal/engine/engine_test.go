@@ -73,13 +73,19 @@ type fakeReader struct {
 	// Optional gate: after arm(), the next Turns call takes its snapshot, signals
 	// entered and blocks until release is closed (a stale in-flight read).
 	armed   bool
+	match   func(context.Context) bool // armFor: only a read whose context matches is held (nil = any)
 	entered chan struct{}
 	release chan struct{}
 }
 
-func (r *fakeReader) arm() {
+func (r *fakeReader) arm() { r.armFor(nil) }
+
+// armFor is arm for the next Turns call whose context matches only, so
+// another reader (attach's catch-up pass, late on a loaded machine) can't
+// take the gate meant for the caller under test.
+func (r *fakeReader) armFor(match func(context.Context) bool) {
 	r.mu.Lock()
-	r.armed, r.entered, r.release = true, make(chan struct{}), make(chan struct{})
+	r.armed, r.match, r.entered, r.release = true, match, make(chan struct{}), make(chan struct{})
 	r.mu.Unlock()
 }
 
@@ -89,11 +95,13 @@ func (r *fakeReader) Source() string {
 	}
 	return transcript.SourceClaude
 }
-func (r *fakeReader) Turns(context.Context) ([]transcript.Turn, error) {
+func (r *fakeReader) Turns(ctx context.Context) ([]transcript.Turn, error) {
 	r.mu.Lock()
 	ts := append([]transcript.Turn(nil), r.turns...)
-	armed, entered, release := r.armed, r.entered, r.release
-	r.armed = false
+	armed, entered, release := r.armed && (r.match == nil || r.match(ctx)), r.entered, r.release
+	if armed {
+		r.armed = false
+	}
 	r.mu.Unlock()
 	if armed {
 		close(entered)
