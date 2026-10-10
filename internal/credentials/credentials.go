@@ -11,13 +11,16 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 
 	"herdr-dots/internal/fsutil"
+	"herdr-dots/internal/lockfile"
 	"herdr-dots/internal/platform"
 )
 
@@ -197,26 +200,47 @@ func (f File) Set(provider, key string) error {
 	if err := CheckKey(key); err != nil {
 		return err
 	}
+	return f.update(func(m map[string]entry) bool {
+		m[provider] = entry{APIKey: key}
+		return true
+	})
+}
+
+// lockTimeout bounds the wait for another process's credentials update.
+const lockTimeout = 5 * time.Second
+
+// update is a read-modify-write of credentials.toml under its lock
+// (<file>.lock, S10), so two `keys set` at the same instant never lose a
+// key. change reports whether to write.
+func (f File) update(change func(map[string]entry) bool) error {
+	if err := os.MkdirAll(filepath.Dir(f.Path), 0o700); err != nil {
+		return err
+	}
+	l, err := lockfile.Acquire(f.Path+".lock", lockTimeout)
+	if err != nil {
+		return fmt.Errorf("credentials.toml is being changed by another herdr-dots: %w", err)
+	}
+	defer l.Release()
 	m, err := f.read()
 	if err != nil {
 		return err
 	}
-	m[provider] = entry{APIKey: key}
+	if !change(m) {
+		return nil
+	}
 	return f.write(m)
 }
 
 // Remove deletes provider's key from credentials.toml. Removing a missing key
 // is not an error.
 func (f File) Remove(provider string) error {
-	m, err := f.read()
-	if err != nil {
-		return err
-	}
-	if _, ok := m[provider]; !ok {
-		return nil
-	}
-	delete(m, provider)
-	return f.write(m)
+	return f.update(func(m map[string]entry) bool {
+		if _, ok := m[provider]; !ok {
+			return false
+		}
+		delete(m, provider)
+		return true
+	})
 }
 
 // List reports where each provider's key comes from, with the last 4

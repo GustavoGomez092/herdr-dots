@@ -1,7 +1,9 @@
 package credentials
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
@@ -39,6 +41,36 @@ func TestRedactRemovesQueryStringCredentialsByName(t *testing.T) {
 	for _, keep := range []string{"the key=value pairs", "a token=short", "monkey=bananas123"} {
 		if out := Redact(keep); out != keep {
 			t.Errorf("Redact(%q) = %q, want it unchanged", keep, out)
+		}
+	}
+}
+
+// S10 (post-rc hardening): two `keys set` at the same instant each read,
+// change and write credentials.toml. Under its lock neither loses the other's
+// key.
+func TestConcurrentSetsKeepEveryKey(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		f := credFile(t)
+		var wg sync.WaitGroup
+		errs := make(chan error, len(Providers))
+		for i, p := range Providers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- f.Set(p, fmt.Sprintf("key-%d-abcdefghijklmnop", i))
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, p := range Providers {
+			if k, _, err := f.Lookup(p); err != nil || k == "" {
+				t.Fatalf("round %d: %s's key was lost (%q, %v)", round, p, k, err)
+			}
 		}
 	}
 }
