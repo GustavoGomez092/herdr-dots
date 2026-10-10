@@ -13,7 +13,7 @@ func memoryLock(file string) string {
 }
 
 // siblingLock is <file>.lock, the lock daily.json, inbox.json,
-// trusted.json and credentials.toml are written under.
+// trusted.json, onboarding.json and credentials.toml are written under.
 func siblingLock(file string) string { return file + ".lock" }
 
 // Default is every persisted file kind herdr-dots 1.0 knows. Every kind is
@@ -50,6 +50,10 @@ func Default() Set {
 			SelfGuarded: true}, // mcpinstall.ErrRecordsVersion; no lock yet, so no migration can be registered
 		{Name: "trust", Root: ConfigRoot, Globs: []string{"trusted.json"}, Format: JSON, Current: 1,
 			Lock: siblingLock, SelfGuarded: true}, // projectdots.ErrNewer
+		// The first-run Setup screen's answers (post-rc); onboarding.Store
+		// writes it under <file>.lock and refuses a newer one (ErrNewer).
+		{Name: "onboarding", Root: ConfigRoot, Globs: []string{"onboarding.json"}, Format: JSON, Current: 1,
+			Lock: siblingLock, SelfGuarded: true},
 
 		// State dir, shared by every session.
 		{Name: "memory-scope", Root: StateRoot, Globs: []string{"memory/*/project.json", "memory/*/dots/*.json"},
@@ -94,6 +98,7 @@ var KindPaths = map[string]string{
 	"CredentialsFile": "credentials",
 	"PricesFile":      "prices",
 	"TrustFile":       "trust",
+	"OnboardingFile":  "onboarding",
 	"MemoryDir":       "memory-scope",
 	"DailyFile":       "daily",
 	"InboxFile":       "inbox",

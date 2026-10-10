@@ -1,0 +1,93 @@
+## no config, cancel
+
+This will be appended to $DIR/herdr/config.toml:
+
+# herdr-dots keybindings (added by `herdr-dots setup-keys`)
+
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "herdr-dots.manage"
+description = "herdr-dots: manage dots"
+
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "herdr-dots.toggle-pane"
+description = "herdr-dots: toggle Dots pane"
+
+[[keys.command]]
+key = "prefix+shift+s"
+type = "plugin_action"
+command = "herdr-dots.summon"
+description = "herdr-dots: summon a dot"
+
+[[keys.command]]
+key = "prefix+shift+c"
+type = "plugin_action"
+command = "herdr-dots.council"
+description = "herdr-dots: council (ask every dot)"
+
+Append it? [y/N] Cancelled. Nothing changed.
+## no config, yes, reload fails
+
+This will be appended to $DIR/herdr/config.toml:
+
+# herdr-dots keybindings (added by `herdr-dots setup-keys`)
+
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "herdr-dots.manage"
+description = "herdr-dots: manage dots"
+
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "herdr-dots.toggle-pane"
+description = "herdr-dots: toggle Dots pane"
+
+[[keys.command]]
+key = "prefix+shift+s"
+type = "plugin_action"
+command = "herdr-dots.summon"
+description = "herdr-dots: summon a dot"
+
+[[keys.command]]
+key = "prefix+shift+c"
+type = "plugin_action"
+command = "herdr-dots.council"
+description = "herdr-dots: council (ask every dot)"
+
+Appended. There was no config to back up.
+Run `herdr server reload-config` yourself (fork/exec $DIR/missing-herdr: no such file or directory: )
+## all there
+✓ prefix+d already runs herdr-dots.manage
+✓ prefix+a already runs herdr-dots.toggle-pane
+✓ prefix+shift+s already runs herdr-dots.summon
+✓ prefix+shift+c already runs herdr-dots.council
+Nothing to add.
+## partial, answer y, reload ok
+✓ prefix+m already runs herdr-dots.manage
+✗ prefix+a is taken by htop; skipping herdr-dots.toggle-pane (bind it yourself to another key)
+
+This will be appended to $DIR/herdr/config.toml:
+
+# herdr-dots keybindings (added by `herdr-dots setup-keys`)
+
+[[keys.command]]
+key = "prefix+shift+s"
+type = "plugin_action"
+command = "herdr-dots.summon"
+description = "herdr-dots: summon a dot"
+
+[[keys.command]]
+key = "prefix+shift+c"
+type = "plugin_action"
+command = "herdr-dots.council"
+description = "herdr-dots: council (ask every dot)"
+
+Append it? [y/N] Appended. Backup: $DIR/herdr/config.toml.bak-STAMP
+Herdr config reloaded.
+## invalid toml
+ERROR: $DIR/herdr/config.toml is not valid TOML: toml: line 2: expected '.' or ']' to end table name, but got '\n' instead

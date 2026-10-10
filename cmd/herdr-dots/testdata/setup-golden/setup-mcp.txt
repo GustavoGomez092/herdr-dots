@@ -1,0 +1,165 @@
+## cancel
+
+== Claude Code ==
+Will run: claude mcp remove --scope user herdr-dots
+Will run: claude mcp add --scope user --env 'HERDR_PANE_ID=${HERDR_PANE_ID:-}' --env 'HERDR_SOCKET_PATH=${HERDR_SOCKET_PATH:-}' --transport stdio herdr-dots -- $HOME/opt/herdr-dots/bin/herdr-dots mcp --config-dir $HOME/cfg --state-dir $HOME/state
+Claude Code stores this under "mcpServers" in $HOME/.claude.json (user scope):
++ {
++   "herdr-dots": {
++     "args": [
++       "mcp",
++       "--config-dir",
++       "$HOME/cfg",
++       "--state-dir",
++       "$HOME/state"
++     ],
++     "command": "$HOME/opt/herdr-dots/bin/herdr-dots",
++     "env": {
++       "HERDR_PANE_ID": "${HERDR_PANE_ID:-}",
++       "HERDR_SOCKET_PATH": "${HERDR_SOCKET_PATH:-}"
++     },
++     "type": "stdio"
++   }
++ }
+Backs up $HOME/.claude.json first.
+
+== Codex ==
+Will edit $HOME/.codex/config.toml:
+  [mcp_servers.other]
+  command = "x"
++ 
++ # >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)
++ [mcp_servers.herdr-dots]
++ command = "$HOME/opt/herdr-dots/bin/herdr-dots"
++ args = ["mcp", "--config-dir", "$HOME/cfg", "--state-dir", "$HOME/state"]
++ env_vars = ["HERDR_PANE_ID", "HERDR_SOCKET_PATH"]
++ startup_timeout_sec = 20
++ tool_timeout_sec = 180
++ # <<< herdr-dots MCP server
+Backs up $HOME/.codex/config.toml first.
+
+Apply these changes? [y/N] Cancelled. Nothing changed.
+## install both
+
+== Claude Code ==
+Will run: claude mcp remove --scope user herdr-dots
+Will run: claude mcp add --scope user --env 'HERDR_PANE_ID=${HERDR_PANE_ID:-}' --env 'HERDR_SOCKET_PATH=${HERDR_SOCKET_PATH:-}' --transport stdio herdr-dots -- $HOME/opt/herdr-dots/bin/herdr-dots mcp --config-dir $HOME/cfg --state-dir $HOME/state
+Claude Code stores this under "mcpServers" in $HOME/.claude.json (user scope):
++ {
++   "herdr-dots": {
++     "args": [
++       "mcp",
++       "--config-dir",
++       "$HOME/cfg",
++       "--state-dir",
++       "$HOME/state"
++     ],
++     "command": "$HOME/opt/herdr-dots/bin/herdr-dots",
++     "env": {
++       "HERDR_PANE_ID": "${HERDR_PANE_ID:-}",
++       "HERDR_SOCKET_PATH": "${HERDR_SOCKET_PATH:-}"
++     },
++     "type": "stdio"
++   }
++ }
+Backs up $HOME/.claude.json first.
+
+== Codex ==
+Will edit $HOME/.codex/config.toml:
+  [mcp_servers.other]
+  command = "x"
++ 
++ # >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)
++ [mcp_servers.herdr-dots]
++ command = "$HOME/opt/herdr-dots/bin/herdr-dots"
++ args = ["mcp", "--config-dir", "$HOME/cfg", "--state-dir", "$HOME/state"]
++ env_vars = ["HERDR_PANE_ID", "HERDR_SOCKET_PATH"]
++ startup_timeout_sec = 20
++ tool_timeout_sec = 180
++ # <<< herdr-dots MCP server
+Backs up $HOME/.codex/config.toml first.
+
+Apply these changes? [y/N]   ok: claude mcp remove
+  ok: claude mcp add
+Backup: $HOME/.claude.json.bak-herdr-dots-20261008-090000
+$ claude mcp get herdr-dots
+  ok: claude mcp get
+Backup: $HOME/.codex/config.toml.bak-herdr-dots-20261008-090000
+$ codex mcp list
+  ok: codex mcp list
+
+Installed. Restart Claude Code or Codex in your Herdr panes to load the tools (mcp__herdr-dots__*).
+Note: answers from these tools reach the main agent directly; they bypass the Dots approval queue.
+## again, codex only
+
+== Codex ==
+Nothing to do: already installed in $HOME/.codex/config.toml
+
+Nothing changed.
+## claude fails
+
+== Claude Code ==
+Will run: claude mcp remove --scope user herdr-dots
+Will run: claude mcp add --scope user --env 'HERDR_PANE_ID=${HERDR_PANE_ID:-}' --env 'HERDR_SOCKET_PATH=${HERDR_SOCKET_PATH:-}' --transport stdio herdr-dots -- $HOME/opt/herdr-dots/bin/herdr-dots mcp --config-dir $HOME/cfg --state-dir $HOME/state
+Claude Code stores this under "mcpServers" in $HOME/.claude.json (user scope):
++ {
++   "herdr-dots": {
++     "args": [
++       "mcp",
++       "--config-dir",
++       "$HOME/cfg",
++       "--state-dir",
++       "$HOME/state"
++     ],
++     "command": "$HOME/opt/herdr-dots/bin/herdr-dots",
++     "env": {
++       "HERDR_PANE_ID": "${HERDR_PANE_ID:-}",
++       "HERDR_SOCKET_PATH": "${HERDR_SOCKET_PATH:-}"
++     },
++     "type": "stdio"
++   }
++ }
+Backs up $HOME/.claude.json first.
+
+== Codex ==
+Nothing to do: already installed in $HOME/.codex/config.toml
+  ok
+  add failed
+Backup: $HOME/.claude.json.bak-herdr-dots-20261008-090000-1
+ERROR: Claude Code: `claude mcp add --scope user --env HERDR_PANE_ID=${HERDR_PANE_ID:-} --env HERDR_SOCKET_PATH=${HERDR_SOCKET_PATH:-} --transport stdio herdr-dots -- $HOME/opt/herdr-dots/bin/herdr-dots mcp --config-dir $HOME/cfg --state-dir $HOME/state` failed: exit status 1
+## remove both
+
+== Claude Code ==
+Will run: claude mcp remove --scope user herdr-dots
+Claude Code removes the "herdr-dots" entry from $HOME/.claude.json.
+Backs up $HOME/.claude.json first.
+
+== Codex ==
+Will edit $HOME/.codex/config.toml:
+  [mcp_servers.other]
+  command = "x"
+- 
+- # >>> herdr-dots MCP server (managed by `herdr-dots setup-mcp`; `herdr-dots setup-mcp --remove` deletes it)
+- [mcp_servers.herdr-dots]
+- command = "$HOME/opt/herdr-dots/bin/herdr-dots"
+- args = ["mcp", "--config-dir", "$HOME/cfg", "--state-dir", "$HOME/state"]
+- env_vars = ["HERDR_PANE_ID", "HERDR_SOCKET_PATH"]
+- startup_timeout_sec = 20
+- tool_timeout_sec = 180
+- # <<< herdr-dots MCP server
+Backs up $HOME/.codex/config.toml first.
+  removed
+Backup: $HOME/.claude.json.bak-herdr-dots-20261008-090000-2
+$ claude mcp list
+  removed
+Backup: $HOME/.codex/config.toml.bak-herdr-dots-20261008-090000-1
+$ codex mcp list
+  removed
+
+Removed. Restart the agent sessions in your Herdr panes to drop the tools.
+## unknown client
+ERROR: --client "vim": want claude, codex or both
+## no clients
+Skipping Claude Code: claude CLI not found on PATH.
+Skipping Codex: codex CLI not found on PATH and no $HOME/.codex/config.toml.
+ERROR: neither Claude Code nor Codex found; nothing changed

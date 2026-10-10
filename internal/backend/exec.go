@@ -90,17 +90,20 @@ func Preflight(err error) bool {
 }
 
 // CleanEnv drops variables that would make a dot's CLI talk to Herdr or think
-// it runs nested inside another Claude Code session. Drops HERDR_*, CLAUDECODE,
-// CLAUDE_CODE_ENTRYPOINT, and CLAUDE_CODE_CHILD_SESSION, but preserves other
-// CLAUDE_* variables that carry auth and config (CLAUDE_CONFIG_DIR, etc.).
-// Names compare in platform.EnvKey form, so case-insensitively on Windows.
+// it runs nested inside (or joins) another Claude Code session: HERDR_*,
+// CLAUDECODE and every CLAUDE_CODE_* variable except the developer's own
+// settings (platform.ClaudeCodeSetting: provider, auth, Git Bash path), the
+// same rule as the engine's environment. Other CLAUDE_* variables that
+// carry config (CLAUDE_CONFIG_DIR, etc.) stay. Names compare in
+// platform.EnvKey form, so case-insensitively on Windows.
 func CleanEnv(env []string) []string {
 	// Non-nil on purpose: a nil exec.Cmd.Env inherits the full parent environment.
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
 		k := platform.EnvKey(name)
-		if strings.HasPrefix(k, "HERDR_") || k == "CLAUDECODE" || k == "CLAUDE_CODE_ENTRYPOINT" || k == "CLAUDE_CODE_CHILD_SESSION" {
+		if strings.HasPrefix(k, "HERDR_") || k == "CLAUDECODE" ||
+			(strings.HasPrefix(k, "CLAUDE_CODE_") && !platform.ClaudeCodeSetting(k)) {
 			continue
 		}
 		out = append(out, kv)

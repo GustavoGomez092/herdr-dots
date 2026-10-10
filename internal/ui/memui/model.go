@@ -593,7 +593,7 @@ func (m Model) screenWidth() int {
 
 // approveMinWidth is the narrowest popup the approve screen (and every other
 // whole-popup screen) is laid out in.
-const approveMinWidth = 24
+const approveMinWidth = style.MinScreenWidth
 
 // approveFits reports whether the whole approve screen fits the popup. A
 // taller view would have its top lines (who proposed it, the kind, the
@@ -604,30 +604,15 @@ func (m Model) approveFits() bool { return m.fits(m.approveScreen(m.screenWidth(
 
 // fits reports whether a whole-popup screen of lines, with approveTail lines
 // under it, is on screen to the last cell: what the developer confirms must
-// be shown whole (Task 10).
+// be shown whole (Task 10; style.ScreenFits, shared with the Setup screen).
 func (m Model) fits(lines []string) bool {
-	w := m.screenWidth()
-	if w < approveMinWidth {
-		return false
-	}
-	for _, l := range lines {
-		if ansi.StringWidth(l) > w {
-			return false
-		}
-	}
-	return m.height <= 0 || len(lines)+approveTail <= m.height
+	return style.ScreenFits(lines, m.screenWidth(), m.height, approveTail)
 }
 
 // tooSmall is what View shows instead of a screen that doesn't fit: its title
-// and why, wrapped by display cells.
+// and why, wrapped by display cells (style.TooSmall).
 func (m Model) tooSmall(title string, lines []string, what, action string) []string {
-	w := m.screenWidth()
-	why := fmt.Sprintf("needs %d lines, has %d", len(lines)+approveTail, m.height)
-	if w < approveMinWidth {
-		why = fmt.Sprintf("needs %d columns, has %d", approveMinWidth, w)
-	}
-	return append([]string{style.Title.Render(title)},
-		wrap("Too small to show the whole "+what+" ("+why+"). Enlarge the popup to "+action+".", w)...)
+	return style.TooSmall(title, len(lines)+approveTail, m.screenWidth(), m.height, what, action)
 }
 
 // approveScreen is the full proposal: who proposed it, its kind, its paths

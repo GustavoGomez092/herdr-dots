@@ -33,8 +33,8 @@ Details, checks and upgrades: [docs/guide/install-and-upgrade.md](docs/guide/ins
 
 ## Quick start
 
-1. `./bin/herdr-dots setup-keys` (from a shell inside Herdr) adds the keybindings, after showing them and backing up your config.
-2. Press `prefix+d`, create a dot from a template (Security is a good first one).
+1. Open Dots (`prefix+d`, or 'Dots: manage' in Herdr's action menu). The first time, it offers to install the MCP server and the keybindings.
+2. Create a dot from a template (Security is a good first one).
 3. Focus your Claude Code or Codex pane and attach the dot; press `prefix+a` to open the Dots pane.
 4. Work as usual. Cards wait in the queue: `enter` sends one, `x` dismisses it, and dismissing teaches the dot not to raise it again.
 
