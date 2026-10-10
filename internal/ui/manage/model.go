@@ -519,6 +519,7 @@ func (m Model) keysLibrary(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if d, ok := m.current(); ok {
 			return m, m.openMemory(d.Slug, d.Name)
 		}
+		m.status = "no dot selected · P project memory"
 	case "P":
 		if m.d.Memory == nil {
 			m.status = "memory is turned off (memory_enabled = false)"
