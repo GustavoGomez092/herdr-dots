@@ -245,7 +245,11 @@ func estimateLine(p council.Preflight) string {
 	if p.EstimatedCalls == 1 {
 		calls = "call"
 	}
-	s := fmt.Sprintf("estimate: %d %s (%d dots × %d round", p.EstimatedCalls, calls, len(p.Members), p.Rounds)
+	dots := "dots"
+	if len(p.Members) == 1 {
+		dots = "dot"
+	}
+	s := fmt.Sprintf("estimate: %d %s (%d %s × %d round", p.EstimatedCalls, calls, len(p.Members), dots, p.Rounds)
 	if p.Rounds != 1 {
 		s += "s"
 	}

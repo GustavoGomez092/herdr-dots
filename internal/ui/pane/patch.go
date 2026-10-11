@@ -175,6 +175,9 @@ func (m Model) updateDraft(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.draft = nil
 		m.status = "drafting with " + slug + "…"
 		return m, m.call(ipc.CmdDraft, ipc.DraftArgs{PaneID: m.target, Slug: slug, Instruction: f.text, FromCardID: f.cardID})
+	default: // any other key cancels: a stray key never leaves the confirm open for a later y
+		m.draft = nil
+		m.status = "draft cancelled"
 	}
 	return m, nil
 }
@@ -239,7 +242,7 @@ func (m Model) draftView(w, avail int) string {
 	if f.text == "" {
 		b.WriteString(style.Dim.Render("  (none yet: press e)") + "\n")
 	} else {
-		lines := strings.Split(strings.TrimRight(body.Render("  "+f.text), "\n"), "\n")
+		lines := strings.Split(strings.TrimRight(indented(lipgloss.NewStyle(), f.text, w, 2), "\n"), "\n")
 		if avail > 0 {
 			keep := max(1, avail-lineCount(b.String())-1) // -1: the key line
 			if len(lines) > keep {

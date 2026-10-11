@@ -2,6 +2,7 @@ package pane
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -107,8 +108,41 @@ func councilTags(c queue.Card) string {
 	if !hasParts(c) {
 		return ""
 	}
+	if len(c.Parts) == 1 {
+		return " · 1 dot"
+	}
 	return fmt.Sprintf(" · %d dots", len(c.Parts))
 }
+
+// councilText shows council text with its Markdown headings as plain labels:
+// "## Must fix" reads "Must fix:". Display only: the agent gets the card as
+// the chair wrote it.
+// Only real headings change (one to six #s, then a space or tab), outside
+// ``` code fences: "#include" and "#42" stay as written.
+func councilText(s string) string {
+	lines := strings.Split(s, "\n")
+	fenced := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "```") {
+			fenced = !fenced
+			continue
+		}
+		g := heading.FindStringSubmatch(l)
+		if fenced || g == nil {
+			continue
+		}
+		h := strings.TrimSpace(g[1])
+		if h != "" && !strings.HasSuffix(h, ":") {
+			h += ":"
+		}
+		lines[i] = h
+	}
+	return strings.Join(lines, "\n")
+}
+
+// heading is a Markdown ATX heading line: up to three spaces, one to six
+// #s, a space or tab, and the text.
+var heading = regexp.MustCompile(`^ {0,3}#{1,6}[ \t]+(.*)$`)
 
 // councilHint extends the selected card's key hint.
 func councilHint(c queue.Card) string {
@@ -120,21 +154,23 @@ func councilHint(c queue.Card) string {
 
 // councilDetail renders a council card's footer note and, when expanded, the
 // question and every member's own answer. Every line is wrapped to the body
-// width so the viewport's line count matches what the terminal shows.
-func councilDetail(c queue.Card, expanded bool, body lipgloss.Style) string {
+// width of a w-wide pane and indented line by line (B3), so the viewport's
+// line count matches what the terminal shows.
+func councilDetail(c queue.Card, expanded bool, w int) string {
 	if !hasParts(c) {
 		return ""
 	}
 	var b strings.Builder
 	if c.Note != "" {
-		b.WriteString(body.Render(style.Dim.Render("  "+oneLine(c.Note))) + "\n")
+		b.WriteString(indented(style.Dim, oneLine(c.Note), w, 2) + "\n")
 	}
 	if !expanded {
 		return b.String()
 	}
 	if c.Question != "" {
-		b.WriteString(body.Render(style.Dim.Render("  asked: "+oneLine(c.Question))) + "\n")
+		b.WriteString(indented(style.Dim, "asked: "+oneLine(c.Question), w, 2) + "\n")
 	}
+	plain := lipgloss.NewStyle()
 	for _, p := range c.Parts {
 		label := "nothing to add"
 		switch {
@@ -146,9 +182,9 @@ func councilDetail(c queue.Card, expanded bool, body lipgloss.Style) string {
 		if p.Stance != "" {
 			label += " · " + oneLine(p.Stance)
 		}
-		b.WriteString(body.Render(fmt.Sprintf("  %s %s  %s", oneLine(p.Glyph), oneLine(p.DotName), label)) + "\n")
+		b.WriteString(indented(plain, fmt.Sprintf("%s %s  %s", oneLine(p.Glyph), oneLine(p.DotName), label), w, 2) + "\n")
 		if !p.Failed && p.Body != "" {
-			b.WriteString(body.Render("    "+textutil.SanitizeModelText(p.Body)) + "\n")
+			b.WriteString(indented(plain, councilText(textutil.SanitizeModelText(p.Body)), w, 4) + "\n")
 		}
 	}
 	return b.String()

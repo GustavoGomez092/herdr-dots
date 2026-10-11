@@ -37,7 +37,7 @@ func councilReady(fc *fakeCaller, cs *view.CouncilState) tea.Model {
 func TestCouncilCardHeaderAndExpand(t *testing.T) {
 	m := councilReady(&fakeCaller{}, nil)
 	v := m.View()
-	for _, want := range []string{"⊕ CRITICAL  Council · turn 22 · 3 dots", "## Must fix", "⏎ send  e edit  x dismiss  space expand"} {
+	for _, want := range []string{"⊕ CRITICAL  Council · turn 22 · 3 dots", "Must fix:", "⏎ send  e edit  x dismiss  space expand"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view missing %q\n%s", want, v)
 		}
@@ -158,10 +158,11 @@ func TestRememberChooserOnACouncilCardOffersConventionOnly(t *testing.T) {
 		t.Fatalf("council chooser:\n%s", v)
 	}
 	for _, k := range []string{"f", "r", "g"} {
-		m = press(m, k)
-		if v := m.View(); len(fc.calls) != 0 || strings.Contains(v, "remembered as") || strings.Contains(v, "REMEMBER AS A RULE") {
+		m = press(m, k) // any key but c cancels (round 1, I2)
+		if v := m.View(); len(fc.calls) != 0 || strings.Contains(v, "remembered as") || strings.Contains(v, "REMEMBER AS A RULE") || m.(Model).remembering {
 			t.Fatalf("%s on a council card: calls %+v\n%s", k, fc.calls, v)
 		}
+		m = press(m, "M")
 	}
 	m = press(m, "c")
 	if len(fc.calls) != 1 || fc.calls[0].cmd != ipc.CmdRemember || fc.calls[0].args != `{"card_id":"9","as":"convention"}` {

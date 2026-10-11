@@ -202,23 +202,32 @@ func (m Model) setupView() string {
 	st := m.setup
 	w := m.bodyWidth()
 	var lines []string
+	scrolls := false // the screen is longer than one page: say how to scroll
 	switch {
 	case st.done:
 		lines = setupui.ResultLines(st.results, w)
 	case st.applying:
 		lines = style.Wrap("Installing"+style.Sym("…"), w)
 	case m.measured() && m.width < style.MinScreenWidth:
-		lines = style.TooSmall(setupui.Title, 0, m.width, m.height, "setup screen", "review and install")
-		lines = append(lines, style.Dim.Render("n not now"+" "+style.Sym("·")+" esc close"))
+		// Fitted to the height with the lines under it (the keys and a
+		// status), so the terminal never drops the title (B6).
+		tail := 1
+		if m.status != "" {
+			tail++
+		}
+		lines = style.TooSmall(setupui.Title, 0, m.width, m.height, tail, "setup screen", "review and install")
+		lines = append(lines, style.Dim.Render(m.cutLine("n not now"+" "+style.Sym("·")+" esc close")))
 	default:
-		lines = st.pg.window(m.setupLines(), m.bodyHeight())
+		all := m.setupLines()
+		lines = st.pg.window(all, m.bodyHeight())
+		scrolls = len(all) > m.bodyHeight()
 	}
 	var b strings.Builder
 	b.WriteString(strings.Join(lines, "\n"))
 	if m.status != "" {
 		b.WriteString("\n" + m.cutLine(style.Clean(m.status)))
 	}
-	if !st.done && !st.applying {
+	if scrolls {
 		sep := " " + style.Sym("·") + " "
 		b.WriteString("\n" + style.Dim.Render(m.cutLine(strings.Join([]string{"j/space down", "b/pgup up", "the keys are at the end"}, sep))))
 	}

@@ -1,8 +1,6 @@
 package manage
 
 import (
-	"strings"
-
 	"github.com/charmbracelet/x/ansi"
 
 	"herdr-dots/internal/ui/style"
@@ -83,7 +81,9 @@ func (m Model) bodyWidth() int {
 
 // fitLines wraps every line to the popup's width once it is known, so a
 // long line is never cut off the screen (and never counts as seen when it
-// isn't). Before the first size message nothing is wrapped.
+// isn't). It breaks between words, and inside a word only when the word
+// alone is wider than the line (B5). Before the first size message nothing
+// is wrapped.
 func (m Model) fitLines(lines []string) []string {
 	if m.width <= 0 {
 		return lines
@@ -95,7 +95,7 @@ func (m Model) fitLines(lines []string) []string {
 			out = append(out, l)
 			continue
 		}
-		out = append(out, strings.Split(ansi.Hardwrap(l, w, true), "\n")...)
+		out = append(out, style.WrapLine(l, w)...)
 	}
 	return out
 }

@@ -18,6 +18,7 @@ import (
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/queue"
 	"herdr-dots/internal/state"
+	"herdr-dots/internal/ui/keys"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -219,19 +220,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = msg.err.Error()
 		return m, nil
 	case tea.KeyMsg:
-		switch {
-		case m.draft != nil:
-			return m.updateDraft(msg)
-		case m.editing:
-			return m.updateEditor(msg)
-		case m.asking:
-			return m.updateQuestion(msg)
-		case m.remembering:
-			return m.updateRemember(msg)
-		}
-		return m.updateKeys(msg)
+		return keys.Deliver(m, msg, Model.keyMode, Model.updateKey)
 	}
 	return m, nil
+}
+
+// keyMode is how a burst of typed keys reaches the pane (keys.Deliver): the
+// summon, edit and reason fields take it as typed; the draft confirm and the
+// remember chooser never take an answer from it.
+func (m Model) keyMode() keys.Mode {
+	switch {
+	case m.draft != nil:
+		if m.draft.editing {
+			return keys.Text
+		}
+		return keys.Modal
+	case m.editing, m.asking, m.remembering && m.reasoning:
+		return keys.Text
+	case m.remembering:
+		return keys.Modal
+	}
+	return keys.Browse
+}
+
+func (m Model) updateKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	var nm tea.Model
+	var cmd tea.Cmd
+	switch {
+	case m.draft != nil:
+		nm, cmd = m.updateDraft(msg)
+	case m.editing:
+		nm, cmd = m.updateEditor(msg)
+	case m.asking:
+		nm, cmd = m.updateQuestion(msg)
+	case m.remembering:
+		nm, cmd = m.updateRemember(msg)
+	default:
+		nm, cmd = m.updateKeys(msg)
+	}
+	return nm.(Model), cmd
 }
 
 func (m Model) updateEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -294,8 +321,8 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var as string
 	key := k.String()
-	if m.rememberCouncil && key != "esc" && key != "c" {
-		return m, nil // a council card is remembered as a project convention only
+	if m.rememberCouncil && key != "c" {
+		key = "esc" // a council card is remembered as a project convention only
 	}
 	switch key {
 	case "esc":
@@ -312,7 +339,8 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		as = "convention"
 	case "g":
 		as = "global"
-	default:
+	default: // any other key cancels: a stray key never leaves the chooser open for a later choice
+		m.remembering = false
 		return m, nil
 	}
 	if !m.connected { // the chooser stays open: it sends once the engine is back
@@ -566,9 +594,10 @@ func (m Model) View() string {
 	for i, d := range p.Dots {
 		status := dotStatus(d) // background runs, learning, proactive hints (proactive.go)
 		rest := fmt.Sprintf("%-12s %-8s %s", trunc(oneLine(d.Name), 12), d.Mode, status) + dotCost(d)
-		line := style.Glyph(d.Glyph, d.Color) + " " + trunc(rest, max(10, w-2))
+		rest = " " + trunc(rest, max(10, w-2))
+		line := style.Glyph(d.Glyph, d.Color) + rest
 		if m.area == areaRoster && i == m.roster {
-			line = style.Selected.Render(line)
+			line = style.SelectedRow("", d.Glyph, d.Color, rest)
 		}
 		roster = append(roster, line+"\n")
 	}
@@ -586,7 +615,6 @@ func (m Model) View() string {
 	// Body: cards, feed and help, scrolled so the selected card stays visible.
 	b.Reset()
 	selStart, selEnd := -1, -1
-	body := lipgloss.NewStyle().Width(max(10, w-2))
 	for i, c := range p.Cards {
 		if i == m.card {
 			selStart = lineCount(b.String())
@@ -611,14 +639,17 @@ func (m Model) View() string {
 		who := trunc(fmt.Sprintf("%s · %s%s", oneLine(c.DotName), cardWhere(c), tags), max(1, room))
 		b.WriteString(trunc(fmt.Sprintf("%s%s %s  %s", marker, glyph, style.Severity(c.Severity).Render(label), who), w) + "\n")
 		text := patchText(c)
+		if c.Kind == queue.KindCouncil {
+			text = councilText(text)
+		}
 		if !sel {
 			text = trunc(strings.ReplaceAll(text, "\n", " "), max(20, w*2))
 		}
-		b.WriteString(body.Render("  "+text) + "\n")
+		b.WriteString(indented(lipgloss.NewStyle(), text, w, 2) + "\n")
 		if c.Error != "" {
-			b.WriteString(wrapStyled(style.Err, "  delivery failed: "+c.Error, m.width) + "\n")
+			b.WriteString(indented(style.Err, "delivery failed: "+c.Error, w, 2) + "\n")
 		}
-		b.WriteString(councilDetail(c, m.expandID == c.ID, body))
+		b.WriteString(councilDetail(c, m.expandID == c.ID, w))
 		b.WriteString(patchDetail(c, w))
 		if sel {
 			switch {
@@ -808,6 +839,13 @@ func costPart(detail string) string {
 		return detail[i:]
 	}
 	return ""
+}
+
+// indented renders s in st wrapped to the body width (w-2) less an n-cell
+// indent, with every line indented: wrapped lines line up under the first
+// (B3), and lineCount sees the real number of lines.
+func indented(st lipgloss.Style, s string, w, n int) string {
+	return st.Width(max(10, w-2)).PaddingLeft(n).Render(s)
 }
 
 // wrapStyled renders s in st wrapped to width w, so lineCount sees the real

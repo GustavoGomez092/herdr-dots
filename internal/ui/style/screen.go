@@ -29,15 +29,28 @@ func ScreenFits(lines []string, w, h, tail int) bool {
 
 // TooSmall is what a popup shows instead of a confirm screen that doesn't
 // fit: its title and why, wrapped by display cells. need is the screen's
-// height with its tail.
-func TooSmall(title string, need, w, h int, what, action string) []string {
+// height with its tail. With a known height (h > 0) the lines and the tail
+// more lines the caller puts under them fit in h, so the terminal never
+// drops the top (B6): the title shrinks to one cut line first, then the
+// message loses its end (marked with an ellipsis). The title line and the
+// "Too small" line are the last to go.
+func TooSmall(title string, need, w, h, tail int, what, action string) []string {
 	why := fmt.Sprintf("needs %d lines, has %d", need, h)
 	if w < MinScreenWidth {
 		why = fmt.Sprintf("needs %d columns, has %d", MinScreenWidth, w)
 	}
+	head := Wrap(title, w)
+	msg := Wrap("Too small to show the whole "+what+" ("+why+"). Enlarge the popup to "+action+".", w)
+	if room := h - tail; h > 0 && len(head)+len(msg) > room {
+		head = []string{Cut(title, max(1, w))}
+		if keep := max(1, room-1); len(msg) > keep {
+			msg = msg[:keep]
+			msg[keep-1] = Cut(msg[keep-1]+" "+Sym("…"), max(1, w))
+		}
+	}
 	var lines []string
-	for _, l := range Wrap(title, w) {
+	for _, l := range head {
 		lines = append(lines, Title.Render(l))
 	}
-	return append(lines, Wrap("Too small to show the whole "+what+" ("+why+"). Enlarge the popup to "+action+".", w)...)
+	return append(lines, msg...)
 }

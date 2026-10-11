@@ -26,6 +26,7 @@ import (
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/patchstore"
 	"herdr-dots/internal/textutil"
+	"herdr-dots/internal/ui/keys"
 	"herdr-dots/internal/ui/style"
 )
 
@@ -525,10 +526,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "applied to your working tree (nothing staged or committed); conflicts, if any, are in the Dots feed · q close"
 		return m, nil
 	case tea.KeyMsg:
-		nm, cmd := m.keys(msg)
-		return nm.markSeen(), cmd
+		return keys.Deliver(m, msg, Model.keyMode, func(m Model, k tea.KeyMsg) (Model, tea.Cmd) {
+			nm, cmd := m.keys(k)
+			return nm.markSeen(), cmd
+		})
 	}
 	return m, nil
+}
+
+// keyMode is how a burst of typed keys reaches the viewer (keys.Deliver):
+// one key per rune while browsing; the apply confirm never takes its y
+// from a burst.
+func (m Model) keyMode() keys.Mode {
+	if m.failed != nil || m.busy || m.confirm {
+		return keys.Modal
+	}
+	return keys.Browse
 }
 
 func (m Model) keys(k tea.KeyMsg) (Model, tea.Cmd) {

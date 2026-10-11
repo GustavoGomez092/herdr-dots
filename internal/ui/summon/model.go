@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"herdr-dots/internal/ipc"
+	"herdr-dots/internal/ui/keys"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -82,66 +83,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.council.sending = false
 		}
 	case tea.KeyMsg:
-		if m.council != nil {
-			return m.updateCouncil(msg)
-		}
-		if m.asking {
-			switch msg.String() {
-			case "ctrl+c":
-				return m, tea.Quit
-			case "esc":
-				m.asking, m.status = false, ""
-				m.input.Reset()
-				m.input.Blur()
-				return m, nil
-			case "enter":
-				if len(m.dots) == 0 || m.sending {
-					return m, nil // a second enter must not summon twice
-				}
-				m.sending = true
-				q := strings.TrimSpace(m.input.Value())
-				c, target, slug := m.caller, m.target, m.askSlug
-				return m, func() tea.Msg {
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					if err := c.Call(ctx, ipc.CmdSummon, ipc.SummonArgs{PaneID: target, Slug: slug, Question: q}); err != nil {
-						return errMsg{err}
-					}
-					return tea.Quit()
-				}
-			}
-			var cmd tea.Cmd
-			m.input, cmd = m.input.Update(msg)
-			return m, cmd
-		}
+		return keys.Deliver(m, msg, Model.keyMode, Model.key)
+	}
+	return m, nil
+}
+
+// keyMode is how a burst of typed keys reaches the popup (keys.Deliver):
+// the question fields take it as typed, the lists one key per rune.
+func (m Model) keyMode() keys.Mode {
+	switch {
+	case m.council != nil && !m.council.onList, m.council == nil && m.asking:
+		return keys.Text
+	}
+	return keys.Browse
+}
+
+func (m Model) key(msg tea.KeyMsg) (Model, tea.Cmd) {
+	nm, cmd := m.updateKey(msg)
+	return nm.(Model), cmd
+}
+
+func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.council != nil {
+		return m.updateCouncil(msg)
+	}
+	if m.asking {
 		switch msg.String() {
-		case "esc", "q", "ctrl+c":
+		case "ctrl+c":
 			return m, tea.Quit
-		case "j", "down":
-			if m.onCouncil {
-				m.onCouncil = false
-				return m, nil
-			}
-			m.cursor = min(m.cursor+1, max(0, len(m.dots)-1))
-		case "k", "up":
-			if m.cursor == 0 && len(m.dots) > 0 {
-				m.onCouncil = true
-			}
-			m.cursor = max(m.cursor-1, 0)
+		case "esc":
+			m.asking, m.status = false, ""
+			m.input.Reset()
+			m.input.Blur()
+			return m, nil
 		case "enter":
-			if m.onCouncil && len(m.dots) > 0 {
-				m.council = newCouncilForm(true)
-				m.council.question.Width = questionWidth(m.width)
-				m.status = ""
-				m.council.dots = m.dots
-				return m, m.preflight()
+			if len(m.dots) == 0 || m.sending {
+				return m, nil // a second enter must not summon twice
 			}
-			if len(m.dots) > 0 {
-				m.asking = true
-				m.askSlug = m.dots[m.cursor].Slug
-				m.input.Focus()
-				return m, textinput.Blink
+			m.sending = true
+			q := strings.TrimSpace(m.input.Value())
+			c, target, slug := m.caller, m.target, m.askSlug
+			return m, func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := c.Call(ctx, ipc.CmdSummon, ipc.SummonArgs{PaneID: target, Slug: slug, Question: q}); err != nil {
+					return errMsg{err}
+				}
+				return tea.Quit()
 			}
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+	switch msg.String() {
+	case "esc", "q", "ctrl+c":
+		return m, tea.Quit
+	case "j", "down":
+		if m.onCouncil {
+			m.onCouncil = false
+			return m, nil
+		}
+		m.cursor = min(m.cursor+1, max(0, len(m.dots)-1))
+	case "k", "up":
+		if m.cursor == 0 && len(m.dots) > 0 {
+			m.onCouncil = true
+		}
+		m.cursor = max(m.cursor-1, 0)
+	case "enter":
+		if m.onCouncil && len(m.dots) > 0 {
+			m.council = newCouncilForm(true)
+			m.council.question.Width = questionWidth(m.width)
+			m.status = ""
+			m.council.dots = m.dots
+			return m, m.preflight()
+		}
+		if len(m.dots) > 0 {
+			m.asking = true
+			m.askSlug = m.dots[m.cursor].Slug
+			m.input.Focus()
+			return m, textinput.Blink
 		}
 	}
 	return m, nil
