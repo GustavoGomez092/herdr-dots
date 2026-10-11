@@ -20,6 +20,11 @@ const (
 	// StatusConsulted: the main agent asked this dot through the MCP server;
 	// it skips the turn it was asked in (Phase 5).
 	StatusConsulted = "consulted"
+	// StatusSuppressed: the turn's finding repeated remembered advice
+	// (memory suppression); StatusDuplicate: it repeated one of the dot's
+	// cards still waiting on the pane. Neither made a card.
+	StatusSuppressed = "suppressed"
+	StatusDuplicate  = "duplicate"
 )
 
 type DotState struct {

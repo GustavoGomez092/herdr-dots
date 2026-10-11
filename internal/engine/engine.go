@@ -992,7 +992,15 @@ func (e *Engine) runDot(paneID string, d dots.Dot, turns []transcript.Turn, o ru
 		if ref, ok := suppressedBy(mem, res.Verdict.Message, turn, att.SessionValue); ok {
 			e.feed(paneID, d.Slug, turn, state.OutcomeSuppressed, "similar to "+ref)
 			tr.markVerdict(turn, state.OutcomeSuppressed, res.Verdict)
-			e.setStatus(k, view.StatusPassed)
+			e.setStatus(k, view.StatusSuppressed)
+			return
+		}
+		// A repeat of a card still waiting on this pane adds no second card.
+		// Resolved cards never count here: memory handles those (above).
+		if id, ok := e.pendingDuplicate(paneID, d.Slug, res.Verdict.Message); ok {
+			e.feed(paneID, d.Slug, turn, state.OutcomeSuppressed, "duplicate of card "+id)
+			tr.markVerdict(turn, state.OutcomeSuppressed, res.Verdict)
+			e.setStatus(k, view.StatusDuplicate)
 			return
 		}
 	}
@@ -1056,6 +1064,24 @@ func (e *Engine) route(paneID string, d dots.Dot, turn int, v backend.Verdict, o
 	}
 	o.trace.card(added)
 	e.routed(paneID, d, v, mode)
+}
+
+// pendingDuplicate returns the id of a card the dot already has waiting
+// (pending, or auto not yet delivered) on the pane that msg repeats, by the
+// same measure and threshold memory suppression uses. Only one dot's own
+// cards count: council, digest and patch cards never block a finding. The
+// queue read is in memory under the queue's own lock; no engine lock is held.
+func (e *Engine) pendingDuplicate(paneID, slug, msg string) (string, bool) {
+	for _, c := range e.d.Queue.Pending(paneID) {
+		if c.Dot != slug || c.Kind != "" {
+			continue
+		}
+		sc := max(memory.SuppressScore(msg, c.Body), memory.SuppressScore(msg, memory.FirstSentence(c.Body)))
+		if sc >= memory.SuppressThreshold {
+			return c.ID, true
+		}
+	}
+	return "", false
 }
 
 // routeCard is the card route adds for a verdict, and its delivery mode.
