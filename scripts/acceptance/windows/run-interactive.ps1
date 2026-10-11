@@ -259,7 +259,14 @@ $p = OpenPopup 'ctrl+b d' 'manage' 'Dots: manage' '01a-prefix-d'
 # library a moment after the popup opens (only while the library shows).
 $setupScr = WaitS 10 'Let your agent consult' '01b-setup-pager'
 $setupSeen = [bool]$setupScr
-Keys 'n'
+if ($setupSeen) { Keys 'n' }
+else {
+    # Diagnose: S opens the Setup screen forced, with every item's state.
+    Show 'onboarding.json' (ReadText (Join-Path $script:CfgDir 'onboarding.json'))
+    Keys 'S'
+    $null = WaitS 10 'Let your agent consult|Setup|SETUP' '01b2-setup-forced'
+    Keys 'esc'
+}
 $lib = WaitS 15 'DOTS LIBRARY' '01c-library'
 if ($p.ok -and $setupSeen -and $lib) { Result 1 'PASS' 'prefix+d opened Dots: manage on the first-run Setup pager (MCP offer); n snoozed it; the library shows' }
 elseif ($p.ok -and $lib) { Result 1 'FAIL' 'prefix+d opened manage, but no first-run Setup pager was shown' }
@@ -415,6 +422,11 @@ else { Result 8 'FAIL' "Too small: $([bool]$small); enter refused: $refused (hom
 
 # ---- evidence ----
 Banner 'evidence'
+Show 'onboarding.json (end)' (ReadText (Join-Path $script:CfgDir 'onboarding.json'))
+Push-Location $PluginDir
+$su = 'n' | & $Dots setup 2>&1 | Out-String
+Pop-Location
+Show 'herdr-dots setup (answered n, after the steps; it may record MCP)' $su
 $null = Dump 'final'
 if ($script:SessDir) {
     foreach ($f in 'engine.log', 'feed.jsonl', 'queue.json', 'attachments.json', 'ledger.jsonl') {
