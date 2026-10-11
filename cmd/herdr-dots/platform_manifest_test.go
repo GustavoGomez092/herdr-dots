@@ -113,7 +113,8 @@ func TestWindowsBuildScriptBuildsTheExe(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		"Get-FileHash -Algorithm SHA256", // verifies the download against release/SHA256SUMS
+		"[System.Security.Cryptography.SHA256]::Create()",     // verifies the download against release/SHA256SUMS, with no module
+		"[System.IO.Compression.ZipFile]::ExtractToDirectory", // unzips with no module
 		"HERDR_PLUGIN_BUILD_OFFLINE",
 		`'.\cmd\herdr-dots'`, // the source-build fallback
 		"Install Go 1.25 or newer",
@@ -128,6 +129,13 @@ func TestWindowsBuildScriptBuildsTheExe(t *testing.T) {
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("build.ps1 lacks %q", want)
+		}
+	}
+	// Windows PowerShell started from PowerShell 7 can't load the script
+	// modules these live in, so the Windows install failed with them.
+	for _, line := range strings.Split(s, "\n") {
+		if code, _, _ := strings.Cut(line, "#"); strings.Contains(code, "Get-FileHash") || strings.Contains(code, "Expand-Archive") {
+			t.Errorf("build.ps1 calls a script-module cmdlet: %q", strings.TrimSpace(line))
 		}
 	}
 }
