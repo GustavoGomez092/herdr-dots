@@ -73,16 +73,16 @@ function WaitFor([scriptblock]$cond, [int]$secs, [string]$what) {
 
 # ---- the conptyh client ----
 $script:HCode = 0
-function H([string]$line) {
+function HC([string]$line) {
     $out = & $Conptyh cmd --addr $Addr $line 2>&1 | Out-String
     $script:HCode = $LASTEXITCODE
     return $out
 }
-function Keys([string]$keys) { $null = H "keys $keys" }
+function Keys([string]$keys) { $null = HC "keys $keys" }
 $script:ShotSeq = 0
 # Dump: print and save the current screen under a label.
 function Dump([string]$label) {
-    $s = H 'screen'
+    $s = HC 'screen'
     $script:ShotSeq++
     $name = '{0:D2}-{1}.txt' -f $script:ShotSeq, $label
     [IO.File]::WriteAllText((Join-Path $Scr $name), $s, $Utf8)
@@ -94,7 +94,7 @@ function Dump([string]$label) {
 # WaitS: wait for a regex on the screen, then dump it. Returns the screen when
 # it matched, else $null (the dump shows what was there).
 function WaitS([double]$secs, [string]$regex, [string]$label) {
-    $s = H "wait-for $secs $regex"
+    $s = HC "wait-for $secs $regex"
     $ok = ($script:HCode -eq 0)
     $script:ShotSeq++
     $name = '{0:D2}-{1}.txt' -f $script:ShotSeq, $label
@@ -106,12 +106,12 @@ function WaitS([double]$secs, [string]$regex, [string]$label) {
     return $null
 }
 function WaitQuiet([double]$secs, [string]$regex) {
-    $s = H "wait-for $secs $regex"
+    $s = HC "wait-for $secs $regex"
     if ($script:HCode -eq 0) { return $s }
     return $null
 }
 function WaitGone([double]$secs, [string]$regex) {
-    $s = H "wait-gone $secs $regex"
+    $s = HC "wait-gone $secs $regex"
     return ($script:HCode -eq 0)
 }
 
@@ -218,14 +218,14 @@ $null = WaitS 30 'herdr|spaces|PS C:' 'client-start'
 # First-run screens of the Herdr client: the welcome (enter) and the agent
 # integrations offer (esc).
 for ($i = 0; $i -lt 6; $i++) {
-    $s = H 'screen'
+    $s = HC 'screen'
     if ($s -match 'continue' -and $s -match 'herdr') { Keys 'enter'; Start-Sleep -Seconds 1.5; continue }
     if ($s -match 'agent integrations') { Keys 'esc'; Start-Sleep -Seconds 1.5; continue }
     if ($s -match 'PS C:\\') { break }
     Start-Sleep -Seconds 2
 }
 $null = Dump 'client-ready'
-Show 'alive' (H 'alive')
+Show 'alive' (HC 'alive')
 Show 'pane list' (Hd pane list)
 
 $Pane = WaitFor { (PaneIds | Select-Object -First 1) } 30 'a pane'
@@ -241,7 +241,7 @@ Write-Host "plugin config dir: $($script:CfgDir)"
 
 # The agent: claude.exe typed into the pane through the client.
 Turn 1 'Add a login route to server.js with a password check.' 'I added POST /login to server.js. It compares the password with the PASSWORD constant set on line 3.'
-$null = H "type $Acc\agentbin\claude.exe"
+$null = HC "type $Acc\agentbin\claude.exe"
 Keys 'enter'
 $agentUp = WaitFor { $g = Hd pane get $Pane; if ($g -match '"agent"\s*:\s*"claude"') { $g } } 45 'pane agent = claude'
 Show 'pane get (agent detected)' "$agentUp"
@@ -269,10 +269,10 @@ Banner 'step 2: template, ctrl+s, enter'
 Keys 't'
 $tl = WaitS 10 'NEW DOT FROM TEMPLATE' '02a-templates'
 $first = if ($tl -and $tl -match '(?m)▸\s*\S+\s+(\S.*?)\s*│') { $Matches[1] } else { '?' }
-$null = H 'burst jjj'
+$null = HC 'burst jjj'
 Start-Sleep -Milliseconds 800
 $b1 = WaitS 5 '▸\s*\S+\s+Copywriter' 'B1-burst-jjj'
-$now = if ($b1) { 'Copywriter' } else { $s = H 'screen'; if ($s -match '(?m)▸\s*\S+\s+(\S.*?)\s*│') { $Matches[1] } else { '?' } }
+$now = if ($b1) { 'Copywriter' } else { $s = HC 'screen'; if ($s -match '(?m)▸\s*\S+\s+(\S.*?)\s*│') { $Matches[1] } else { '?' } }
 if ($b1) { Result 'B1' 'PASS' "one write of 'jjj' moved the cursor 3 rows: '$first' -> 'Copywriter'" }
 else { Result 'B1' 'FAIL' "one write of 'jjj' left the cursor on '$now' (from '$first'; 3 rows down is Copywriter)" }
 for ($i = 0; $i -lt 16; $i++) {
@@ -332,7 +332,7 @@ Banner 'step 5: prefix+shift+s summon'
 $p = OpenPopup 'ctrl+b S' 'summon' 'SUMMON A DOT' '05a-summon'
 Keys 'enter'
 $q = WaitS 6 'optional question' '05b-question'
-$null = H 'type Is the login route safe against brute force?'
+$null = HC 'type Is the login route safe against brute force?'
 $null = Dump '05c-typed'
 Keys 'enter'
 $ans = WaitS 60 'INFO\s+Security' '05d-answer'
@@ -372,7 +372,7 @@ $Export = Join-Path $env:RUNNER_TEMP 'herdr-dots-mem-export.toml'
 if (-not $env:RUNNER_TEMP) { $Export = Join-Path ([IO.Path]::GetTempPath()) 'herdr-dots-mem-export.toml' }
 Remove-Item -LiteralPath $Export -ErrorAction SilentlyContinue
 Keys 'ctrl+u'
-$null = H "type $Export"
+$null = HC "type $Export"
 $null = Dump '07e-export-path'
 Keys 'enter'
 $done = WaitS 10 'exported \d+ entr' '07f-export-done'
@@ -391,14 +391,14 @@ Banner 'step 8: Too small'
 Keys 'E'
 $ex2 = WaitS 10 'EXPORT DOT MEMORY' '08a-export-open'
 $homeBefore = @(Get-ChildItem -LiteralPath $env:USERPROFILE -Filter 'herdr-dots-memory-*' -Force -ErrorAction SilentlyContinue).Count
-Show 'resize' (H 'resize 60 15')
+Show 'resize' (HC 'resize 60 15')
 $small = WaitS 10 'Too small' '08b-60x15'
 Keys 'enter'
 Start-Sleep -Seconds 1.5
 $after = Dump '08c-60x15-after-enter'
 $homeAfter = @(Get-ChildItem -LiteralPath $env:USERPROFILE -Filter 'herdr-dots-memory-*' -Force -ErrorAction SilentlyContinue).Count
 $refused = ($after -match 'Too small') -and ($homeAfter -eq $homeBefore)
-Show 'resize' (H 'resize 200 50')
+Show 'resize' (HC 'resize 200 50')
 $back = WaitS 10 'EXPORT DOT MEMORY' '08d-restored'
 Keys 'esc'
 Start-Sleep -Milliseconds 600
@@ -424,7 +424,7 @@ Copy-Item -LiteralPath $TFile $Ev -ErrorAction SilentlyContinue
 foreach ($f in 'claude-argv.log', 'agent-stdin.log') { if (Test-Path "$Acc\$f") { Copy-Item "$Acc\$f" $Ev; Show $f (ReadText "$Acc\$f") } }
 $plog = Hd plugin log list --plugin herdr-dots; Save 'plugin-log.json' $plog; Show 'plugin log list' $plog
 Show 'pane list' (Hd pane list)
-$null = H 'quit'
+$null = HC 'quit'
 Hd server stop | Out-Null
 Start-Sleep -Seconds 2
 Stop-Process -Id $harness.Id -Force -ErrorAction SilentlyContinue
@@ -437,5 +437,5 @@ foreach ($k in @($Results.Keys)) { if ($Results[$k] -eq 'NOT RUN') { $Results[$k
 foreach ($k in $Results.Keys) { Write-Host "STEP $k : $($Results[$k])"; $summary += "| $k | $($Steps[$k]) | $($Results[$k] -replace '\|', '/') |`n" }
 if ($env:GITHUB_STEP_SUMMARY) { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary }
 Save 'results.md' $summary
-if ($Results.Values | Where-Object { $_ -match '^FAIL' }) { exit 1 }
+if ($Results.Values | Where-Object { $_ -match '^(FAIL|BLOCKED)' }) { exit 1 }
 exit 0
