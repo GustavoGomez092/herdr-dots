@@ -211,6 +211,10 @@ func TestExplicitProjectsInboxAndMissingRoot(t *testing.T) {
 	r.be.set(proResult("warn", "The deploy script pins an old base image."))
 	r.clock.Add(time.Hour + 20*time.Second)
 	eventually(t, "an inbox card", func() bool { cs, _ := r.inbox.List(testProject); return len(cs) == 1 })
+	// The finding toast goes out just after the inbox write: wait for it.
+	eventually(t, "the finding toast", func() bool {
+		return strings.Contains(strings.Join(r.toasts(), "\n"), "Security (scheduled) has a finding for repo")
+	})
 	toasts := strings.Join(r.toasts(), "\n")
 	if !strings.Contains(toasts, "Security (scheduled) has a finding for repo") || strings.Count(toasts, missing+" is not on this machine") != 1 {
 		t.Fatalf("toasts:\n%s", toasts)
