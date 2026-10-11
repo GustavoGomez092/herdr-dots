@@ -321,8 +321,8 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var as string
 	key := k.String()
-	if m.rememberCouncil && key != "esc" && key != "c" {
-		return m, nil // a council card is remembered as a project convention only
+	if m.rememberCouncil && key != "c" {
+		key = "esc" // a council card is remembered as a project convention only
 	}
 	switch key {
 	case "esc":
@@ -339,7 +339,8 @@ func (m Model) updateRemember(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		as = "convention"
 	case "g":
 		as = "global"
-	default:
+	default: // any other key cancels: a stray key never leaves the chooser open for a later choice
+		m.remembering = false
 		return m, nil
 	}
 	if !m.connected { // the chooser stays open: it sends once the engine is back

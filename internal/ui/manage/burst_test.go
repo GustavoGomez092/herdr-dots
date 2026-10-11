@@ -50,6 +50,35 @@ func TestABurstIsTypedIntoTheImportPrompt(t *testing.T) {
 	}
 }
 
+// I1: T reads the file off the UI goroutine, then opens the trust preview.
+// The rest of the burst never reaches it, nor the library under it (n would
+// open the dot editor there).
+func TestABurstEndsAtTheTrustPreviewThatOpensLater(t *testing.T) {
+	m, fc, _ := setup(t, "w1:p1")
+	s, _, _ := shareLib(t)
+	m, _ = m.Update(SnapshotMsg(s))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 200}) // the whole file fits: y would trust at once
+	m = press(m, "j", "j")
+	fc.calls = nil
+	m, cmd := m.Update(burst("Tyn"))
+	if got := m.(Model).scr; got != scrLibrary {
+		t.Fatalf("screen %v before the preview opens: the rest of the burst ran in the library", got)
+	}
+	for cmd != nil {
+		msg := cmd()
+		if msg == nil {
+			break
+		}
+		m, cmd = m.Update(msg)
+	}
+	if m.(Model).scr != scrTrust {
+		t.Fatalf("the trust preview must be open:\n%s", m.View())
+	}
+	if len(fc.calls) != 0 {
+		t.Fatalf("the burst's y trusted the dot: %v", fc.calls)
+	}
+}
+
 // The Setup pager scrolls on a burst, but y (install) needs its own key.
 func TestABurstNeverInstallsFromTheSetupScreen(t *testing.T) {
 	f := &setupFakes{}

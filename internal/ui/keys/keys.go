@@ -47,8 +47,10 @@ func Burst(k tea.KeyMsg) bool {
 // Browse or Pager mode, which step gets one rune at a time. After each rune
 // the model's mode decides what happens to the rest: Browse goes on, Pager
 // goes on with scroll runes only, Text gets the rest as one message (typed
-// into the field the rune opened) and Modal drops it. The commands run in
-// the order the keys were typed.
+// into the field the rune opened) and Modal drops it. A rune whose step
+// returns a command ends the burst too, unless it opened a text field: the
+// command may open a screen later, which the rest must not reach on the old
+// screen. The commands run in the order the keys were typed.
 func Deliver[M any](m M, k tea.KeyMsg, mode func(M) Mode, step func(M, tea.KeyMsg) (M, tea.Cmd)) (M, tea.Cmd) {
 	if !Burst(k) {
 		return step(m, k)
@@ -73,14 +75,19 @@ func Deliver[M any](m M, k tea.KeyMsg, mode func(M) Mode, step func(M, tea.KeyMs
 		}
 		m, cmd = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		cmds = append(cmds, cmd)
+		if cmd != nil && mode(m) != Text {
+			// The command may open a screen later (a preview read off
+			// the UI goroutine, a parent's screen): the rest of the burst
+			// would land on this one as commands, so it is dropped.
+			return m, ordered(cmds)
+		}
 	}
 	return m, ordered(cmds)
 }
 
-// ordered is one command that runs the non-nil cmds one after another, so
-// their effects (IPC calls) happen in the order the keys were typed, and
-// hands their messages back as a tea.BatchMsg. It is nil for no command and
-// the command itself for one.
+// ordered runs the non-nil cmds in sequence (tea.Sequence), so their
+// effects happen and their messages arrive in the order the keys were
+// typed. It is nil for no command and the command itself for one.
 func ordered(cmds []tea.Cmd) tea.Cmd {
 	var live []tea.Cmd
 	for _, c := range cmds {
@@ -94,13 +101,5 @@ func ordered(cmds []tea.Cmd) tea.Cmd {
 	case 1:
 		return live[0]
 	}
-	return func() tea.Msg {
-		var out tea.BatchMsg
-		for _, c := range live {
-			if msg := c(); msg != nil {
-				out = append(out, func() tea.Msg { return msg })
-			}
-		}
-		return out
-	}
+	return tea.Sequence(live...)
 }

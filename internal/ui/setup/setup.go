@@ -129,15 +129,20 @@ func (s Screen) Install() (mcp, keys, snoozeKeys bool) {
 	return s.MCPPending(), s.KeysPending() && s.IncludeKeys, s.KeysPending() && !s.IncludeKeys && !s.Forced
 }
 
-// hard breaks each line of s to w display cells, keeping its spaces (plan
-// text: diffs, TOML and command lines), with control characters dropped. It
-// breaks at a space, and inside a word only when the word alone is wider
-// than the line (B5: a command line keeps its arguments whole).
+// hard breaks each line of s to w display cells byte for byte, keeping
+// every space (plan text: diffs, TOML and command lines), with control
+// characters dropped: the rows joined, without their indent, are the line.
+// A command line ("Will run: ...") breaks after a space where it can, so
+// its arguments stay whole (B5); everything else breaks by display cells.
 func hard(s string, w, indent int) []string {
 	pad := strings.Repeat(" ", indent)
 	var out []string
 	for _, l := range strings.Split(strings.ReplaceAll(textutil.SanitizeModelText(s), "\t", "    "), "\n") {
-		for _, p := range style.WrapLine(l, max(1, w-indent)) {
+		wrap := style.WrapExact
+		if strings.HasPrefix(l, "Will run: ") {
+			wrap = style.WrapExactWords
+		}
+		for _, p := range wrap(l, max(1, w-indent)) {
 			out = append(out, pad+p)
 		}
 	}

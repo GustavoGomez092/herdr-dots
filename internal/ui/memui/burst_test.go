@@ -51,6 +51,23 @@ func TestABurstNeverConfirmsAForget(t *testing.T) {
 	}
 }
 
+// I1: P counts the purge off the UI goroutine, then opens its screen. The
+// pid typed right after it in one burst must not run as browse keys (e
+// would open the editor, a the approve screen) and is not typed into the
+// purge answer either.
+func TestABurstEndsAtAScreenThatOpensLater(t *testing.T) {
+	n := 0
+	m, cmd := open(seed(t), "security", &n).Update(burst("P" + pid))
+	if got := m.(Model).mode; got != modeBrowse {
+		t.Fatalf("mode %v after P%s: the pid ran as browse keys", got, pid)
+	}
+	m = run(m, cmd)
+	mm := m.(Model)
+	if mm.mode != modeConfirmPurge || mm.path.Value() != "" {
+		t.Fatalf("mode %v, answer %q: want the purge screen, empty", mm.mode, mm.path.Value())
+	}
+}
+
 func TestABurstIsTypedIntoTheFilter(t *testing.T) {
 	n := 0
 	m := press(open(seed(t), "security", &n), "/")

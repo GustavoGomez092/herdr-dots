@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"reflect"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -103,18 +104,43 @@ func TestASingleKeyIsHandedOnAsIs(t *testing.T) {
 	}
 }
 
+// cmdToy is toy whose keys return commands that log them: s opens a text
+// field, anything else is a browse command (an IPC call, a screen that opens
+// asynchronously).
+func cmdToy(order *[]string) func(toy, tea.KeyMsg) (toy, tea.Cmd) {
+	return func(t toy, k tea.KeyMsg) (toy, tea.Cmd) {
+		s := k.String()
+		t.got = append(t.got, s)
+		if t.mode == Browse && s == "s" {
+			t.mode = Text
+		}
+		return t, func() tea.Msg { *order = append(*order, s); return nil }
+	}
+}
+
+// I1: a key whose command may open a screen later (asynchronously) ends the
+// burst: the rest would land on the old screen as commands.
+func TestABurstStopsAtTheFirstCommand(t *testing.T) {
+	var order []string
+	m, _ := Deliver(toy{}, runes("Py"), modeOf, cmdToy(&order))
+	if len(m.got) != 1 || m.got[0] != "P" {
+		t.Fatalf("keys %q; want P alone, the rest dropped", m.got)
+	}
+}
+
+// M1: commands run, and their messages arrive, in typed order.
 func TestCommandsRunInTypedOrder(t *testing.T) {
 	var order []string
-	step := func(t toy, k tea.KeyMsg) (toy, tea.Cmd) {
-		s := k.String()
-		return t, func() tea.Msg { order = append(order, s); return nil }
+	m, cmd := Deliver(toy{}, runes("shi"), modeOf, cmdToy(&order))
+	if len(m.got) != 2 || m.got[1] != "hi" {
+		t.Fatalf("keys %q; want s, then hi typed", m.got)
 	}
-	_, cmd := Deliver(toy{}, runes("abc"), modeOf, step)
-	if cmd == nil {
-		t.Fatal("no command")
+	if _, batch := cmd().(tea.BatchMsg); batch {
+		t.Fatal("a tea.BatchMsg runs its commands concurrently: their messages could arrive out of order")
 	}
+	order = nil
 	run(cmd)
-	if len(order) != 3 || order[0] != "a" || order[1] != "b" || order[2] != "c" {
+	if len(order) != 2 || order[0] != "s" || order[1] != "hi" {
 		t.Fatalf("order %q", order)
 	}
 }
@@ -125,13 +151,17 @@ func TestNoCommandsMeansNoCommand(t *testing.T) {
 	}
 }
 
-// run executes cmd the way the runtime does, through any batch.
+// run executes cmd the way the runtime does, in order through a sequence
+// (tea.Sequence's message is an unexported slice of tea.Cmd).
 func run(cmd tea.Cmd) {
-	if batch, ok := cmd().(tea.BatchMsg); ok {
-		for _, c := range batch {
-			if c != nil {
-				run(c)
-			}
+	msg := cmd()
+	v := reflect.ValueOf(msg)
+	if v.Kind() != reflect.Slice || v.Type().Elem() != reflect.TypeOf(tea.Cmd(nil)) {
+		return
+	}
+	for i := 0; i < v.Len(); i++ {
+		if c := v.Index(i).Interface().(tea.Cmd); c != nil {
+			run(c)
 		}
 	}
 }

@@ -8,6 +8,29 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// I3: plan text (diffs, TOML) is wrapped byte for byte: the rows, without
+// their indent, give the line back exactly, every space included.
+func TestPlanLinesKeepEverySpace(t *testing.T) {
+	for _, s := range []string{
+		"+ args    =    [\"" + strings.Repeat(" ", 40) + "--state-dir\", \"/state\"]",
+		strings.Repeat(" ", 30),
+		"prefix+shift+c  herdr-dots: council (ask every dot)",
+		"Will run: claude mcp add --scope user --env 'A=${A:-}'   --transport stdio herdr-dots",
+	} {
+		rows := hard(s, 16, 2)
+		var got strings.Builder
+		for _, r := range rows {
+			if !strings.HasPrefix(r, "  ") || ansi.StringWidth(r) > 16 {
+				t.Fatalf("%q: row %q not indented or wider than 16", s, r)
+			}
+			got.WriteString(r[2:])
+		}
+		if got.String() != s {
+			t.Fatalf("rows %q don't give back %q", rows, s)
+		}
+	}
+}
+
 // B5: the long `claude mcp add` line breaks at spaces, never inside an
 // argument, and every piece keeps the change indent.
 func TestTheCommandLineBreaksAtSpaces(t *testing.T) {

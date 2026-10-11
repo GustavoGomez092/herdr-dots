@@ -179,6 +179,22 @@ func effectiveLines(written, eff dots.Dot) []string {
 	return lines
 }
 
+// fileRows shows one visible line of a file at width w: "  " and the line,
+// wrapped by display cells with every byte kept (style.WrapExact), each
+// continuation row starting with style.ContMark and a space.
+func fileRows(l string, w int) []string {
+	pieces := style.WrapExact(l, max(1, w-2))
+	rows := make([]string, len(pieces))
+	for i, p := range pieces {
+		if i == 0 {
+			rows[i] = "  " + p
+		} else {
+			rows[i] = style.ContMark + " " + p
+		}
+	}
+	return rows
+}
+
 func (m Model) trustLines() []string {
 	t, w := m.trust, m.bodyWidth()
 	d := t.dot
@@ -209,9 +225,12 @@ func (m Model) trustLines() []string {
 	// Every byte is trusted, so every byte is shown: research topics, a
 	// schedule task and its projects, backend args, and keys a later field
 	// adds. Hidden characters show as escapes (dots.VisibleLines).
+	// Wrapped here, byte for byte (fitLines leaves rows that fit alone): a
+	// line starts with the two-space indent and each continuation row with
+	// the marker, so a wrapped row never passes for a line of the file.
 	lines = append(lines, "", "THE FILE AS WRITTEN (every byte you trust):")
 	for _, l := range t.raw {
-		lines = append(lines, "  "+l)
+		lines = append(lines, fileRows(l, w)...)
 	}
 	lines = append(lines, "", "Any change to this file makes it untrusted again, and attached copies pause.")
 	return m.fitLines(lines)

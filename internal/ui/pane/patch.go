@@ -175,6 +175,9 @@ func (m Model) updateDraft(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.draft = nil
 		m.status = "drafting with " + slug + "…"
 		return m, m.call(ipc.CmdDraft, ipc.DraftArgs{PaneID: m.target, Slug: slug, Instruction: f.text, FromCardID: f.cardID})
+	default: // any other key cancels: a stray key never leaves the confirm open for a later y
+		m.draft = nil
+		m.status = "draft cancelled"
 	}
 	return m, nil
 }

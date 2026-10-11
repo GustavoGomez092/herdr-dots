@@ -55,6 +55,80 @@ func Wrap(s string, w int) []string {
 	return lines
 }
 
+// ContMark starts every continuation row of a line wrapped with WrapExact
+// (as in the diff viewer), so a wrapped row never passes for a line of its
+// own.
+const ContMark = "↪"
+
+// WrapExact splits the display-safe line s into rows of at most w display
+// cells, by grapheme cluster: the rows joined are exactly s, every space
+// included (what is trusted or installed must be shown byte for byte). A
+// cluster wider than w gets a row of its own.
+func WrapExact(s string, w int) []string {
+	w = max(1, w)
+	var out []string
+	var cur strings.Builder
+	cw := 0
+	for len(s) > 0 {
+		c, cwid := ansi.FirstGraphemeCluster(s, ansi.GraphemeWidth)
+		if len(c) == 0 { // never happens on valid input; stay safe
+			c, cwid = s[:1], 1
+		}
+		s = s[len(c):]
+		if cw > 0 && cw+cwid > w {
+			out = append(out, cur.String())
+			cur.Reset()
+			cw = 0
+		}
+		cur.WriteString(c)
+		cw += cwid
+	}
+	return append(out, cur.String())
+}
+
+// WrapExactWords is WrapExact that breaks after a run of spaces where it
+// can (a command line keeps its arguments whole). The spaces stay at the end
+// of their row, so the rows joined are still exactly s; a word wider than w
+// is split by WrapExact.
+func WrapExactWords(s string, w int) []string {
+	w = max(1, w)
+	var out []string
+	cur, cw := "", 0
+	for _, unit := range wordUnits(s) {
+		uw := ansi.StringWidth(unit)
+		if cw+uw <= w {
+			cur, cw = cur+unit, cw+uw
+			continue
+		}
+		if cur != "" {
+			out = append(out, cur)
+			cur, cw = "", 0
+		}
+		if uw > w {
+			pieces := WrapExact(unit, w)
+			out = append(out, pieces[:len(pieces)-1]...)
+			unit = pieces[len(pieces)-1]
+			uw = ansi.StringWidth(unit)
+		}
+		cur, cw = unit, uw
+	}
+	return append(out, cur)
+}
+
+// wordUnits splits s into words, each with the spaces after it (a leading
+// run of spaces is a unit of its own).
+func wordUnits(s string) []string {
+	var out []string
+	start := 0
+	for i := 1; i <= len(s); i++ {
+		if i == len(s) || (s[i] != ' ' && s[i-1] == ' ') {
+			out = append(out, s[start:i])
+			start = i
+		}
+	}
+	return out
+}
+
 // WrapLine breaks the single line s into lines of at most w display cells
 // at spaces, keeping s's own spacing (a leading indent, aligned columns).
 // The spaces at a break are dropped; a word wider than w is the only thing
@@ -88,7 +162,10 @@ func WrapLine(s string, w int) []string {
 		if strings.TrimSpace(ansi.Strip(cur)) != "" {
 			flush()
 		} else {
-			cur, curW = "", 0 // only an indent before a word that doesn't fit with it
+			// Only an indent before a word that doesn't fit with it: the
+			// indent goes, any escape sequence (a colour start) stays.
+			tok = strings.ReplaceAll(cur, " ", "") + tok
+			cur, curW = "", 0
 		}
 		if tw > w {
 			pieces := strings.Split(ansi.Hardwrap(tok, w, true), "\n")
@@ -98,7 +175,7 @@ func WrapLine(s string, w int) []string {
 		}
 		cur, curW = tok, tw
 	}
-	if cur != "" {
+	if cur != "" || len(lines) == 0 { // a line of spaces still shows (empty)
 		flush()
 	}
 	return lines

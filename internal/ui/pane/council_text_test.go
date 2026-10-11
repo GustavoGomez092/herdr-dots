@@ -19,6 +19,16 @@ func TestCouncilHeaderSaysOneDot(t *testing.T) {
 	}
 }
 
+// M3: only real headings (one to six #s and a space) outside code fences
+// become labels: #include, #42 and a fenced "# comment" stay as written.
+func TestCouncilTextRewritesOnlyHeadings(t *testing.T) {
+	in := "## Must fix\n#42 is open\n#include <stdio.h>\n####### seven\n```\n# a shell comment\n```\n   ### Consider\n#\tTabbed"
+	want := "Must fix:\n#42 is open\n#include <stdio.h>\n####### seven\n```\n# a shell comment\n```\nConsider:\nTabbed:"
+	if got := councilText(in); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
 // The chair's Markdown headings read as plain labels, selected or not, and
 // in the member answers too.
 func TestCouncilHeadingsShowAsLabels(t *testing.T) {
