@@ -38,7 +38,8 @@ $Steps = [ordered]@{
     '5' = 'prefix+shift+s summon: a question, the answer arrives as a card'
     '6' = 'prefix+shift+c council: a card'
     '7' = 'M memory screen; E export defaults to the home dir; written to a temp path'
-    '8' = '60x15 with a popup open: Too small, keys refused'
+    '8' = '60x15 with a popup open: Too small, enter refused, full screen back at 200x50'
+    '8b' = 'at Too small, typed keys do not reach the hidden path input'
     'B1' = 'a fast key burst (jjj in one write) moves the template cursor 3 rows'
 }
 $Results = [ordered]@{}
@@ -420,11 +421,11 @@ $homeBefore = & $homeFiles
 Show 'resize' (HC 'resize 60 15')
 $small = WaitS 10 'Too small' '08b-60x15'
 Keys 'enter'
-$after = WaitS 5 'nothing exported|Too small' '08c-60x15-after-enter'
+$after = WaitS 5 'nothing exported' '08c-60x15-after-enter'
 $homeAfter = & $homeFiles
-$enterRefused = $after -and ($after -match 'nothing exported|Too small') -and ($homeAfter -eq $homeBefore)
+$enterRefused = $after -and ($homeAfter -eq $homeBefore)
 Show 'resize' (HC 'resize 200 50')
-$back1 = WaitS 10 'MEMORY' '08d-grown-back'
+$back1 = WaitS 10 'spaces[\s\S]*MEMORY →' '08d-grown-back'
 # (b) shrink while the export screen is open, type: the path takes no keys;
 # grow back: the export screen returns with the path unchanged.
 Keys 'E'
@@ -443,8 +444,10 @@ Start-Sleep -Milliseconds 600
 Keys 'esc'
 Start-Sleep -Milliseconds 800
 $null = Dump '08i-closed'
-if ($small -and $enterRefused -and $back1 -and $small2 -and $typedRefused) { Result 8 'PASS' "at 60x15 the export screen says Too small; enter writes nothing ('nothing exported: the popup is too small...', no file in the home dir); typed keys don't reach the path; at 200x50 the export screen is back with the path unchanged" }
-else { Result 8 'FAIL' "Too small: $([bool]$small)/$([bool]$small2); enter refused: $enterRefused (home files $homeBefore -> $homeAfter); typing refused: $typedRefused ('$path0' -> '$path1'); grown back: $([bool]$back1)/$([bool]$back2)" }
+if ($small -and $enterRefused -and $back1 -and $small2 -and $back2) { Result 8 'PASS' "at 60x15 the export screen says Too small; enter writes nothing ('nothing exported: the popup is too small to show the whole path', no file in the home dir); at 200x50 the memory screen, and an export screen shrunk while open, come back whole" }
+else { Result 8 'FAIL' "Too small: $([bool]$small)/$([bool]$small2); enter refused: $enterRefused (home files $homeBefore -> $homeAfter); grown back: $([bool]$back1)/$([bool]$back2)" }
+if ($typedRefused) { Result '8b' 'PASS' "z and q typed at Too small left the path unchanged ('$path0')" }
+else { Result '8b' 'FAIL' "z and q typed at Too small went into the hidden path input: '$path0' -> '$path1'" }
 
 } catch { Write-Host "stopped: $_" }
 

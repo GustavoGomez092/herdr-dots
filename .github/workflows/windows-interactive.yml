@@ -13,8 +13,6 @@ on:
         description: "Herdr release to run"
         default: "v0.9.3"
         required: true
-  push:
-    branches: [win-interactive]
 
 permissions:
   contents: read
