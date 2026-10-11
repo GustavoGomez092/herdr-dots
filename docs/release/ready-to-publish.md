@@ -8,13 +8,13 @@ tagged, listed or published. The macOS evidence is in
 ## Blockers
 
 - [ ] **Listing.** The name stays "Herdr Dots" (`GustavoGomez092/herdr-dots`). The repository is public with the `herdr-plugin` topic (2026-10-10); check that herdr.dev/plugins lists it (the index picks the topic up on its next refresh).
-- [ ] **Acceptance run on three OSes.** Run `docs/superpowers/notes/1.0-acceptance.md` on a Linux machine and on Windows with the Herdr Windows beta, and on macOS with a real `herdr plugin install`; fill the Linux and Windows columns.
+- [ ] **Interactive acceptance on Linux and Windows.** CI is green on all three OSes, and the core loop passes end to end on Linux and Windows with Herdr 0.9.3 (install, engine, attach, review, send, dismiss, suppression; the `windows-acceptance` workflow re-runs the Windows one). Still open: the popup screens and prefix keybindings in an interactive Herdr client on Linux and Windows, and delivery modes other than queue there.
 - [ ] **Soak job cost.** Decide whether CI's soak job should run on every push (it costs runner time); Go 1.26.9, the Actions and GoReleaser are now pinned (keep them current: re-run govulncheck and bump the pins before each release).
 - [ ] **Live provider checks (API backends).** Claude Code is live-verified (2026-10-11: `go test -tags live` backend and council tests pass; repository settings never load; `~/.claude/settings.json` unchanged). Still open: run the API backends' live tests with your keys (`docs/superpowers/notes/2026-10-08-phase-4-verification.md`).
 - [ ] **Codex.** Install Codex, log in, run `go test -tags live ./internal/backend/ ./internal/council/` and the Codex rows of the acceptance run.
 - [ ] **P10-R8 live check with real Codex.** A Codex dot runs with every bare-named MCP server from your Codex config disabled; add an MCP server whose name contains a `.` and check that the dot refuses to run with a clear error.
 - [ ] **The Herdr popup and pane checks.** In `herdr --session dots-test`: the Phase 9 popup check (profile `i`, import preview `I` read to the end, trust `T`, edit, pause); the memory approve guard (a project proposal, the popup shrunk under 10 lines: `a` says "Too small to show the whole proposal" and `y` doesn't approve); the memory screen's export, import and purge (acceptance row 13: `E` writes a private file, `I` shows a preview and needs `Y` for secret-looking entries, `P` needs the project id and keeps global memory); the read-only toast (put `{"version":2,"cards":[]}` in the session's `queue.json`, start the engine, see the toast naming `queue.json`, and check the file is unchanged); the Phase 4 V6 no-echo key prompt.
-- [ ] **Windows runtime.** Every Windows behaviour is compile-checked and unit-tested on macOS only: run the acceptance run on Windows (triage W6, W7, W17, X1, X2).
+- [ ] **Windows runtime, interactive.** Every Windows test runs on windows-latest in CI, the release installs on Windows x86_64 and arm64, and the core loop passes end to end there. Still open: an interactive session with the popups (triage W6, W7, W17, X1, X2).
 
 ## Decisions for the developer
 

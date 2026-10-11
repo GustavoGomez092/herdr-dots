@@ -15,9 +15,10 @@ you're away, and can be shared with your team.
 
 Every roadmap phase (1–10) is built. The test suite passes in CI on macOS,
 Linux and Windows, and the macOS acceptance run has evidence for every item
-it can show ([notes](docs/superpowers/notes/1.0-acceptance.md)). Open before
-1.0.0: the full acceptance run with Herdr on Linux and Windows, and live checks
-with Claude, the API backends and Codex ([checklist](docs/release/ready-to-publish.md)).
+it can show ([notes](docs/superpowers/notes/1.0-acceptance.md)). The core loop also
+passes end to end on Linux and Windows with Herdr. Open before 1.0.0: the
+popup screens in an interactive Herdr session on Linux and Windows, and live
+checks with the API backends and Codex ([checklist](docs/release/ready-to-publish.md)).
 
 ## Requirements
 
