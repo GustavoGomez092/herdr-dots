@@ -60,7 +60,7 @@ USER GATE for all of them.
 ## Publishing steps (in order)
 
 `internal/version/VERSION` is the exact version the binaries report
-(`1.0.0-rc.1` now). A release candidate is a manual run of the release
+(`1.0.0-rc.2` now). A release candidate is a manual run of the release
 workflow on `main`, with no tag; publishing is the tag `v<VERSION>` on the
 merge commit of that run's checksum pull request (controller ruling P10-R12,
 checked by `scripts/release-kind.sh`). A VERSION ending in `-rc.<digits>`

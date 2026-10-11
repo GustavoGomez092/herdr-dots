@@ -3,6 +3,22 @@
 All notable changes. Versions before 1.0.0-rc.1 were development
 milestones, never released.
 
+## 1.0.0-rc.2 (release candidate)
+
+Fixes found by the first real installs on Windows and the Linux end-to-end and interactive checks.
+
+### Fixes
+
+- Windows install: `build.ps1` hashes and unzips with .NET, so `herdr plugin install` works when Windows PowerShell is started from PowerShell 7 (found by the first real install on Windows; `herdr plugin install` takes the fix from `main`).
+- a turn review that repeats a finding whose card from the same dot is still waiting on the pane (pending, or auto not yet delivered) adds no second card; the feed says `suppressed (duplicate of card <id>)` and the run is charged as usual. Resolved cards never block a new one (memory handles those), and summoned answers and council cards are never deduped. The roster now reads `suppressed` or `duplicate` after such a turn, not `passed`.
+- keys typed fast are no longer dropped. Bubble Tea merges printable keys that arrive in one read into one key message; every Dots TUI (pane, manage, memory, summon, council, diff viewer, profile, Setup screen) now takes such a burst one key per rune while browsing. Text fields get it as typed, so pasted text never becomes commands. A burst of keys never answers a confirm opened by the same burst, and confirms cancel on any other key (the draft confirm and the remember chooser now do too). A burst also ends at a key whose screen opens a moment later (a preview, the purge screen), so the rest never runs on the screen underneath. The Setup screen and the trust and dot-import previews scroll on a burst but take `y` only as its own key.
+- wrapped card text, delivery errors, the draft instruction and the council note and member answers keep their indent on every line.
+- the selected roster row, and the selected library row with its badge, are highlighted whole, not only up to the dot's glyph.
+- the manage popup's footers and the Setup screen's command line (the long `claude mcp add`) wrap between words; only a word longer than the line is broken. The trust preview's file and the Setup screen's plan text wrap byte for byte, every space kept, and each wrapped row of the file starts with `↪` so it never passes for a line of its own.
+- the Setup screen's "Too small" message fits the popup's height, so its title and "Too small" are never pushed off the top; the same holds for the memory screen's "Too small" screens.
+- "1 dot" in the council estimate and the council card header; the chair's Markdown headings show as plain labels ("Must fix:") on council cards; the memory screen hides its browse key line while a prompt (export, import, filter, a confirm) is open; the Setup screen's scroll hint shows only when the screen is longer than one page.
+- Known issue (B2, Herdr 0.9.3): a newly toggled Dots pane draws at its pre-split width until it is focused; focus it once, or resize, to fix it (README, Known issues).
+
 ## 1.0.0-rc.1 (release candidate, published 2026-10-11)
 
 Published as a GitHub pre-release with six signed, checksum-verified archives. Everything below shipped in it.
@@ -11,15 +27,6 @@ Hardening after the first rc.1 build: about 90 accepted known issues and securit
 
 ### Changes
 
-- Windows install: `build.ps1` hashes and unzips with .NET, so `herdr plugin install` works when Windows PowerShell is started from PowerShell 7 (found by the first real install on Windows; `herdr plugin install` takes the fix from `main`).
-- Post-publish fix (Linux acceptance): a turn review that repeats a finding whose card from the same dot is still waiting on the pane (pending, or auto not yet delivered) adds no second card; the feed says `suppressed (duplicate of card <id>)` and the run is charged as usual. Resolved cards never block a new one (memory handles those), and summoned answers and council cards are never deduped. The roster now reads `suppressed` or `duplicate` after such a turn, not `passed`.
-- Post-publish fix (Linux interactive check, B1): keys typed fast are no longer dropped. Bubble Tea merges printable keys that arrive in one read into one key message; every Dots TUI (pane, manage, memory, summon, council, diff viewer, profile, Setup screen) now takes such a burst one key per rune while browsing. Text fields get it as typed, so pasted text never becomes commands. A burst of keys never answers a confirm opened by the same burst, and confirms cancel on any other key (the draft confirm and the remember chooser now do too). A burst also ends at a key whose screen opens a moment later (a preview, the purge screen), so the rest never runs on the screen underneath. The Setup screen and the trust and dot-import previews scroll on a burst but take `y` only as its own key.
-- Post-publish fix (B3): wrapped card text, delivery errors, the draft instruction and the council note and member answers keep their indent on every line.
-- Post-publish fix (B4): the selected roster row, and the selected library row with its badge, are highlighted whole, not only up to the dot's glyph.
-- Post-publish fix (B5): the manage popup's footers and the Setup screen's command line (the long `claude mcp add`) wrap between words; only a word longer than the line is broken. The trust preview's file and the Setup screen's plan text wrap byte for byte, every space kept, and each wrapped row of the file starts with `↪` so it never passes for a line of its own.
-- Post-publish fix (B6): the Setup screen's "Too small" message fits the popup's height, so its title and "Too small" are never pushed off the top; the same holds for the memory screen's "Too small" screens.
-- Post-publish fixes (wording): "1 dot" in the council estimate and the council card header; the chair's Markdown headings show as plain labels ("Must fix:") on council cards; the memory screen hides its browse key line while a prompt (export, import, filter, a confirm) is open; the Setup screen's scroll hint shows only when the screen is longer than one page.
-- Known issue (B2, Herdr 0.9.3): a newly toggled Dots pane draws at its pre-split width until it is focused; focus it once, or resize, to fix it (README, Known issues).
 - Licensed under the Apache License 2.0 (`LICENSE`).
 - Security reports go through GitHub's private vulnerability reporting (`SECURITY.md`).
 - First-run Setup screen: the first time you open the manage popup, it offers to install the MCP server (Claude Code, Codex) and the keybindings, shows the exact change in a scrollable screen, and applies it only on `y` after every line has been on screen (`n` asks again in 7 days, `x` never). The Dots pane only shows a one-line hint while setup is pending. `S` in the manage popup reopens it; `herdr-dots setup` does the same from a shell. Answers are kept in `onboarding.json` (a new versioned config file). The setup commands start `claude`, `codex` and `herdr` without any inherited `CLAUDE*` variable except `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_GIT_BASH_PATH`.

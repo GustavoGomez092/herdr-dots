@@ -1,7 +1,7 @@
 # Herdr Dots release workflow. Written in Phase 10 and never run by it: the
 # developer starts each step by hand (a user gate). Controller ruling P10-R12:
 # internal/version/VERSION holds the exact version the binaries report
-# (1.0.0-rc.1 now; the developer sets 1.0.0 for the final release).
+# (1.0.0-rc.2 now; the developer sets 1.0.0 for the final release).
 #
 #   (a) Candidate: a manual run of this workflow on main (Actions → release →
 #       Run workflow; workflow_dispatch, no tag). scripts/release-kind.sh
