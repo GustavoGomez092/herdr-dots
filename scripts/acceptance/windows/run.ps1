@@ -202,9 +202,23 @@ Hd pane send-keys $Pane Enter | Out-Null
 $agentUp = WaitFor { $g = Hd pane get $Pane; if ($g -match '"agent"\s*:\s*"claude"') { $g } } 45 'pane agent = claude'
 Show 'pane get (agent detected)' "$agentUp"
 if (-not $agentUp) { Show 'pane get' (Hd pane get $Pane); Show 'pane read' (Hd pane read $Pane --source recent --lines 40); Show 'agent explain' (Hd agent explain $Pane) }
-Show 'report-agent-session' (Hd pane report-agent-session $Pane --source acc --agent claude --agent-session-id $Sid)
-$sess = WaitFor { $g = Hd pane get $Pane; if ($g -match $Sid) { $g } } 20 'agent_session on the pane'
-Show 'pane get (session)' "$sess"
+Show 'pane get (before the session report)' (Hd pane get $Pane)
+# The session report, first exactly as Herdr's Claude integration hook sends it
+# (SessionStart: source herdr:claude, a millisecond seq, the id, the transcript
+# path, the start source), then the simpler forms if Herdr doesn't apply it.
+$variants = @(
+    @{ name = 'herdr:claude hook form'; args = @('--source', 'herdr:claude', '--agent', 'claude', '--seq', "$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())", '--agent-session-id', $Sid, '--agent-session-path', $TFile, '--session-start-source', 'startup') },
+    @{ name = 'source acc, no seq'; args = @('--source', 'acc', '--agent', 'claude', '--agent-session-id', $Sid) },
+    @{ name = 'source acc, seq 1'; args = @('--source', 'acc2', '--agent', 'claude', '--seq', '1', '--agent-session-id', $Sid, '--agent-session-path', $TFile) }
+)
+$sess = $null
+foreach ($v in $variants) {
+    $o = & $Herdr --session acc pane report-agent-session $Pane @($v.args) 2>&1 | Out-String
+    Write-Host "report-agent-session [$($v.name)] exit $LASTEXITCODE output: $o"
+    $sess = WaitFor { $g = Hd pane get $Pane; if ($g -match [regex]::Escape($Sid)) { $g } } 8 "agent_session on the pane ($($v.name))"
+    if ($sess) { Write-Host "session applied by: $($v.name)"; break }
+}
+Show 'pane get (after the session report)' (Hd pane get $Pane)
 $script:CfgDir = (Hd plugin config-dir herdr-dots).Trim()
 if ($script:CfgDir -match '"([A-Za-z]:\\\\[^"]+)"') { $script:CfgDir = $Matches[1] -replace '\\\\', '\' }
 Write-Host "plugin config dir: $($script:CfgDir)"
