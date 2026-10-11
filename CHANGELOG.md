@@ -5,6 +5,8 @@ milestones, never released.
 
 ## 1.0.0 (2026-10-11)
 
+Published as the latest GitHub release with six signed, checksum-verified archives (cosign verified); fresh installs checked on macOS, Linux and Windows.
+
 The first release, after three release candidates. No code changes from 1.0.0-rc.3.
 
 - Installs with `herdr plugin install GustavoGomez092/herdr-dots`: a signed, checksum-verified binary for macOS, Linux and Windows (amd64 and arm64), with a build from source as the fallback.
