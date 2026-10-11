@@ -59,7 +59,7 @@ USER GATE for all of them.
 
 ## Publishing steps (in order)
 
-v1.0.0-rc.1 and v1.0.0-rc.2 were published this way (2026-10-11). For each further release candidate or the final 1.0.0, repeat steps 4 to 7 with the new VERSION, then run the `install-check` and `windows-acceptance` workflows.
+v1.0.0-rc.1, rc.2 and rc.3 were published this way (2026-10-11). For each further release candidate or the final 1.0.0, repeat steps 4 to 7 with the new VERSION, then run the `install-check` and `windows-acceptance` workflows.
 
 `internal/version/VERSION` is the exact version the binaries report
 (`1.0.0-rc.3` now). A release candidate is a manual run of the release

@@ -3,7 +3,9 @@
 All notable changes. Versions before 1.0.0-rc.1 were development
 milestones, never released.
 
-## 1.0.0-rc.3 (release candidate)
+## 1.0.0-rc.3 (release candidate, published 2026-10-11)
+
+Published as a GitHub pre-release with six signed, checksum-verified archives (cosign verified); installs checked on macOS and on Windows x86_64 and arm64.
 
 Fixes found by the interactive check on Windows (the real Herdr client in a ConPTY on GitHub's Windows runner; popups and keybindings all pass).
 
