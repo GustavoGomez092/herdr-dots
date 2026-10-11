@@ -3,6 +3,14 @@
 All notable changes. Versions before 1.0.0-rc.1 were development
 milestones, never released.
 
+## 1.0.0 (2026-10-11)
+
+The first release, after three release candidates. No code changes from 1.0.0-rc.3.
+
+- Installs with `herdr plugin install GustavoGomez092/herdr-dots`: a signed, checksum-verified binary for macOS, Linux and Windows (amd64 and arm64), with a build from source as the fallback.
+- Verified: CI on macOS, Linux and Windows; the core loop, popups and keybindings end to end with Herdr 0.9.3 on Linux and Windows; an 8-hour soak on macOS; live runs with Claude Code and Ollama.
+- Not yet live-verified: the Anthropic, OpenAI and OpenRouter backends, and Codex (see Known issues in the README).
+
 ## 1.0.0-rc.3 (release candidate, published 2026-10-11)
 
 Published as a GitHub pre-release with six signed, checksum-verified archives (cosign verified); installs checked on macOS and on Windows x86_64 and arm64.

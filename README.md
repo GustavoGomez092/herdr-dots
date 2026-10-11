@@ -1,6 +1,6 @@
 # Herdr Dots
 
-> **1.0.0-rc.3, release candidate.** Claude Code and Ollama dots are live-verified; the Anthropic, OpenAI and OpenRouter APIs and Codex are not yet; see [Known issues](#known-issues).
+> **1.0.0.** Claude Code and Ollama dots are live-verified; the Anthropic, OpenAI and OpenRouter APIs and Codex are not yet live-verified; see [Known issues](#known-issues).
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**:
 specialist agents (security, frontend, backend, copywriter, ...) that join a
@@ -16,9 +16,9 @@ you're away, and can be shared with your team.
 Every roadmap phase (1–10) is built. The test suite passes in CI on macOS,
 Linux and Windows, and the macOS acceptance run has evidence for every item
 it can show ([notes](docs/superpowers/notes/1.0-acceptance.md)). The core loop also
-passes end to end on Linux and Windows with Herdr. Open before 1.0.0: the
-popup screens in an interactive Herdr session on Linux and Windows, and live
-checks with the API backends and Codex ([checklist](docs/release/ready-to-publish.md)).
+passes end to end on Linux and Windows with Herdr, popups and keybindings
+included. Not yet live-verified: the Anthropic, OpenAI and OpenRouter backends
+and Codex ([checklist](docs/release/ready-to-publish.md)).
 
 ## Requirements
 

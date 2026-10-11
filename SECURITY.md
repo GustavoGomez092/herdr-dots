@@ -1,6 +1,6 @@
 # Security policy
 
-Herdr Dots 1.0.0-rc.3 is a release candidate and has not been released.
+This policy covers Herdr Dots 1.0.0 and later.
 
 ## Reporting a vulnerability
 
@@ -15,8 +15,7 @@ reproduce. You can expect an acknowledgement within a week.
 
 ## Supported versions
 
-Only the newest release gets fixes. `1.0.0-rc.3` is a release candidate and
-has not been released.
+Only the newest release gets fixes.
 
 ## The safety model in brief
 

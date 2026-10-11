@@ -57,8 +57,8 @@ func TestBuildEngineWiresMemory(t *testing.T) {
 	}
 }
 
-func TestVersionIsTheReleaseCandidateInTheBinary(t *testing.T) {
-	if version.Version != "1.0.0-rc.3" {
-		t.Fatalf("version %s, want 1.0.0-rc.3", version.Version)
+func TestVersionIsTheReleaseInTheBinary(t *testing.T) {
+	if version.Version != "1.0.0" {
+		t.Fatalf("version %s, want 1.0.0", version.Version)
 	}
 }

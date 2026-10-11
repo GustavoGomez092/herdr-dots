@@ -9,11 +9,10 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-func TestVersionIsTheReleaseCandidate(t *testing.T) {
-	// Phase 10 ships a release candidate. 1.0.0 is tagged only by the
-	// developer, after the three-OS acceptance run (a user gate).
-	if Version != "1.0.0-rc.3" {
-		t.Fatalf("Version = %q, want 1.0.0-rc.3", Version)
+func TestVersionIsTheRelease(t *testing.T) {
+	// 1.0.0, released on the developer's decision after rc.1–rc.3.
+	if Version != "1.0.0" {
+		t.Fatalf("Version = %q, want 1.0.0", Version)
 	}
 	if !regexp.MustCompile(`^\d+\.\d+\.\d+(-rc\.\d+)?$`).MatchString(Version) {
 		t.Fatalf("VERSION %q is not semver", Version)
