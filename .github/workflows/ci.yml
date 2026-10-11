@@ -5,6 +5,7 @@ name: ci
 
 on:
   push:
+    branches: ["**"] # not tags: a release tag points at a commit main's CI already tested
   pull_request:
   # By hand on the release checksum pull request's branch: a pull request
   # opened by the workflow token doesn't trigger CI.

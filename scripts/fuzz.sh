@@ -6,6 +6,8 @@
 # release job's matrix groups; TestReleaseFuzzMatrixCoversEveryTarget checks
 # that the groups together cover every target):
 #   sh scripts/fuzz.sh 10m ./internal/memory/ ./internal/transcript/
+# FUZZ_TARGETS narrows that to named targets (one group's share of a package):
+#   FUZZ_TARGETS='FuzzParseVerdict FuzzParseReply' sh scripts/fuzz.sh 10m ./internal/backend/
 # A crash stops the run; Go saves the input under testdata/fuzz/<Target>/ in
 # that package. Commit it with the fix so it stays a regression test. A
 # failure that saved no input is retried once (Go's fuzzer can fail at the
@@ -36,6 +38,29 @@ for pkg in $pkgs; do
 		n=$((n + 1))
 	done
 done
+# FUZZ_TARGETS (space-separated names) narrows the run to those targets in
+# the given packages: a release matrix group can split one package's targets
+# across runners. Every name must exist.
+if [ -n "${FUZZ_TARGETS:-}" ]; then
+	kept=""
+	n=0
+	for want in $FUZZ_TARGETS; do
+		found=""
+		for pt in $targets; do
+			if [ "${pt#*:}" = "$want" ]; then
+				found=$pt
+			fi
+		done
+		if [ -z "$found" ]; then
+			echo "fuzz target $want is not in $*" >&2
+			exit 1
+		fi
+		kept="$kept $found"
+		n=$((n + 1))
+	done
+	targets=$kept
+	min=$n
+fi
 if [ "$n" -lt "$min" ]; then
 	echo "found $n fuzz targets, expected at least $min" >&2
 	exit 1

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -106,37 +107,74 @@ func TestReleaseFuzzMatrixCoversEveryTarget(t *testing.T) {
 	if total < minTargets {
 		t.Fatalf("found %d fuzz targets, fuzz.sh expects at least %d", total, minTargets)
 	}
-	groups := regexp.MustCompile(`(?m)^\s+packages: (.+)$`).FindAllStringSubmatch(job, -1)
+	// Each matrix entry: packages, and optionally targets (a share of them).
+	type group struct{ pkgs, targets []string }
+	var groups []group
+	for _, e := range regexp.MustCompile(`(?m)^\s+- group: `).Split(job, -1)[1:] {
+		pm := regexp.MustCompile(`(?m)^\s+packages: (.+)$`).FindStringSubmatch(e)
+		if pm == nil {
+			t.Fatalf("a fuzz group has no packages: %q", e)
+		}
+		g := group{pkgs: strings.Fields(pm[1])}
+		if tm := regexp.MustCompile(`(?m)^\s+targets: (.+)$`).FindStringSubmatch(e); tm != nil {
+			g.targets = strings.Fields(tm[1])
+		}
+		groups = append(groups, g)
+	}
 	if len(groups) < 4 {
 		t.Fatalf("the fuzz matrix has %d groups, want at least 4", len(groups))
 	}
-	seen := map[string]bool{}
+	if !strings.Contains(job, "FUZZ_TARGETS: ${{ matrix.targets }}") {
+		t.Fatal("the fuzz job must pass matrix.targets to fuzz.sh as FUZZ_TARGETS")
+	}
+	seen := map[string]bool{} // "pkg Target"
 	covered := 0
 	for _, g := range groups {
-		pkgs := strings.Fields(g[1])
-		n := 0
-		for _, p := range pkgs {
-			if seen[p] {
-				t.Errorf("%s is in two fuzz groups", p)
+		var run []string
+		if len(g.targets) == 0 {
+			for _, p := range g.pkgs {
+				if len(targets[p]) == 0 {
+					t.Errorf("fuzz group package %s has no fuzz target", p)
+				}
+				for _, tg := range targets[p] {
+					run = append(run, p+" "+tg)
+				}
 			}
-			seen[p] = true
-			if len(targets[p]) == 0 {
-				t.Errorf("fuzz group package %s has no fuzz target", p)
+		} else {
+			for _, tg := range g.targets {
+				found := ""
+				for _, p := range g.pkgs {
+					if slices.Contains(targets[p], tg) {
+						found = p + " " + tg
+					}
+				}
+				if found == "" {
+					t.Errorf("fuzz group target %s is in none of %v", tg, g.pkgs)
+					continue
+				}
+				run = append(run, found)
 			}
-			n += len(targets[p])
 		}
-		covered += n
+		for _, k := range run {
+			if seen[k] {
+				t.Errorf("%s is in two fuzz groups", k)
+			}
+			seen[k] = true
+		}
+		covered += len(run)
 		// Fuzz time, plus about 3 minutes to build each package's
 		// instrumented test binary and 5 minutes of job setup.
-		need := float64(n)*per.Minutes() + 3*float64(len(pkgs)) + 5
+		need := float64(len(run))*per.Minutes() + 3*float64(len(g.pkgs)) + 5
 		if float64(timeout) < 1.3*need {
-			t.Errorf("group %q: %d targets need about %.0f min; timeout-minutes %d leaves less than 30%% headroom", g[1], n, need, timeout)
+			t.Errorf("group %v: %d targets need about %.0f min; timeout-minutes %d leaves less than 30%% headroom", g.pkgs, len(run), need, timeout)
 		}
 	}
 	var missing []string
 	for p, ts := range targets {
-		if !seen[p] {
-			missing = append(missing, p+" ("+strings.Join(ts, ", ")+")")
+		for _, tg := range ts {
+			if !seen[p+" "+tg] {
+				missing = append(missing, p+" "+tg)
+			}
 		}
 	}
 	sort.Strings(missing)

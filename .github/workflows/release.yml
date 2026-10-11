@@ -105,17 +105,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Two targets per group, all in parallel: each still gets the full
+        # fuzz time; `targets` narrows a group to its share of a package.
         include:
-          - group: backends
-            packages: ./internal/backend/ ./internal/council/ ./internal/credentials/
-          - group: memory-and-transcripts
-            packages: ./internal/memory/ ./internal/transcript/ ./internal/textutil/
-          - group: dots-and-worktrees
-            packages: ./internal/dots/ ./internal/worktree/ ./internal/dotpack/ ./internal/secrets/
-          - group: config-and-io
-            packages: ./internal/config/ ./internal/ipc/ ./internal/keys/ ./internal/mcpinstall/ ./internal/schedule/ ./internal/ui/diff/
+          - group: backend-verdicts
+            packages: ./internal/backend/
+            targets: FuzzParseVerdict FuzzParseReply
+          - group: backend-memory-cli
+            packages: ./internal/backend/
+            targets: FuzzParseMemoryOps FuzzParseCLIOutput
+          - group: council
+            packages: ./internal/council/
+          - group: memory-files
+            packages: ./internal/memory/
+            targets: FuzzImportTOML FuzzScopeFileLoad
+          - group: secrets-scanners
+            packages: ./internal/memory/ ./internal/credentials/
+            targets: FuzzScanSecrets FuzzCredentialsFile
+          - group: transcripts
+            packages: ./internal/transcript/
+            targets: FuzzParseClaude FuzzParseCodex
+          - group: transcript-text
+            packages: ./internal/transcript/ ./internal/textutil/
+            targets: FuzzFromDots FuzzSanitizeModelText
+          - group: dots
+            packages: ./internal/dots/
+          - group: worktree
+            packages: ./internal/worktree/
+          - group: packs-and-secrets
+            packages: ./internal/dotpack/ ./internal/secrets/
+          - group: config-and-ipc
+            packages: ./internal/config/ ./internal/ipc/
+          - group: keys-and-mcp
+            packages: ./internal/keys/ ./internal/mcpinstall/
+          - group: schedule-and-diff
+            packages: ./internal/schedule/ ./internal/ui/diff/
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
@@ -124,6 +150,7 @@ jobs:
       - run: sh scripts/fuzz.sh "$FUZZ_TIME" ${{ matrix.packages }}
         env:
           FUZZ_TIME: ${{ github.event.inputs.fuzz_time || '10m' }}
+          FUZZ_TARGETS: ${{ matrix.targets }}
       - name: keep crashers
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
