@@ -97,11 +97,9 @@ triage rows (the full reasons are in the triage notes).
     web text likewise (`TestResearchSystemPrompt`).
   - Commit reviews quote the commit as data and leave out denied files
     (`internal/engine/commits.go`: `commitPatch`; `TestCommitReviewLeavesDeniedFilesOut`, P10-R9).
-  - Repository agent settings never load (T22; argv-pinned; live check
-    pending). A side effect, inferred from the Claude Code bundle and not
-    run: with `--setting-sources user` the repository's `CLAUDE.md` probably
-    no longer reaches claude-cli dots either (project instructions load with
-    the project source). Confirming it is part of the R1 live gate.
+  - Repository agent settings never load (T22; live-verified 2026-10-11 with Claude Code 2.1.296: in a repository whose `.claude/settings.json` names an `apiKeyHelper`, plain `claude -p` ran it 11 times and a dot review ran it 0 times). With
+    `--setting-sources user` the repository's `CLAUDE.md` doesn't reach
+    claude-cli dots as instructions either (verified the same day).
 - **Residual risk:** a dot can still *say* something wrong; it can't act on
   it, and memory written from it waits for approval (Known gaps). claude-cli
   review, ask, memory and draft runs deny reads of secret files, home secrets

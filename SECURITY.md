@@ -34,7 +34,7 @@ has not been released.
   refuses text that looks like a secret.
 - **Repositories are untrusted:** git runs with hooks, fsmonitor and lazy
   fetches disabled; Claude Code dots never load a repository's
-  `.claude/settings*.json` (argv-pinned; live check pending); project dots
+  `.claude/settings*.json` (live-verified 2026-10-11); project dots
   need your trust, and a changed file
   loses it.
 - **Installs are checked:** prebuilt binaries are checked against the

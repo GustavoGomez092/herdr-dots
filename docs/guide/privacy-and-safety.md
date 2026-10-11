@@ -32,8 +32,7 @@ Every rule about what leaves your machine, what dots may touch and what needs yo
 - Hooks are disabled for dot runs, and Herdr variables are stripped, so dots never affect your panes.
 - `claude-cli` review, ask, memory, council and chair runs ignore the repository's
   `.claude/settings.json` and `.claude/settings.local.json` (`--setting-sources user`), so a
-  repository can't run a credential helper or redirect a dot; the repository's `CLAUDE.md`
-  probably doesn't reach them either (live check pending; see
+  repository can't run a credential helper or redirect a dot (live-verified 2026-10-11 with Claude Code 2.1.296: in a repository whose `.claude/settings.json` names an `apiKeyHelper`, plain `claude -p` ran it 11 times and a dot review ran it 0 times); the repository's `CLAUDE.md` doesn't reach them as instructions either (verified the same day: the dot read it only as a repository file, flagged it and didn't follow it) (see
   [Backends](backends.md#claude-cli-dots-ignore-the-repositorys-claude-settings)).
 - `claude-cli` runs that read files are denied secret files in the repository and your home
   secrets outside it (`~/.ssh`, `~/.aws`, `~/.claude`, the herdr-dots config directory with

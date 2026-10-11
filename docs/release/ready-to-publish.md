@@ -10,8 +10,7 @@ tagged, listed or published. The macOS evidence is in
 - [ ] **Listing.** The name stays "Herdr Dots" (`GustavoGomez092/herdr-dots`). The repository is public with the `herdr-plugin` topic (2026-10-10); check that herdr.dev/plugins lists it (the index picks the topic up on its next refresh).
 - [ ] **Acceptance run on three OSes.** Run `docs/superpowers/notes/1.0-acceptance.md` on a Linux machine and on Windows with the Herdr Windows beta, and on macOS with a real `herdr plugin install`; fill the Linux and Windows columns.
 - [ ] **Soak job cost.** Decide whether CI's soak job should run on every push (it costs runner time); Go 1.26.9, the Actions and GoReleaser are now pinned (keep them current: re-run govulncheck and bump the pins before each release).
-- [ ] **Live provider checks.** With Claude Code logged in, run `go test -tags live ./internal/backend/ ./internal/council/` (a small API spend; snapshot `~/.claude/settings.json` before and diff it after: it must not change) and the live smoke in a `herdr --session dots-test` session: attach a Security dot to a Claude Code pane, get a card for an obvious secret, dismiss it, and see `suppressed` in the feed when the same request repeats. Run the API backends' live tests with your keys (`docs/superpowers/notes/2026-10-08-phase-4-verification.md`).
-- [ ] **R1 live check (repository settings never load).** In a scratch repository whose `.claude/settings.json` sets an `apiKeyHelper` that writes a marker file, run one dot review: the marker must not appear. In the same run, note whether the repository's `CLAUDE.md` still reaches the dot (the Claude Code bundle suggests it doesn't under `--setting-sources user`; inferred, not run). Re-check `--restricted` on the Claude Code version you have (triage X8).
+- [ ] **Live provider checks (API backends).** Claude Code is live-verified (2026-10-11: `go test -tags live` backend and council tests pass; repository settings never load; `~/.claude/settings.json` unchanged). Still open: run the API backends' live tests with your keys (`docs/superpowers/notes/2026-10-08-phase-4-verification.md`).
 - [ ] **Codex.** Install Codex, log in, run `go test -tags live ./internal/backend/ ./internal/council/` and the Codex rows of the acceptance run.
 - [ ] **P10-R8 live check with real Codex.** A Codex dot runs with every bare-named MCP server from your Codex config disabled; add an MCP server whose name contains a `.` and check that the dot refuses to run with a clear error.
 - [ ] **The Herdr popup and pane checks.** In `herdr --session dots-test`: the Phase 9 popup check (profile `i`, import preview `I` read to the end, trust `T`, edit, pause); the memory approve guard (a project proposal, the popup shrunk under 10 lines: `a` says "Too small to show the whole proposal" and `y` doesn't approve); the memory screen's export, import and purge (acceptance row 13: `E` writes a private file, `I` shows a preview and needs `Y` for secret-looking entries, `P` needs the project id and keeps global memory); the read-only toast (put `{"version":2,"cards":[]}` in the session's `queue.json`, start the engine, see the toast naming `queue.json`, and check the file is unchanged); the Phase 4 V6 no-echo key prompt.
@@ -40,7 +39,7 @@ USER GATE for all of them.
 | X5 | Visual pane checks; the Phase 9 Task 11 Step 8 popup check | triage; Phase 5, 8, 9 ledgers | Popup and pane checks |
 | X6 | Live `suppressed` line on a repeated finding | triage; Phase 2 T16 | Live provider checks |
 | X7 | Live Claude draft end to end; Windows runtime of drafts | triage; Phase 7 ledger | Live provider checks; Windows runtime |
-| X8 | Re-verify `--restricted` on new Claude Code versions | triage; Phase 7 ledger | R1 live check |
+| X8 | Re-verify `--restricted` and `--setting-sources user` on new Claude Code versions (verified on 2.1.296) | triage; Phase 7 ledger | re-run the trap-repo check on each new Claude Code version |
 | X9 | Read deny vs Grep/Glob and `--restricted` reads outside the working directory | triage; Phase 8 ledger | Live provider checks |
 | X10 | Live `--max-budget-usd` stop behaviour | triage; Phase 8 ledger | Live provider checks |
 | X11 | V3/V5/V6 web paths | triage; Phase 8 ledger | Live provider checks |
@@ -54,7 +53,6 @@ USER GATE for all of them.
 | W16 | CI actions pinned by major tag; CI runs twice on PR branches | triage; P6 T12 | Pin actions |
 | W17 | Herdr resolving `./bin/herdr-dots` to `.exe`; first `build.ps1` run; `-race` with gcc on Windows CI | triage; Phase 6 ledger | Windows runtime; PowerShell tests |
 | T6-pwsh | PowerShell install tests on a `pwsh` host | Phase 10 ledger (Task 6) | PowerShell install tests |
-| R1 | Repository `.claude/settings.json` must not load (live) | Phase 10 ledger (Task 11), security review | R1 live check |
 | P10-R8 | Codex dots disable bare-named MCP servers, refuse dotted names (live) | Phase 10 ledger (Task 9) | P10-R8 live check |
 | SMOKE | The read-only toast and the memory approve guard in a live Herdr popup | Task 13 smoke (S3, S4) | Popup and pane checks |
 | DOTS-TEST | The `dots-test` session resumes six Claude panes on every start | Task 13 smoke | Decisions: the `dots-test` session |

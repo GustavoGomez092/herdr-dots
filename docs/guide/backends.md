@@ -70,9 +70,9 @@ council. An API `chair_backend` without `chair_model` uses that kind's default (
 run commands (an `apiKeyHelper`, for example) or redirect a dot. Every
 `claude-cli` review, ask, memory pass, council member and chair run now
 passes `--setting-sources user`: only your own `~/.claude` settings load,
-never the repository's. A side effect: the repository's `CLAUDE.md`
-probably no longer reaches these runs either (inferred from the Claude Code
-bundle; the live check is pending, a user gate). Drafts and research already
+never the repository's. This is live-verified 2026-10-11 with Claude Code 2.1.296: in a repository whose `.claude/settings.json` names an `apiKeyHelper`, plain `claude -p` ran it 11 times and a dot review ran it 0 times. A side effect,
+verified the same day: the repository's `CLAUDE.md` doesn't reach these runs
+as instructions (a dot reads it only as a repository file). Drafts and research already
 ran with `--restricted`, which ignores both your and the repository's
 settings files.
 
