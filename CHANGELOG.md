@@ -11,6 +11,7 @@ Hardening after the first rc.1 build: about 90 accepted known issues and securit
 
 ### Changes
 
+- Windows install: `build.ps1` hashes and unzips with .NET, so `herdr plugin install` works when Windows PowerShell is started from PowerShell 7 (found by the first real install on Windows; `herdr plugin install` takes the fix from `main`).
 - Licensed under the Apache License 2.0 (`LICENSE`).
 - Security reports go through GitHub's private vulnerability reporting (`SECURITY.md`).
 - First-run Setup screen: the first time you open the manage popup, it offers to install the MCP server (Claude Code, Codex) and the keybindings, shows the exact change in a scrollable screen, and applies it only on `y` after every line has been on screen (`n` asks again in 7 days, `x` never). The Dots pane only shows a one-line hint while setup is pending. `S` in the manage popup reopens it; `herdr-dots setup` does the same from a shell. Answers are kept in `onboarding.json` (a new versioned config file). The setup commands start `claude`, `codex` and `herdr` without any inherited `CLAUDE*` variable except `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_GIT_BASH_PATH`.
