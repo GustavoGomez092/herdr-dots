@@ -12,6 +12,10 @@ on:
         description: "Herdr release to run"
         default: "v0.9.3"
         required: true
+  # TEMPORARY while iterating: GitHub can't dispatch a workflow that isn't on
+  # the default branch. Removed before the branch is handed over.
+  push:
+    branches: [win-acceptance]
 
 permissions:
   contents: read
@@ -36,7 +40,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $v = '${{ github.event.inputs.herdr_version }}'
+          $v = '${{ github.event.inputs.herdr_version || 'v0.9.3' }}'
           Invoke-WebRequest "https://github.com/herdrdev/herdr/releases/download/$v/herdr-windows-x86_64.zip" -OutFile C:\acc\herdr.zip
           Expand-Archive C:\acc\herdr.zip -DestinationPath C:\acc\herdr
           $herdr = (Get-ChildItem C:\acc\herdr -Recurse -Filter herdr.exe | Select-Object -First 1).FullName
