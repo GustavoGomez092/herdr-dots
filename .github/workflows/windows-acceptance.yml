@@ -12,10 +12,6 @@ on:
         description: "Herdr release to run"
         default: "v0.9.3"
         required: true
-  # TEMPORARY while iterating: GitHub can't dispatch a workflow that isn't on
-  # the default branch. Removed before the branch is handed over.
-  push:
-    branches: [win-acceptance]
 
 permissions:
   contents: read
