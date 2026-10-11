@@ -1,0 +1,66 @@
+# Install check: installs the published release the way a user does, on
+# machines this repository can't test locally, and checks that the verified
+# release binary (not a source build) was installed. By hand only.
+name: install-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      herdr_version:
+        description: "Herdr release to install (Windows x86_64 job)"
+        default: "v0.9.3"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-herdr:
+    # The real path: Herdr's Windows build runs `herdr plugin install`.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: install Herdr and the plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ github.event.inputs.herdr_version }}'
+          Invoke-WebRequest "https://github.com/herdrdev/herdr/releases/download/$v/herdr-windows-x86_64.zip" -OutFile herdr.zip
+          Expand-Archive herdr.zip -DestinationPath herdr
+          $herdr = (Get-ChildItem herdr -Recurse -Filter herdr.exe | Select-Object -First 1).FullName
+          & $herdr --version
+          & $herdr plugin install GustavoGomez092/herdr-dots --yes
+          if ($LASTEXITCODE -ne 0) { throw "herdr plugin install failed ($LASTEXITCODE)" }
+          $manifest = Get-ChildItem "$env:USERPROFILE" -Recurse -Filter herdr-plugin.toml -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'herdr-dots' } | Select-Object -First 1
+          if (-not $manifest) { throw "the installed plugin was not found" }
+          $dir = $manifest.DirectoryName
+          $ver = & "$dir\bin\herdr-dots.exe" --version
+          Write-Host $ver
+          if ($ver -notmatch '\(release, commit ') { throw "not the verified release binary: $ver" }
+          Push-Location $dir
+          $check = & ".\bin\herdr-dots.exe" verify-release 2>&1 | Out-String
+          Pop-Location
+          Write-Host $check
+          if ($check -notmatch 'checksum ok' -or $check -notmatch 'binary ok') { throw "verify-release did not confirm the release" }
+
+  windows-arm64:
+    # Herdr has no Windows arm64 build: the plugin's own install script, run natively.
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    steps:
+      - name: install the plugin from the release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE"
+          git clone --depth 1 https://github.com/GustavoGomez092/herdr-dots.git plugin
+          Push-Location plugin
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1
+          $ver = & ".\bin\herdr-dots.exe" --version
+          Write-Host $ver
+          if ($ver -notmatch '\(release, commit ') { throw "not the verified release binary: $ver" }
+          $check = & ".\bin\herdr-dots.exe" verify-release 2>&1 | Out-String
+          Write-Host $check
+          if ($check -notmatch 'windows_arm64' -or $check -notmatch 'checksum ok') { throw "verify-release did not confirm the windows_arm64 release" }
+          Pop-Location
