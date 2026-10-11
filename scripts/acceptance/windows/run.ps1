@@ -35,7 +35,7 @@ function Result([string]$n, [string]$status, [string]$why) {
     Write-Host ""
 }
 function Banner([string]$t) { Write-Host ""; Write-Host "==================== $t ====================" }
-function H { $out = & $Herdr --session acc @args 2>&1 | Out-String; return $out }
+function Hd { $out = & $Herdr --session acc @args 2>&1 | Out-String; return $out }
 function Show([string]$label, [string]$text) { Write-Host "--- $label"; Write-Host $text }
 function WaitFor([scriptblock]$cond, [int]$secs, [string]$what) {
     $deadline = (Get-Date).AddSeconds($secs)
@@ -47,7 +47,14 @@ function WaitFor([scriptblock]$cond, [int]$secs, [string]$what) {
     Write-Host "timeout ($secs s) waiting for: $what"
     return $null
 }
-function ReadText([string]$p) { if ($p -and (Test-Path -LiteralPath $p)) { return [IO.File]::ReadAllText($p) } return '' }
+# The engine keeps its files open: read with FileShare.ReadWrite.
+function ReadText([string]$p) {
+    if (-not $p -or -not (Test-Path -LiteralPath $p)) { return '' }
+    try {
+        $fs = [IO.FileStream]::new($p, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try { return [IO.StreamReader]::new($fs, $Utf8).ReadToEnd() } finally { $fs.Dispose() }
+    } catch { return "(unreadable: $($_.Exception.Message))" }
+}
 function Save([string]$name, [string]$text) { [IO.File]::WriteAllText((Join-Path $Ev $name), $text, $Utf8) }
 
 # ---- transcript and screens ----
@@ -89,7 +96,7 @@ function Cycle([int]$n, [string]$user, [string]$assistant) {
     return $line
 }
 function Queue { $t = ReadText (Join-Path $script:SessDir 'queue.json'); if ($t) { return $t | ConvertFrom-Json } return $null }
-function PaneIds { $o = H pane list; return @([regex]::Matches($o, '"pane_id"\s*:\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique) }
+function PaneIds { $o = Hd pane list; return @([regex]::Matches($o, '"pane_id"\s*:\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique) }
 function MemoryFiles {
     Get-ChildItem -LiteralPath $script:StateDir, $script:CfgDir -Recurse -Force -File -Filter '*.json' -ErrorAction SilentlyContinue |
         Where-Object { (ReadText $_.FullName) -match '"entries"' }
@@ -143,12 +150,14 @@ if ($instCode -eq 0 -and $ver -match '\(release, commit ' -and $vr -match 'check
     Result 1 'PASS' "installed: $($ver.Trim()); verify-release: checksum ok"
 } else { Result 1 'FAIL' "install exit $instCode, version '$($ver.Trim())'" }
 
+# Steps 2-7 stop at the first failure the later steps depend on.
+try {
 # ---- step 2: the engine starts with the session ----
 Banner 'step 2: server and engine'
 $srv = Start-Process -FilePath $Herdr -ArgumentList '--session', 'acc', 'server' -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$Ev\server-stdout.txt" -RedirectStandardError "$Ev\server-stderr.txt"
 Write-Host "server pid $($srv.Id)"
-$up = WaitFor { $o = H workspace list; if ($LASTEXITCODE -eq 0 -and $o -match 'result') { $o } } 60 'herdr server'
+$up = WaitFor { $o = Hd workspace list; if ($LASTEXITCODE -eq 0 -and $o -match 'result') { $o } } 60 'herdr server'
 Show 'workspace list' "$up"
 $script:StateDir = ''; $script:SessDir = ''; $script:Pipe = ''
 $engLog = WaitFor {
@@ -162,7 +171,7 @@ if ($engLog) {
     Show "engine.log ($($engLog.FullName))" $el
     if ($el -match 'endpoint (\S+)') { $script:Pipe = $Matches[1] }
 }
-$plog = H plugin log list --plugin herdr-dots
+$plog = Hd plugin log list --plugin herdr-dots
 Show 'plugin log list' $plog
 $snap = if ($script:Pipe) { & $AccTool $script:Pipe snapshot 2>&1 | Out-String } else { '' }
 Show "engine snapshot over $($script:Pipe)" ($snap.Substring(0, [Math]::Min(1500, $snap.Length)))
@@ -170,14 +179,15 @@ if ($plog -match '"engine","--ensure"\],"event":"startup","exit_code":0' -and $s
     Result 2 'PASS' "startup engine --ensure exit 0; engine started, endpoint $($script:Pipe) answers"
 } elseif ($script:Pipe -and $snap) {
     Result 2 'PASS' "engine started (endpoint $($script:Pipe) answers); startup log entry not matched exactly, see plugin log list"
-} else { Result 2 'FAIL' 'engine did not start (see plugin log list / engine.log)' }
+} else { Result 2 'FAIL' 'engine did not start (see plugin log list / engine.log)'; throw 'ABORT: no engine' }
 
 # ---- step 3: attach Security over IPC ----
 Banner 'step 3: agent pane and attach'
-$ws = H workspace create --cwd $App --label app
+$ws = Hd workspace create --cwd $App --label app
 Show 'workspace create' $ws
 $Pane = WaitFor { (PaneIds | Select-Object -First 1) } 30 'a pane'
 Write-Host "agent pane: $Pane"
+if (-not $Pane) { Result 3 'FAIL' 'workspace create made no pane'; throw 'ABORT: no pane' }
 $sock = Get-ChildItem -LiteralPath $env:APPDATA, $env:LOCALAPPDATA -Recurse -Force -File -Filter herdr.sock -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -match '\\acc\\' } | Select-Object -First 1
 $sub = $null
@@ -187,15 +197,15 @@ if ($sock -and $Pane) {
         -RedirectStandardOutput "$Ev\sub.log" -RedirectStandardError "$Ev\sub-stderr.txt"
 }
 Turn 1 'Add a login route to server.js with a password check.' 'I added POST /login to server.js. It compares the password with the PASSWORD constant set on line 3.'
-H pane send-text $Pane "$Acc\agentbin\claude.exe" | Out-Null
-H pane send-keys $Pane Enter | Out-Null
-$agentUp = WaitFor { $g = H pane get $Pane; if ($g -match '"agent"\s*:\s*"claude"') { $g } } 45 'pane agent = claude'
+Hd pane send-text $Pane "$Acc\agentbin\claude.exe" | Out-Null
+Hd pane send-keys $Pane Enter | Out-Null
+$agentUp = WaitFor { $g = Hd pane get $Pane; if ($g -match '"agent"\s*:\s*"claude"') { $g } } 45 'pane agent = claude'
 Show 'pane get (agent detected)' "$agentUp"
-if (-not $agentUp) { Show 'pane get' (H pane get $Pane); Show 'pane read' (H pane read $Pane --source recent --lines 40); Show 'agent explain' (H agent explain $Pane) }
-Show 'report-agent-session' (H pane report-agent-session $Pane --source acc --agent claude --agent-session-id $Sid)
-$sess = WaitFor { $g = H pane get $Pane; if ($g -match $Sid) { $g } } 20 'agent_session on the pane'
+if (-not $agentUp) { Show 'pane get' (Hd pane get $Pane); Show 'pane read' (Hd pane read $Pane --source recent --lines 40); Show 'agent explain' (Hd agent explain $Pane) }
+Show 'report-agent-session' (Hd pane report-agent-session $Pane --source acc --agent claude --agent-session-id $Sid)
+$sess = WaitFor { $g = Hd pane get $Pane; if ($g -match $Sid) { $g } } 20 'agent_session on the pane'
 Show 'pane get (session)' "$sess"
-$script:CfgDir = (H plugin config-dir herdr-dots).Trim()
+$script:CfgDir = (Hd plugin config-dir herdr-dots).Trim()
 if ($script:CfgDir -match '"([A-Za-z]:\\\\[^"]+)"') { $script:CfgDir = $Matches[1] -replace '\\\\', '\' }
 Write-Host "plugin config dir: $($script:CfgDir)"
 New-Item -ItemType Directory -Force (Join-Path $script:CfgDir 'dots') | Out-Null
@@ -209,16 +219,16 @@ $attJson = ReadText (Join-Path $script:SessDir 'attachments.json')
 Show 'attachments.json' $attJson
 if ($att -match 'ok: attach' -and $attJson -match '"security"') {
     Result 3 'PASS' "Security attached to $Pane over $($script:Pipe); catch-up: $(if ($catch) { ($catch | ConvertFrom-Json).outcome } else { 'none' })"
-} else { Result 3 'FAIL' "attach: $($att.Trim())" }
+} else { Result 3 'FAIL' "attach: $($att.Trim())"; throw 'ABORT: attach failed' }
 
 # ---- step 4: the Dots pane ----
 Banner 'step 4: Dots pane'
 $before = PaneIds
-Show 'toggle-pane' (H plugin action invoke toggle-pane --plugin herdr-dots)
+Show 'toggle-pane' (Hd plugin action invoke toggle-pane --plugin herdr-dots)
 $DotsPane = WaitFor { PaneIds | Where-Object { $before -notcontains $_ } | Select-Object -First 1 } 30 'the Dots pane'
 Write-Host "Dots pane: $DotsPane"
-$dp = WaitFor { $r = H pane read $DotsPane --source visible; if ($r -match 'Security') { $r } } 30 'roster in the Dots pane'
-if (-not $dp -and $DotsPane) { $dp = H pane read $DotsPane --source visible }
+$dp = WaitFor { $r = Hd pane read $DotsPane --source visible; if ($r -match 'Security') { $r } } 30 'roster in the Dots pane'
+if (-not $dp -and $DotsPane) { $dp = Hd pane read $DotsPane --source visible }
 Show 'Dots pane (pane read)' "$dp"
 Save 'dots-pane-step4.txt' "$dp"
 if ($dp -match 'DOTS' -and $dp -match 'Security') { Result 4 'PASS' "pane read $DotsPane shows the roster with Security" }
@@ -233,20 +243,20 @@ Show 'claude argv (this run)' $argvNew
 $q = Queue
 $card2 = if ($q) { $q.cards | Where-Object { $_.turn -eq 2 } | Select-Object -Last 1 } else { $null }
 Show 'queue.json' (ReadText (Join-Path $script:SessDir 'queue.json'))
-$dp5 = H pane read $DotsPane --source visible
+$dp5 = Hd pane read $DotsPane --source visible
 Show 'Dots pane after turn 2' $dp5
 Save 'dots-pane-step5.txt' $dp5
 if ($t2 -match '"outcome":"flagged"' -and $card2 -and $argvNew -match '--setting-sources' -and $argvNew -match '--strict-mcp-config') {
     Result 5 'PASS' "turn 2 flagged; card $($card2.id) ($($card2.severity)) in queue.json; fakeclaude ran via claude.cmd with --strict-mcp-config/--setting-sources user"
-} else { Result 5 'FAIL' "feed turn 2: $t2; card: $($card2.id)" }
+} else { Result 5 'FAIL' "feed turn 2: $t2; card: $($card2.id)"; if (-not $card2) { throw 'ABORT: no card' } }
 
 # ---- step 6: send the card into the agent pane ----
 Banner 'step 6: send'
 if ($card2) {
     $sent = & $AccTool $script:Pipe send $card2.id 0 2>&1 | Out-String
     Show 'send' $sent
-    $ap = WaitFor { $r = H pane read $Pane --source recent --lines 200; if ($r -match 'Security dot') { $r } } 30 'the card in the agent pane'
-    if (-not $ap) { $ap = H pane read $Pane --source recent --lines 200 }
+    $ap = WaitFor { $r = Hd pane read $Pane --source recent --lines 200; if ($r -match 'Security dot') { $r } } 30 'the card in the agent pane'
+    if (-not $ap) { $ap = Hd pane read $Pane --source recent --lines 200 }
     Show 'agent pane' "$ap"
     Save 'agent-pane-step6.txt' "$ap"
     Show 'agent-stdin.log' (ReadText "$Acc\agent-stdin.log")
@@ -278,6 +288,8 @@ if ($card4 -and $t5 -match '"outcome":"suppressed"') {
 } elseif (-not $card4) { Result 7 'FAIL' "no card for turn 4 (feed: $t4)" }
 else { Result 7 'FAIL' "turn 5 after dismiss: $t5" }
 
+} catch { Write-Host "stopped: $_" }
+
 # ---- evidence ----
 Banner 'evidence'
 if ($sub) { Stop-Process -Id $sub.Id -Force -ErrorAction SilentlyContinue }
@@ -288,17 +300,18 @@ foreach ($f in 'engine.log', 'feed.jsonl', 'queue.json', 'attachments.json', 'le
 foreach ($m in (MemoryFiles)) { Copy-Item -LiteralPath $m.FullName (Join-Path $Ev ("memory-" + $m.Name)); Show "memory $($m.FullName)" (ReadText $m.FullName) }
 Copy-Item -LiteralPath $TFile $Ev -ErrorAction SilentlyContinue
 foreach ($f in 'claude-argv.log', 'agent-stdin.log') { if (Test-Path "$Acc\$f") { Copy-Item "$Acc\$f" $Ev; Show $f (ReadText "$Acc\$f") } }
-$plog = H plugin log list --plugin herdr-dots; Save 'plugin-log.json' $plog; Show 'plugin log list' $plog
-$apf = H pane read $Pane --source recent --lines 400; Save 'agent-pane.txt' $apf; Show 'agent pane (final)' $apf
-$dpf = H pane read $DotsPane --source visible; Save 'dots-pane.txt' $dpf; Show 'Dots pane (final)' $dpf
+$plog = Hd plugin log list --plugin herdr-dots; Save 'plugin-log.json' $plog; Show 'plugin log list' $plog
+$apf = Hd pane read $Pane --source recent --lines 400; Save 'agent-pane.txt' $apf; Show 'agent pane (final)' $apf
+$dpf = Hd pane read $DotsPane --source visible; Save 'dots-pane.txt' $dpf; Show 'Dots pane (final)' $dpf
 Show 'sub.log' (ReadText "$Ev\sub.log")
 Show 'server stderr' (ReadText "$Ev\server-stderr.txt")
-H server stop | Out-Null
+Hd server stop | Out-Null
 Start-Sleep -Seconds 2
 Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
 Banner 'RESULTS'
 $summary = "| # | Result |`n|---|---|`n"
+foreach ($k in @($Results.Keys)) { if ($Results[$k] -eq 'NOT RUN') { $Results[$k] = 'BLOCKED - an earlier step failed' } }
 foreach ($k in $Results.Keys) { Write-Host "STEP $k : $($Results[$k])"; $summary += "| $k | $($Results[$k] -replace '\|', '/') |`n" }
 if ($env:GITHUB_STEP_SUMMARY) { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary }
 if ($Results.Values | Where-Object { $_ -match '^FAIL' }) { exit 1 }
