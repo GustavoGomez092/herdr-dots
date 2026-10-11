@@ -31,7 +31,8 @@ jobs:
           & $herdr --version
           & $herdr plugin install GustavoGomez092/herdr-dots --yes
           if ($LASTEXITCODE -ne 0) { throw "herdr plugin install failed ($LASTEXITCODE)" }
-          $manifest = Get-ChildItem "$env:USERPROFILE" -Recurse -Filter herdr-plugin.toml -ErrorAction SilentlyContinue |
+          # Herdr keeps plugins under %APPDATA%\herdr\plugins (AppData is hidden: -Force).
+          $manifest = Get-ChildItem (Join-Path $env:APPDATA 'herdr\plugins') -Recurse -Force -Filter herdr-plugin.toml -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'herdr-dots' } | Select-Object -First 1
           if (-not $manifest) { throw "the installed plugin was not found" }
           $dir = $manifest.DirectoryName
