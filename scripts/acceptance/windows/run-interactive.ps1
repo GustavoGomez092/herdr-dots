@@ -239,6 +239,13 @@ $script:CfgDir = (Hd plugin config-dir herdr-dots).Trim()
 if ($script:CfgDir -match '"([A-Za-z]:\\\\[^"]+)"') { $script:CfgDir = $Matches[1] -replace '\\\\', '\' }
 Write-Host "plugin config dir: $($script:CfgDir)"
 
+# What the processes Herdr starts see: the pane shell's PATH and claude.
+$null = HC 'type $env:PATH -split ";" | Select-Object -First 4; (Get-Command claude -ErrorAction SilentlyContinue).Source'
+Keys 'enter'
+Start-Sleep -Seconds 2
+$null = Dump 'pane-shell-path'
+Show 'herdr processes' (Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'herdr|conptyh' } | ForEach-Object { "$($_.ProcessId) parent=$($_.ParentProcessId) $($_.CommandLine)" } | Out-String)
+Keys 'ctrl+l'
 # The agent: claude.exe typed into the pane through the client.
 Turn 1 'Add a login route to server.js with a password check.' 'I added POST /login to server.js. It compares the password with the PASSWORD constant set on line 3.'
 $null = HC "type $Acc\agentbin\claude.exe"
