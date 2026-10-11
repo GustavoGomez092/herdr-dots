@@ -58,6 +58,9 @@ func TestAskReturnsTheVerdictWithoutACard(t *testing.T) {
 	r := newRig(t, sec)
 	r.attach(t, "security")
 	r.readers["s1"].add(transcript.Turn{User: "store the token in localStorage"})
+	// The turn is seen now, not by Attach's catch-up: processed late (seen on
+	// Windows CI) it would end the consulted status the ask sets below.
+	r.e.processPaneIfIdle(pane)
 	r.be.set(critical)
 	res, err := mcpAsk(t, r, "security", "Is localStorage OK for the JWT?", true)
 	if err != nil {
