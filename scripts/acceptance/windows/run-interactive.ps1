@@ -182,6 +182,13 @@ Copy-Item (Join-Path $Tools 'fakeclaude.exe') "$Acc\agentbin\claude.exe"
 $herdrDir = Split-Path $Herdr
 $env:PATH = "$Acc\bin;$herdrDir;$env:PATH"
 Write-Host "claude resolves to: $((Get-Command claude -ErrorAction SilentlyContinue).Source)"
+# Herdr on Windows starts its panes (the shell, the plugin popups, the Dots
+# pane) with the user's environment from the registry, not the client's: a
+# PATH set only in this process never reaches them. claude.cmd goes on the
+# user PATH, as an npm install of Claude Code puts it.
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+[Environment]::SetEnvironmentVariable('Path', "$Acc\bin;$userPath", 'User')
+Write-Host "user PATH (registry): $([Environment]::GetEnvironmentVariable('Path', 'User'))"
 [IO.File]::WriteAllText("$App\server.js", "const express = require('express');`nconst app = express();`nconst PASSWORD = `"hunter2`";`napp.post('/login', (req, res) => { db.query(`"SELECT * FROM users WHERE name = '`" + req.body.user + `"'`"); });`n", $Utf8)
 git -C $App init -q 2>&1 | Out-Null
 git -C $App -c user.name=acc -c user.email=acc@example.invalid add -A 2>&1 | Out-Null
