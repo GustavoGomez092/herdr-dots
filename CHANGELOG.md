@@ -3,9 +3,11 @@
 All notable changes. Versions before 1.0.0-rc.1 were development
 milestones, never released.
 
-## Unreleased (after 1.0.0-rc.1)
+## 1.0.0-rc.1 (release candidate, published 2026-10-11)
 
-Post-rc hardening: about 90 accepted known issues and security findings R2, R3, R5 and R8 are fixed (see the triage notes).
+Published as a GitHub pre-release with six signed, checksum-verified archives. Everything below shipped in it.
+
+Hardening after the first rc.1 build: about 90 accepted known issues and security findings R2, R3, R5 and R8 are fixed (see the triage notes).
 
 ### Changes
 
@@ -47,7 +49,7 @@ Post-rc hardening: about 90 accepted known issues and security findings R2, R3, 
 - ASCII mode now covers the pane, the memory screen, the summon popup and the template list.
 - Upgrade note (Linux only, deep state paths only): an old engine and a new client can miss each other until Herdr restarts.
 
-## 1.0.0-rc.1 (release candidate, not released)
+### Phase 10 release work
 
 - Schema versions for every persisted file and a migration framework: older files are upgraded with a backup, files from a newer version stay read-only (`herdr-dots migrate`).
 - Prebuilt, checksum-verified binaries once published (user gate) for macOS, Linux and Windows (amd64, arm64), with a source-build fallback; `herdr-dots verify-release`; `--version` shows the build source and commit.
