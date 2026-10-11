@@ -30,7 +30,7 @@ That installed the verified release binary `herdr-dots 1.0.0-rc.1 (release, comm
 - **Duplicate pending cards.** A finding raised again while its identical card is still pending adds a second card. Memory suppression starts only after a card is sent or dismissed.
 - **Roster wording.** The roster shows `passed` after a turn whose finding was suppressed; the feed says `suppressed`.
 
-Both are being fixed after rc.1.
+Both are fixed after rc.1 (post-rc): a repeat of a still-waiting card adds no second card, and the roster reads `suppressed` or `duplicate`. Tests: `TestRepeatWhileCardPendingAddsNoSecondCard`, `TestDismissedCardStillSuppressedByMemoryNotDeduped`, `TestDifferentFindingWhileCardPendingAddsCard`, `TestOtherDotSameTextAddsCard` and `TestSummonIsNeverDeduped` in `internal/engine/pending_dedupe_test.go`.
 
 **Herdr 0.9.3 behaviour seen (not Dots issues):**
 - Popups have no pane id for `pane read`.
