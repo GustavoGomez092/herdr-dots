@@ -39,6 +39,9 @@ func newSetupIO(in io.Reader, out io.Writer) (setupIO, error) {
 	if real, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = real
 	}
+	// Herdr can start the plugin with a \\?\ path on Windows: record the
+	// plain path, the same one setup-mcp from a shell records.
+	exe = platform.StripLongPathPrefix(exe)
 	home, _ := os.UserHomeDir()
 	return setupIO{
 		in: in, out: out,

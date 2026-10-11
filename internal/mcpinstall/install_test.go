@@ -452,3 +452,17 @@ func TestSymlinkedConfigIsEditedThroughTheLink(t *testing.T) {
 		t.Fatalf("target:\n%s", got)
 	}
 }
+
+// Herdr may start the plugin with a \\?\ path on Windows: an entry recorded
+// with that prefix is the same command as one without it.
+func TestClaudeEntryWithALongPathPrefixStillMatches(t *testing.T) {
+	bin := `C:\Users\me\herdr-dots\bin\herdr-dots.exe`
+	e := claudeEntry{Type: "stdio", Command: `\\?\` + bin, Args: ServerArgs(tCfg, tState), Env: claudeEnv()}
+	if !claudeEntryMatches(e, bin, tCfg, tState) {
+		t.Fatal(`an entry whose command has the \\?\ prefix must match the same binary without it`)
+	}
+	e.Command = bin
+	if !claudeEntryMatches(e, `\\?\`+bin, tCfg, tState) {
+		t.Fatal(`a \\?\ binary path must match the entry without the prefix`)
+	}
+}

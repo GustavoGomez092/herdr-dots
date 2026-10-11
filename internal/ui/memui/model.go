@@ -864,6 +864,9 @@ func (m Model) keysPath(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, readImport(p)
 	}
+	if !m.shownWhole() {
+		return m, nil // too small to show the field: typing would go unseen
+	}
 	var cmd tea.Cmd
 	m.path, cmd = m.path.Update(k)
 	return m.checkGit(), cmd
@@ -1167,6 +1170,9 @@ func (m Model) keysConfirmPurge(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.mutate("purged "+id, func(st *memory.Store) error { return st.Purge(id) })
+	}
+	if !m.shownWhole() {
+		return m, nil // too small to show the field: typing would go unseen
 	}
 	var cmd tea.Cmd
 	m.path, cmd = m.path.Update(k)

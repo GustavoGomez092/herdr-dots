@@ -486,3 +486,36 @@ func TestPurgeAnswerIsComparedExactly(t *testing.T) {
 		t.Fatalf("an answer with a leading space purged: %+v", es)
 	}
 }
+
+// A prompt too small to show its field ignores typing: keys would go into a
+// field nobody can see (found by the Windows interactive check).
+func TestTooSmallPromptsIgnoreTyping(t *testing.T) {
+	small, big := tea.WindowSizeMsg{Width: 20, Height: 6}, tea.WindowSizeMsg{Width: 120, Height: 40}
+	t.Run("export path", func(t *testing.T) {
+		st, cwd := seed(t), t.TempDir()
+		m, _ := openAt(st, herdrDots, "", cwd).Update(small)
+		m = press(m, "E")
+		before := ""
+		if mm, ok := m.(Model); ok {
+			before = mm.path.Value()
+		}
+		m = press(press(m, "z"), "q")
+		m, _ = m.Update(big)
+		if got := m.(Model).path.Value(); got != before {
+			t.Fatalf("typing at a too-small export screen changed the path: %q -> %q", before, got)
+		}
+	})
+	t.Run("purge id", func(t *testing.T) {
+		st, cwd := seed(t), t.TempDir()
+		m, _ := openAt(st, herdrDots, "", cwd).Update(big)
+		m = run(press(m, "P"), nil)
+		m, _ = m.Update(small)
+		for _, r := range herdrDots.ID {
+			m = press(m, string(r))
+		}
+		m, _ = m.Update(big)
+		if got := m.(Model).path.Value(); got != "" {
+			t.Fatalf("typing at a too-small purge screen filled the id field: %q", got)
+		}
+	})
+}

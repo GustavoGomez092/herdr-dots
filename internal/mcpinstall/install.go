@@ -275,7 +275,7 @@ func readClaudeEntry(path string) (claudeEntry, bool, error) {
 }
 
 func claudeEntryMatches(e claudeEntry, bin, configDir, stateDir string) bool {
-	return (e.Type == "stdio" || e.Type == "") && e.Command == bin &&
+	return (e.Type == "stdio" || e.Type == "") && platform.StripLongPathPrefix(e.Command) == platform.StripLongPathPrefix(bin) &&
 		slices.Equal(e.Args, ServerArgs(configDir, stateDir)) && maps.Equal(e.Env, claudeEnv())
 }
 
