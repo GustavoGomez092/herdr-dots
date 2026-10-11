@@ -254,10 +254,13 @@ $null = Dump 'agent-running'
 try {
 # ---- step 1: prefix+d -> manage, Setup pager, n, library ----
 Banner 'step 1: prefix+d manage, Setup, library'
-$p = OpenPopup 'ctrl+b d' 'manage' 'Let your agent consult|DOTS LIBRARY|SETUP|Setup' '01a-prefix-d'
-$setupSeen = $p.screen -and $p.screen -match 'Let your agent consult'
+$p = OpenPopup 'ctrl+b d' 'manage' 'Dots: manage' '01a-prefix-d'
+# The first-run offer is detected off the UI goroutine and replaces the
+# library a moment after the popup opens (only while the library shows).
+$setupScr = WaitS 10 'Let your agent consult' '01b-setup-pager'
+$setupSeen = [bool]$setupScr
 Keys 'n'
-$lib = WaitS 15 'DOTS LIBRARY' '01b-library'
+$lib = WaitS 15 'DOTS LIBRARY' '01c-library'
 if ($p.ok -and $setupSeen -and $lib) { Result 1 'PASS' 'prefix+d opened Dots: manage on the first-run Setup pager (MCP offer); n snoozed it; the library shows' }
 elseif ($p.ok -and $lib) { Result 1 'FAIL' 'prefix+d opened manage, but no first-run Setup pager was shown' }
 elseif ($p.ok) { Result 1 'FAIL' 'prefix+d opened manage, but n did not reach the library' }
