@@ -14,6 +14,24 @@ $Version = (Get-Content -Raw -LiteralPath 'internal/version/VERSION').Trim()
 
 function Say([string]$Message) { [Console]::Error.WriteLine("${Name}: $Message") }
 
+# Get-FileHash and Expand-Archive live in script modules that Windows
+# PowerShell can't load when it was started from PowerShell 7 (the inherited
+# PSModulePath names PowerShell 7's modules), which is how Herdr may run this
+# script. .NET does both with no module.
+function Get-Sha256([string]$Path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).ProviderPath)
+    try { return ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLower() }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
+function Expand-Zip([string]$Zip, [string]$Dest) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $full = $Dest
+    if (-not [System.IO.Path]::IsPathRooted($full)) { $full = Join-Path (Get-Location).ProviderPath $Dest }
+    $full = [System.IO.Path]::GetFullPath($full)
+    [System.IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path -LiteralPath $Zip).ProviderPath, $full)
+}
+
 function Get-Platform {
     if ($env:HERDR_DOTS_PLATFORM) {
         if ($env:HERDR_DOTS_PLATFORM -cmatch '^(darwin|linux|windows)_(amd64|arm64)$') { return $env:HERDR_DOTS_PLATFORM }
@@ -69,7 +87,7 @@ function Install-Release([string]$Tmp) {
         Say "download failed: $($_.Exception.Message)"
         return $false
     }
-    $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLower()
+    $got = Get-Sha256 $zip
     if ($got -ne $want) { Say "checksum mismatch for $asset (got $got, want $want): not installing it"; return $false }
     $bundle = $null
     try {
@@ -82,7 +100,7 @@ function Install-Release([string]$Tmp) {
     # Any failure here returns $false, so the caller falls back to a source build.
     try {
         $x = Join-Path $Tmp 'x'
-        Expand-Archive -LiteralPath $zip -DestinationPath $x
+        Expand-Zip $zip $x
         $exe = Join-Path $x "$Name.exe"
         if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { Say "$asset has no $Name.exe"; return $false }
         $record = Join-Path $Tmp 'INSTALL_SOURCE'
