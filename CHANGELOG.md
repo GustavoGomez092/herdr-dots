@@ -3,7 +3,9 @@
 All notable changes. Versions before 1.0.0-rc.1 were development
 milestones, never released.
 
-## 1.0.0-rc.2 (release candidate)
+## 1.0.0-rc.2 (release candidate, published 2026-10-11)
+
+Published as a GitHub pre-release with six signed, checksum-verified archives (cosign verified); installs checked on Linux, macOS and Windows.
 
 Fixes found by the first real installs on Windows and the Linux end-to-end and interactive checks.
 
