@@ -412,25 +412,39 @@ else { Result 7 'FAIL' "memory (finding+dismissed): $([bool]$memOk); default in 
 
 # ---- step 8: 60x15 with a popup open ----
 Banner 'step 8: Too small'
+$homeFiles = { @(Get-ChildItem -LiteralPath $env:USERPROFILE -Filter 'herdr-dots-memory-*' -Force -ErrorAction SilentlyContinue).Count }
+# (a) the export screen open, shrink: Too small; enter writes nothing.
 Keys 'E'
 $ex2 = WaitS 10 'EXPORT DOT MEMORY' '08a-export-open'
-$homeBefore = @(Get-ChildItem -LiteralPath $env:USERPROFILE -Filter 'herdr-dots-memory-*' -Force -ErrorAction SilentlyContinue).Count
+$homeBefore = & $homeFiles
 Show 'resize' (HC 'resize 60 15')
 $small = WaitS 10 'Too small' '08b-60x15'
 Keys 'enter'
-Start-Sleep -Seconds 1.5
-$after = Dump '08c-60x15-after-enter'
-$homeAfter = @(Get-ChildItem -LiteralPath $env:USERPROFILE -Filter 'herdr-dots-memory-*' -Force -ErrorAction SilentlyContinue).Count
-$refused = ($after -match 'Too small') -and ($homeAfter -eq $homeBefore)
+$after = WaitS 5 'nothing exported|Too small' '08c-60x15-after-enter'
+$homeAfter = & $homeFiles
+$enterRefused = $after -and ($after -match 'nothing exported|Too small') -and ($homeAfter -eq $homeBefore)
 Show 'resize' (HC 'resize 200 50')
-$back = WaitS 10 'EXPORT DOT MEMORY' '08d-restored'
+$back1 = WaitS 10 'MEMORY' '08d-grown-back'
+# (b) shrink while the export screen is open, type: the path takes no keys;
+# grow back: the export screen returns with the path unchanged.
+Keys 'E'
+$ex3 = WaitS 10 'EXPORT DOT MEMORY' '08e-export-open-again'
+$path0 = if ($ex3 -and $ex3 -match '(?m)>\s*(\S+herdr-dots-memory-\S+?\.toml)') { $Matches[1] } else { '' }
+Show 'resize' (HC 'resize 60 15')
+$small2 = WaitS 10 'Too small' '08f-shrunk-while-open'
+Keys 'z q'
+$null = Dump '08g-60x15-after-typing'
+Show 'resize' (HC 'resize 200 50')
+$back2 = WaitS 10 'EXPORT DOT MEMORY' '08h-restored'
+$path1 = if ($back2 -and $back2 -match '(?m)>\s*(\S+herdr-dots-memory-\S*)') { $Matches[1] } else { '' }
+$typedRefused = $back2 -and $path0 -and ($path1 -eq $path0)
 Keys 'esc'
 Start-Sleep -Milliseconds 600
 Keys 'esc'
 Start-Sleep -Milliseconds 800
-$null = Dump '08e-closed'
-if ($small -and $refused -and $back) { Result 8 'PASS' "at 60x15 the export screen says Too small; enter was refused (no file in the home dir, still Too small); at 200x50 the export screen is back" }
-else { Result 8 'FAIL' "Too small: $([bool]$small); enter refused: $refused (home files $homeBefore -> $homeAfter); restored: $([bool]$back)" }
+$null = Dump '08i-closed'
+if ($small -and $enterRefused -and $back1 -and $small2 -and $typedRefused) { Result 8 'PASS' "at 60x15 the export screen says Too small; enter writes nothing ('nothing exported: the popup is too small...', no file in the home dir); typed keys don't reach the path; at 200x50 the export screen is back with the path unchanged" }
+else { Result 8 'FAIL' "Too small: $([bool]$small)/$([bool]$small2); enter refused: $enterRefused (home files $homeBefore -> $homeAfter); typing refused: $typedRefused ('$path0' -> '$path1'); grown back: $([bool]$back1)/$([bool]$back2)" }
 
 } catch { Write-Host "stopped: $_" }
 
