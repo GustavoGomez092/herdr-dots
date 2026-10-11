@@ -1,0 +1,59 @@
+# Windows interactive check: the Linux interactive method
+# (docs/superpowers/notes/2026-10-11-linux-interactive.md) on a GitHub
+# windows-latest runner, against the published release. The real Herdr
+# client runs in a ConPTY driven by conptyh (scripts/acceptance/windows/conpty,
+# its own Go module), which stands in for tmux: keys, screen dumps, waits,
+# resizes. By hand only.
+name: windows-interactive
+
+on:
+  workflow_dispatch:
+    inputs:
+      herdr_version:
+        description: "Herdr release to run"
+        default: "v0.9.3"
+        required: true
+  push:
+    branches: [win-interactive]
+
+permissions:
+  contents: read
+
+jobs:
+  interactive:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26.9"
+          cache: false
+      - name: build the acceptance tools
+        shell: pwsh
+        run: |
+          go build -tags acceptance -o C:\acc\tools\ ./scripts/acceptance/windows/acctool ./scripts/acceptance/windows/fakeclaude
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+          go -C scripts/acceptance/windows/conpty build -o C:\acc\tools\conptyh.exe .
+          if ($LASTEXITCODE -ne 0) { throw "conptyh build failed" }
+          Get-ChildItem C:\acc\tools
+      - name: download Herdr
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ github.event.inputs.herdr_version || 'v0.9.3' }}'
+          Invoke-WebRequest "https://github.com/herdrdev/herdr/releases/download/$v/herdr-windows-x86_64.zip" -OutFile C:\acc\herdr.zip
+          Expand-Archive C:\acc\herdr.zip -DestinationPath C:\acc\herdr
+          $herdr = (Get-ChildItem C:\acc\herdr -Recurse -Filter herdr.exe | Select-Object -First 1).FullName
+          "HERDR_EXE=$herdr" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: interactive run (steps 1-8 and the key burst)
+        shell: pwsh
+        timeout-minutes: 18
+        run: ./scripts/acceptance/windows/run-interactive.ps1 -Herdr $env:HERDR_EXE -Tools C:\acc\tools -Repo $env:GITHUB_WORKSPACE
+      - name: upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-interactive-evidence
+          path: C:\acc\evidence
+          if-no-files-found: warn
