@@ -1,7 +1,7 @@
-# Herdr Dots — always-on specialist agents for Herdr. Release candidate 1.0.0-rc.2: not released.
+# Herdr Dots — always-on specialist agents for Herdr. Release candidate 1.0.0-rc.3: not released.
 id = "herdr-dots"
 name = "Herdr Dots"
-version = "1.0.0-rc.2"
+version = "1.0.0-rc.3"
 min_herdr_version = "0.8.0"
 description = "Specialist agents (dots) that join your Claude Code / Codex sessions and review each turn."
 platforms = ["macos", "linux", "windows"]

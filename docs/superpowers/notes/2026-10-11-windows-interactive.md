@@ -64,3 +64,5 @@
   - ConPTY asks the host for win32-input-mode (`ESC[?9001h`). Plain VT input (C0 bytes for `ctrl+…`, `ESC`, `ESC[Z`) is translated fine; `S` and `C` arrive as shift+s and shift+c.
 
 **Running it:** `gh workflow run windows-interactive.yml -R GustavoGomez092/herdr-dots --ref win-interactive`. While iterating, the workflow briefly had a `push` trigger limited to `win-interactive` (removed before the last run). It took 8 runs.
+
+**Follow-up:** W1 (the `\\?\` prefix in the MCP setup path) and W2 (typing at a too-small prompt) are fixed in fc98e50 (`TestStripLongPathPrefix`, `TestClaudeEntryWithALongPathPrefixStillMatches`, `TestTooSmallPromptsIgnoreTyping`) and ship in 1.0.0-rc.3.

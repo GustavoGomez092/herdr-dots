@@ -12,8 +12,8 @@ import (
 func TestVersionIsTheReleaseCandidate(t *testing.T) {
 	// Phase 10 ships a release candidate. 1.0.0 is tagged only by the
 	// developer, after the three-OS acceptance run (a user gate).
-	if Version != "1.0.0-rc.2" {
-		t.Fatalf("Version = %q, want 1.0.0-rc.2", Version)
+	if Version != "1.0.0-rc.3" {
+		t.Fatalf("Version = %q, want 1.0.0-rc.3", Version)
 	}
 	if !regexp.MustCompile(`^\d+\.\d+\.\d+(-rc\.\d+)?$`).MatchString(Version) {
 		t.Fatalf("VERSION %q is not semver", Version)

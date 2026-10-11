@@ -3,6 +3,15 @@
 All notable changes. Versions before 1.0.0-rc.1 were development
 milestones, never released.
 
+## 1.0.0-rc.3 (release candidate)
+
+Fixes found by the interactive check on Windows (the real Herdr client in a ConPTY on GitHub's Windows runner; popups and keybindings all pass).
+
+### Fixes
+
+- Windows: the MCP setup records the plugin's path without the `\\?\` long-path prefix Herdr can start plugins with, and treats an entry recorded with it as the same server, so the Setup screen and `setup-mcp` agree on whether the MCP server is installed.
+- A prompt too small to show its field (the memory export, import and purge prompts) ignores typing until it fits, so nothing is typed into a hidden field.
+
 ## 1.0.0-rc.2 (release candidate, published 2026-10-11)
 
 Published as a GitHub pre-release with six signed, checksum-verified archives (cosign verified); installs checked on Linux, macOS and Windows.

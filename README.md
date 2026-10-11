@@ -1,6 +1,6 @@
 # Herdr Dots
 
-> **1.0.0-rc.2, release candidate.** Claude Code dots are live-verified; the API backends and Codex are not yet; see [Known issues](#known-issues).
+> **1.0.0-rc.3, release candidate.** Claude Code dots are live-verified; the API backends and Codex are not yet; see [Known issues](#known-issues).
 
 Herdr Dots is a [Herdr](https://herdr.dev) plugin that adds **dots**:
 specialist agents (security, frontend, backend, copywriter, ...) that join a
