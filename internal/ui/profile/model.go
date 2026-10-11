@@ -19,6 +19,7 @@ import (
 	"herdr-dots/internal/dots"
 	"herdr-dots/internal/history"
 	"herdr-dots/internal/memory"
+	"herdr-dots/internal/ui/keys"
 	"herdr-dots/internal/ui/style"
 	"herdr-dots/internal/view"
 )
@@ -275,7 +276,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case memMsg:
 		m.mem, m.memErr = msg.sum, msg.err
 	case tea.KeyMsg:
-		return m.keys(msg)
+		// No text field and no confirm here (export, memory and trust open
+		// in the parent, from a message): a burst is one key per rune.
+		return keys.Deliver(m, msg, func(Model) keys.Mode { return keys.Browse }, Model.keys)
 	}
 	return m, nil
 }

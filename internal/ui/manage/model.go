@@ -17,6 +17,7 @@ import (
 	"herdr-dots/internal/history"
 	"herdr-dots/internal/ipc"
 	"herdr-dots/internal/memory"
+	"herdr-dots/internal/ui/keys"
 	"herdr-dots/internal/ui/memui"
 	"herdr-dots/internal/ui/profile"
 	setupui "herdr-dots/internal/ui/setup"
@@ -194,6 +195,42 @@ func (m Model) reload() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		return keys.Deliver(m, k, Model.keyMode, func(m Model, k tea.KeyMsg) (Model, tea.Cmd) {
+			nm, cmd := m.update(k)
+			return nm.(Model), cmd
+		})
+	}
+	return m.update(msg)
+}
+
+// keyMode is how a burst of typed keys reaches the open screen
+// (keys.Deliver). The memory browser and the profile split bursts
+// themselves, so they get them whole, like the text prompts; a confirm never
+// takes its answer from a burst, and a preview's y needs its own key.
+func (m Model) keyMode() keys.Mode {
+	switch m.scr {
+	case scrLibrary, scrTemplates:
+		return keys.Browse
+	case scrProviders:
+		if m.prov != nil && m.prov.entering {
+			return keys.Text
+		}
+		return keys.Browse
+	case scrSetup:
+		if m.setup != nil && !m.setup.done && !m.setup.applying {
+			return keys.Pager
+		}
+		return keys.Modal
+	case scrImportPreview, scrTrust:
+		return keys.Pager
+	case scrEditor, scrImportSource, scrImportRename, scrExport, scrMemory, scrProfile:
+		return keys.Text
+	}
+	return keys.Modal
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if mm, cmd, ok := m.setupMsg(msg); ok {
 		return mm, cmd
 	}
@@ -883,11 +920,16 @@ func (m Model) View() string {
 		if m.selected[d.Slug] {
 			check = "[x]"
 		}
-		line := m.libraryRow(fmt.Sprintf("%s %s %-14s %-22s %s", check, style.Glyph(style.Clean(d.Glyph), style.Clean(d.Color)), style.Clean(d.Name),
-			style.Clean(d.Backend+"/"+d.Model), style.Clean(d.Mode)), badge(d))
-		if i == m.cursor {
-			line = style.Selected.Render(line)
+		glyph, color, bdg := style.Clean(d.Glyph), style.Clean(d.Color), badge(d)
+		after := fmt.Sprintf(" %-14s %-22s %s", style.Clean(d.Name), style.Clean(d.Backend+"/"+d.Model), style.Clean(d.Mode))
+		cols := check + " " + style.Glyph(glyph, color) + after
+		if i == m.cursor { // highlighted segment by segment, badge included (B4)
+			cols = style.SelectedRow(check+" ", glyph, color, after)
+			if bdg != "" {
+				bdg = style.Selected.Render(bdg)
+			}
 		}
+		line := m.libraryRow(cols, bdg)
 		b.WriteString(line + "\n")
 	}
 	for _, inv := range m.snap.Invalid {

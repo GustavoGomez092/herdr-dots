@@ -106,7 +106,7 @@ func TestCouncilPopupPreselectsTogglesAndConvenes(t *testing.T) {
 	}
 	m, _ = run(m, "s", "h", "i", "p", "?") // the question has focus first
 	m, _ = run(m, "tab", "space")          // focus the list, untick Security
-	if v := m.View(); !strings.Contains(v, "[ ] ◆ Security") || !strings.Contains(v, "estimate: 1 call (1 dots × 1 round) · 50 left") {
+	if v := m.View(); !strings.Contains(v, "[ ] ◆ Security") || !strings.Contains(v, "estimate: 1 call (1 dot × 1 round) · 50 left") {
 		t.Fatalf("after toggling Security off:\n%s", v)
 	}
 	m, _ = run(m, "j", "j", "space") // Copy is paused: it can't be ticked

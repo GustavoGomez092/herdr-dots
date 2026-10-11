@@ -22,6 +22,7 @@ import (
 	"herdr-dots/internal/memory"
 	"herdr-dots/internal/platform"
 	"herdr-dots/internal/textutil"
+	"herdr-dots/internal/ui/keys"
 	"herdr-dots/internal/ui/style"
 )
 
@@ -315,27 +316,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.purgeN = msg.n
 		return m.startPath(modeConfirmPurge, "")
 	case tea.KeyMsg:
-		switch m.mode {
-		case modeConfirmForget:
-			return m.keysConfirmForget(msg)
-		case modeConfirmForgetAll:
-			return m.keysConfirmForgetAll(msg)
-		case modeConfirmApprove:
-			return m.keysConfirmApprove(msg)
-		case modeEdit:
-			return m.keysEdit(msg)
-		case modeFilter:
-			return m.keysFilter(msg)
-		case modeExportPath, modeImportPath:
-			return m.keysPath(msg)
-		case modeImportPreview:
-			return m.keysImportPreview(msg)
-		case modeConfirmPurge:
-			return m.keysConfirmPurge(msg)
-		}
-		return m.keysBrowse(msg)
+		return keys.Deliver(m, msg, Model.keyMode, Model.key)
 	}
 	return m, nil
+}
+
+// keyMode is how a burst of typed keys reaches the screen (keys.Deliver):
+// the editor, the filter and the path prompts take it as typed; no confirm
+// (forget, forget all, approve, import, purge) takes its answer from it.
+func (m Model) keyMode() keys.Mode {
+	switch m.mode {
+	case modeBrowse:
+		return keys.Browse
+	case modeEdit, modeFilter, modeExportPath, modeImportPath:
+		return keys.Text
+	}
+	return keys.Modal
+}
+
+func (m Model) key(msg tea.KeyMsg) (Model, tea.Cmd) {
+	var nm tea.Model
+	var cmd tea.Cmd
+	switch m.mode {
+	case modeConfirmForget:
+		nm, cmd = m.keysConfirmForget(msg)
+	case modeConfirmForgetAll:
+		nm, cmd = m.keysConfirmForgetAll(msg)
+	case modeConfirmApprove:
+		nm, cmd = m.keysConfirmApprove(msg)
+	case modeEdit:
+		nm, cmd = m.keysEdit(msg)
+	case modeFilter:
+		nm, cmd = m.keysFilter(msg)
+	case modeExportPath, modeImportPath:
+		nm, cmd = m.keysPath(msg)
+	case modeImportPreview:
+		nm, cmd = m.keysImportPreview(msg)
+	case modeConfirmPurge:
+		nm, cmd = m.keysConfirmPurge(msg)
+	default:
+		nm, cmd = m.keysBrowse(msg)
+	}
+	return nm.(Model), cmd
 }
 
 func (m Model) keysBrowse(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -612,7 +634,7 @@ func (m Model) fits(lines []string) bool {
 // tooSmall is what View shows instead of a screen that doesn't fit: its title
 // and why, wrapped by display cells (style.TooSmall).
 func (m Model) tooSmall(title string, lines []string, what, action string) []string {
-	return style.TooSmall(title, len(lines)+approveTail, m.screenWidth(), m.height, what, action)
+	return style.TooSmall(title, len(lines)+approveTail, m.screenWidth(), m.height, approveTail, what, action)
 }
 
 // approveScreen is the full proposal: who proposed it, its kind, its paths
@@ -1481,7 +1503,9 @@ func (m Model) View() string {
 		footer = []string{style.Cut(clean(m.status), w)}
 	case m.status != "": // wrapped, so a long error neither overflows nor loses its end
 		footer = wrap(m.status, w)
-	case !isWhole: // a whole-popup screen keeps one line: approveTail counts it
+	case m.mode != modeBrowse: // a prompt is open: its own keys are on screen, the browse keys don't apply
+		footer = nil
+	default:
 		footer = helpLines(footer[0], w)
 	}
 	for i, l := range footer {
@@ -1489,6 +1513,10 @@ func (m Model) View() string {
 			tail.WriteString("\n")
 		}
 		tail.WriteString(style.Dim.Render(l))
+	}
+	tailText := tail.String()
+	if len(footer) == 0 { // no blank last line where the footer was
+		tailText = strings.TrimSuffix(tailText, "\n")
 	}
 
 	lines, cur := m.list(w)
@@ -1507,11 +1535,11 @@ func (m Model) View() string {
 	// With a known height, scroll the list so the selected row stays visible.
 	// A whole-popup screen is never cut: every word of a proposal must show.
 	if m.height > 0 && !isWhole {
-		used := strings.Count(head.String(), "\n") + strings.Count(tail.String(), "\n") + 1
+		used := strings.Count(head.String(), "\n") + strings.Count(tailText, "\n") + 1
 		if avail := max(3, m.height-used); len(lines) > avail {
 			start := max(0, min(cur-avail/2, len(lines)-avail))
 			lines = lines[start : start+avail]
 		}
 	}
-	return head.String() + strings.Join(lines, "\n") + "\n" + tail.String()
+	return head.String() + strings.Join(lines, "\n") + "\n" + tailText
 }

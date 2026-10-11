@@ -37,7 +37,7 @@ func councilReady(fc *fakeCaller, cs *view.CouncilState) tea.Model {
 func TestCouncilCardHeaderAndExpand(t *testing.T) {
 	m := councilReady(&fakeCaller{}, nil)
 	v := m.View()
-	for _, want := range []string{"⊕ CRITICAL  Council · turn 22 · 3 dots", "## Must fix", "⏎ send  e edit  x dismiss  space expand"} {
+	for _, want := range []string{"⊕ CRITICAL  Council · turn 22 · 3 dots", "Must fix:", "⏎ send  e edit  x dismiss  space expand"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view missing %q\n%s", want, v)
 		}

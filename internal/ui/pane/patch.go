@@ -239,7 +239,7 @@ func (m Model) draftView(w, avail int) string {
 	if f.text == "" {
 		b.WriteString(style.Dim.Render("  (none yet: press e)") + "\n")
 	} else {
-		lines := strings.Split(strings.TrimRight(body.Render("  "+f.text), "\n"), "\n")
+		lines := strings.Split(strings.TrimRight(indented(lipgloss.NewStyle(), f.text, w, 2), "\n"), "\n")
 		if avail > 0 {
 			keep := max(1, avail-lineCount(b.String())-1) // -1: the key line
 			if len(lines) > keep {

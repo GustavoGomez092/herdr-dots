@@ -32,6 +32,20 @@ func Glyph(glyph, color string) string {
 	return lipgloss.NewStyle().Foreground(Color(color)).Render(Sym(glyph))
 }
 
+// SelectedRow highlights a row whose middle is a coloured glyph: before and
+// after in Selected, the glyph in its colour and reverse video. Selected
+// around the whole row would end at the glyph's own colour reset (B4).
+func SelectedRow(before, glyph, color, after string) string {
+	s := Selected.Foreground(Color(color)).Render(Sym(glyph))
+	if before != "" {
+		s = Selected.Render(before) + s
+	}
+	if after != "" {
+		s += Selected.Render(after)
+	}
+	return s
+}
+
 // ascii is on when HERDR_DOTS_ASCII=1: for terminals or fonts that show the
 // dot glyphs as empty boxes (some Windows console fonts).
 // It is atomic so SetASCII can't race a View on another goroutine.

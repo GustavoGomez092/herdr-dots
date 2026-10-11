@@ -52,6 +52,10 @@ func pkey(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "pgdown": // the real key: runes "pgdown" are six keys now (B1)
+		return tea.KeyMsg{Type: tea.KeyPgDown}
+	case "pgup":
+		return tea.KeyMsg{Type: tea.KeyPgUp}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
