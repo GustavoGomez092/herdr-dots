@@ -261,6 +261,16 @@ func (e *Engine) checkSession(a state.Attachment, p herdr.PaneInfo) {
 	pl := e.paneLock(a.PaneID)
 	pl.Lock()
 	defer pl.Unlock()
+	// p was fetched before the pane lock, so another caller may have followed
+	// a newer session since: a change is confirmed against the live pane, or a
+	// poll's stale snapshot would switch the pane back to the old session.
+	if cur, ok := e.d.Attachments.Get(a.PaneID); ok && cur.SessionValue != p.AgentSession.Value {
+		live, err := e.d.Herdr.PaneGet(e.ctx, a.PaneID)
+		if err != nil || live.AgentSession == nil {
+			return // the next poll looks again
+		}
+		p = live
+	}
 	changed := false
 	var slugs []string
 	err := e.d.Attachments.Update(a.PaneID, func(x *state.Attachment) {

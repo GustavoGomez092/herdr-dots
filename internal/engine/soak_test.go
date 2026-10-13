@@ -35,9 +35,13 @@ const (
 	soakSettle     = 3 * time.Second // after a burst's last turn, for its runs to finish
 )
 
-// soakBody pads every finding, so a pane with MaxCardsPerPane cards is over
-// the snapshot byte budget and Trim's byte path runs, not only its card cap.
-var soakBody = strings.Repeat("The error path returns before the lock is released. ", 45)
+// soakFinding is finding n, padded so a pane with MaxCardsPerPane cards is
+// over the snapshot byte budget and Trim's byte path runs, not only its card
+// cap. Its words are numbered, so no two findings are alike enough for the
+// pending-card dedupe (memory.SuppressThreshold) to drop one as a repeat.
+func soakFinding(n int64) string {
+	return strings.Repeat(fmt.Sprintf("Handler%d in file%d returns before mutex%d is released on path%d. ", n, n, n, n), 40)
+}
 
 // soakBackend flags something critical on every odd call, for as long as the
 // soak runs: half the runs make a card.
@@ -50,7 +54,7 @@ func (b *soakBackend) Run(context.Context, backend.Request) (backend.Result, err
 	v := backend.Verdict{Relevant: false, Severity: "info"}
 	if n%2 == 1 {
 		b.flagged.Add(1)
-		v = backend.Verdict{Relevant: true, Severity: "critical", Message: fmt.Sprintf("Finding %d. %s", n, soakBody)}
+		v = backend.Verdict{Relevant: true, Severity: "critical", Message: soakFinding(n)}
 	}
 	return backend.Result{Verdict: v, InputTokens: 10, OutputTokens: 5}, nil
 }

@@ -3,6 +3,11 @@
 All notable changes. Versions before 1.0.0-rc.1 were development
 milestones, never released.
 
+## Unreleased
+
+- Fixed: a poll that read a pane just before its agent session changed (/clear, restart) could switch the pane back to the old session, re-reviewing its turns until the next poll. A session change is now confirmed against the live pane.
+- Tests: the soak's findings are worded apart, so the pending-card dedupe (1.0.0-rc.2) no longer drops them as repeats and the soak exercises Trim again.
+
 ## 1.0.0 (2026-10-11)
 
 Published as the latest GitHub release with six signed, checksum-verified archives (cosign verified); fresh installs checked on macOS, Linux and Windows.

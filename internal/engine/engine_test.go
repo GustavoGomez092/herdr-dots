@@ -479,6 +479,24 @@ func TestNewAgentSessionIsFollowed(t *testing.T) {
 	}
 }
 
+// A poll fetches the pane before onIdle follows the new session, and calls
+// checkSession after it: its stale snapshot must not switch the pane back
+// (seen on Windows CI as TestNewAgentSessionIsFollowed's "still on s1").
+func TestStaleSessionSnapshotDoesNotRevert(t *testing.T) {
+	r := newRigWith(t, noPoll, dot("Security", dots.ModeQueue)) // no poll heals the revert
+	r.attach(t, "security")
+	stale, _ := (&herdr.SocketClient{Path: r.srv.Path}).PaneGet(context.Background(), pane)
+	fresh := stale
+	fresh.AgentSession = &herdr.AgentSession{Kind: "id", Value: "s2"}
+	r.srv.SetPane(fresh)
+	a, _ := r.atts.Get(pane)
+	r.e.checkSession(a, fresh) // onIdle
+	r.e.checkSession(a, stale) // the poll that fetched before the switch
+	if a, _ := r.atts.Get(pane); a.SessionValue != "s2" {
+		t.Fatalf("a stale snapshot switched the pane back to %q", a.SessionValue)
+	}
+}
+
 func TestAttachUnknownDotFails(t *testing.T) {
 	r := newRig(t, dot("Security", dots.ModeQueue))
 	if err := r.e.Attach(context.Background(), pane, []string{"nope"}); err == nil {
